@@ -14,13 +14,14 @@ unset -f $(compgen -A function htrsh_);
 #-----------------------#
 # Default configuration #
 #-----------------------#
+
+htrsh_valschema="no";
 htrsh_pagexsd="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15/pagecontent.xsd";
-htrsh_pagexsd="/home/mvillegas/DataBases/HTR/British-Library/bin/xsd/pagecontent+.xsd";
+#htrsh_pagexsd="/home/mvillegas/DataBases/HTR/British-Library/bin/xsd/pagecontent+.xsd";
 #htrsh_pagexsd="http://mvillegas.info/xsd/2013-07-15/pagecontent.xsd";
 
-htrsh_keeptmp="no";
+htrsh_keeptmp="0";
 
-#htrsh_text_translit="no";
 htrsh_text_translit="yes";
 
 htrsh_feat_txtenhcfg="-r 0.16 -w 20 -k 0.1";
@@ -37,11 +38,9 @@ htrsh_dotmatrix_win="20";  # Sliding window width in px, should change this to m
 htrsh_dotmatrix_W="8";     # Width of normalized frame in px, should change this to mm
 htrsh_dotmatrix_H="32";    # Height of normalized frame in px, should change this to mm
 
-#htrsh_hmm_states="8";  # Number of HMM states (excluding special initial and final)
-#htrsh_hmm_nummix="32"; # Number of Gaussian mixture components
-htrsh_hmm_iter="4";    # Number of training iterations
-htrsh_hmm_states="6";
-htrsh_hmm_nummix="4";
+htrsh_hmm_states="6"; # Number of HMM states (excluding special initial and final)
+htrsh_hmm_nummix="4"; # Number of Gaussian mixture components
+htrsh_hmm_iter="4";   # Number of training iterations
 
 htrsh_align_isect="yes"; # Whether to intersect parallelograms with line contour
 htrsh_align_chars="yes"; # Whether to align at a character level
@@ -61,34 +60,36 @@ HMMDEFOFILTER  = "gzip -c > $"
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Revision$$Date::             $' \
-    | sed 's|^$R|htrsh: r|; s|$$Date::          $$|)|;';
+  echo '$Revision$$Date$' \
+    | sed 's|^$R|htrsh: r|; s|[$][$]Date: |(|; s| *$|)|;';
 }
 
 ##
-## Function that checks that the required commands are available
+## Function that checks that all required commands are available
 ##
 htrsh_check_req () {
   local FN="htrsh_check_req";
   local cmd;
-  for cmd in xmlstarlet convert octave HVite pfl2htk imgtxtenh imglineclean imgpageborder imgccomp imageSlant realpath gzip; do
-    if ! [ -e $(which $cmd) ]; then
-      echo "$FN: error: unable to find command: $cmd" 1>&2;
-      return 1;
+  for cmd in xmlstarlet convert octave HVite pfl2htk imgtxtenh imglineclean imgpageborder imgccomp xmlpage_resize.sh imageSlant realpath gzip page_format_generate_contour pca; do
+    local c=$(which $cmd);
+    if ! [ -e "$c" ]; then
+      echo "$FN: WARNING: unable to find command: $cmd" 1>&2;
+      #echo "$FN: error: unable to find command: $cmd" 1>&2;
+      #return 1;
     fi
   done
 
-  { printf "xmlstarlet "; xmlstarlet --version; } 1>&2;
-  convert --version | head -n 1 1>&2;
-  octave --version | head -n 1 1>&2;
-  imgtxtenh -v;
-  imglineclean -v;
-  imgpageborder -v;
-  imgccomp -v;
+  { htrsh_version; echo; } 1>&2;
+  { printf "xmlstarlet "; xmlstarlet --version | sed '2,$s|^|  |'; echo; } 1>&2;
+  { convert --version | sed -n '1{ s|^Version: ||; p; }'; echo; } 1>&2;
+  { octave --version | head -n 1; echo; } 1>&2;
+  for cmd in imgtxtenh imglineclean imgpageborder imgccomp; do
+   $cmd --version;
+  done
+  HVite -V;
 
   return 0;
 }
-htrsh_check_req;
 
 
 #--------------------------------#
@@ -178,6 +179,7 @@ htrsh_page_to_mlf () {
 htrsh_pageimg_info () {
   local FN="htrsh_pageimg_info";
   local XML="$1";
+  local VAL=""; [ "$htrsh_valschema" = "yes" ] && VAL="-s '$htrsh_pagexsd'";
   if [ $# -lt 1 ]; then
     { echo "$FN: error: not enough input arguments";
       echo "Usage: $FN XMLFILE";
@@ -186,7 +188,7 @@ htrsh_pageimg_info () {
   elif ! [ -f "$XML" ]; then
     echo "$FN: error: page file not found: $XML" 1>&2;
     return 1;
-  elif [ $(xmlstarlet val -s "$htrsh_pagexsd" "$XML" | grep ' invalid$' | wc -l) != 0 ]; then
+  elif [ $(eval xmlstarlet val $VAL "$XML" | grep ' invalid$' | wc -l) != 0 ]; then
     echo "$FN: error: invalid page file: $XML" 1>&2;
     return 1;
   fi
@@ -266,7 +268,7 @@ htrsh_pageimg_resize () {
     echo "$FN: error: resolution not given (-i option) and image does not specify resolution: $IMFILE" 1>&2;
     return 1;
   elif [ "$INRES" = "" ] && [ $(printf %.0f $IMRES) -lt 50 ]; then
-    echo "$FN: error: image resolution ($IMRES ppc) apparently incorrect since it unusually low to be a text document image: $IMFILE" 1>&2;
+    echo "$FN: error: image resolution ($IMRES ppc) apparently incorrect since it is unusually low to be a text document image: $IMFILE" 1>&2;
     return 1;
   elif ! [ -d "$OUTDIR" ]; then
     echo "$FN: error: output directory does not exists: $OUTDIR" 1>&2;
@@ -376,11 +378,13 @@ htrsh_pageimg_quadborderclean () {
   local FN="htrsh_pageimg_quadborderclean";
   local XPATH='//*[@type="paragraph"]';
   local TMPDIR=".";
+  local CFG="";
   if [ $# -lt 2 ]; then
     { echo "$FN: error: not enough input arguments";
       echo "Usage: $FN XML OUTIMG [ OPTIONS ]";
       echo "Options:";
       echo " -x XPATH    XPath for region selection (def.=$XPATH)";
+      echo " -c CFG      Options for imgpageborder (def.=$CFG)";
       echo " -d TMPDIR   Directory for temporary files (def.=$TMPDIR)";
     } 1>&2;
     return 1;
@@ -392,6 +396,8 @@ htrsh_pageimg_quadborderclean () {
   while [ $# -gt 0 ]; do
     if [ "$1" = "-x" ]; then
       XPATH="$2";
+    elif [ "$1" = "-c" ]; then
+      CFG="$2";
     elif [ "$1" = "-d" ]; then
       TMPDIR="$2";
     else
@@ -454,7 +460,7 @@ htrsh_pageimg_quadborderclean () {
 
     eval convert "$IMFILE" $persp0 "$TMPDIR/${IMBASE}~${n}-persp.$IMEXT";
 
-    imgpageborder -M "$TMPDIR/${IMBASE}~${n}-persp.$IMEXT" "$TMPDIR/${IMBASE}~${n}-pborder.$IMEXT";
+    imgpageborder $CFG -M "$TMPDIR/${IMBASE}~${n}-persp.$IMEXT" "$TMPDIR/${IMBASE}~${n}-pborder.$IMEXT";
     if [ $? != 0 ]; then
       echo "$FN: error: problems estimating border: $XML" 1>&2;
       return 1;
@@ -466,12 +472,16 @@ htrsh_pageimg_quadborderclean () {
 
     comps="$comps $TMPDIR/${IMBASE}~${n}-border.$IMEXT -composite";
 
-    rm "$TMPDIR/${IMBASE}~${n}-persp.$IMEXT" "$TMPDIR/${IMBASE}~${n}-pborder.$IMEXT";
+    if [ "$htrsh_keeptmp" -lt 2 ]; then
+      rm "$TMPDIR/${IMBASE}~${n}-persp.$IMEXT" "$TMPDIR/${IMBASE}~${n}-pborder.$IMEXT";
+    fi
   done
 
   eval convert -compose lighten "$IMFILE" $comps "$OUTIMG";
 
-  rm "$TMPDIR/${IMBASE}~"*"-border.$IMEXT";
+  if [ "$htrsh_keeptmp" -lt 1 ]; then
+    rm "$TMPDIR/${IMBASE}~"*"-border.$IMEXT";
+  fi
   return 0;
 }
 
@@ -566,7 +576,7 @@ htrsh_pageimg_extract_linefeats () {
       echo "Usage: $FN XMLIN XMLOUT [ OPTIONS ]";
       echo "Options:";
       echo " -x XPATH    XPath for region selection (def.=$XPATH)";
-      echo " -d OUTDIR   Output directory for images (def.=$OUTDIR)";
+      echo " -d OUTDIR   Output directory for features (def.=$OUTDIR)";
       echo " -b PBASE    Project features using given base (def.=false)";
       echo " -r RDIM     Reduced dimensionality (def.=from matrix)";
       echo " -c (yes|no) Whether to replace Coords/@points with the features contour (def.=$REPLC)";
@@ -588,7 +598,7 @@ htrsh_pageimg_extract_linefeats () {
     elif [ "$1" = "-r" ]; then
       RDIM="$2";
     elif [ "$1" = "-c" ]; then
-      RELPC="$2";
+      REPLC="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -604,7 +614,7 @@ htrsh_pageimg_extract_linefeats () {
   htrsh_pageimg_extract_lines "$XML" -x "$XPATH" -d "$OUTDIR" > "$OUTDIR/lines.lst";
   [ "$?" != 0 ] && return 1;
 
-  local contours="";
+  local ed="";
 
   ### Process each line ###
   local n;
@@ -704,15 +714,15 @@ htrsh_pageimg_extract_linefeats () {
       " | octave -q);
 
     ### Prepare information to add to XML ###
-    #contours="$contours -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n bbox -v '$bbox'";
-    #contours="$contours -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n slope -v '$skew'";
-    #contours="$contours -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n slant -v '$slant'";
-    contours="$contours -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n fpgram -v '$fbox'";
+    #ed="$ed -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n bbox -v '$bbox'";
+    #ed="$ed -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n slope -v '$skew'";
+    #ed="$ed -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n slant -v '$slant'";
+    ed="$ed -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n fpgram -v '$fbox'";
 
     ### Compute detailed contours if requested ###
     if [ "$htrsh_feat_contour" = "yes" ]; then
       local pts=$(imgccomp -V1 -NJS -A 0.5 -D $htrsh_feat_dilradi -R 5,2,2,2 ${ff}_clean.png);
-      contours="$contours -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n fcontour -v '$pts'";
+      ed="$ed -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n fcontour -v '$pts'";
     fi 2>&1;
 
     ### Extract features ###
@@ -750,23 +760,27 @@ htrsh_pageimg_extract_linefeats () {
     gzip "${ff}.fea";
 
     ### Remove temporal files ###
-    if [ "$htrsh_keeptmp" != "yes" ]; then
-      rm -f "${ff}_deskew.png" "${ff}_deslant.png";
+    if [ "$htrsh_keeptmp" -lt 1 ]; then
       rm -f "${ff}.png" "${ff}_clean.png";
-      rm -f "${ff}_affine.png" "${ff}_affine.mat";
       rm -f "${ff}_fea.png";
+    fi
+    if [ "$htrsh_keeptmp" -lt 2 ]; then
+      rm -f "${ff}_affine.png" "${ff}_affine.mat";
+    fi
+    if [ "$htrsh_keeptmp" -lt 3 ]; then
+      rm -f "${ff}_deskew.png" "${ff}_deslant.png";
       rm -f "${ff}".{c,m,o,p}fea;
     fi
   done
 
   ### Generate new PAGE XML file ###
-  eval xmlstarlet ed -P $contours "$XML" > "$XMLOUT";
+  eval xmlstarlet ed -P $ed "$XML" > "$XMLOUT";
   if [ "$?" != 0 ]; then
     echo "$FN: error: problems generating XML file: $XMLOUT" 1>&2;
     return 1;
   fi
 
-  if [ "$REPLC" = "yes" ]; then
+  if [ "$htrsh_feat_contour" = "yes" ] && [ "$REPLC" = "yes" ]; then
     local ed="";
     local id;
     for id in $(xmlstarlet sel -t -m '//*/_:Coords[@fcontour]' -v ../@id -n "$XMLOUT"); do
@@ -776,9 +790,7 @@ htrsh_pageimg_extract_linefeats () {
     eval xmlstarlet ed --inplace $ed "$XMLOUT";
   fi
 
-  if [ "$htrsh_keeptmp" != "yes" ]; then
-    rm "$OUTDIR/lines.lst";
-  fi
+  rm "$OUTDIR/lines.lst";
 
   return 0;
 }
@@ -1154,7 +1166,7 @@ htrsh_pageimg_forcealign_model () {
     s|{at}|@|g;
     ' "$XMLOUT";
 
-  if [ "$htrsh_keeptmp" != "yes" ]; then
+  if [ "$htrsh_keeptmp" -lt 1 ]; then
     rm -f "$TMPDIR/$FN.mlf" "$TMPDIR/${FN}_aligned.mlf";
   fi
 
