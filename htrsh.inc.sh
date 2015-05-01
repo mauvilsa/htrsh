@@ -10,7 +10,7 @@
 
 
 [ "$(type -t htrsh_version)" = "function" ] &&
-  echo "htrsh.inc.sh: warning: library already loaded, use htrsh_unload to reload" 1>&2 &&
+  echo "htrsh.inc.sh: warning: library already loaded, to reload first use htrsh_unload" 1>&2 &&
   return 0;
 
 #-----------------------#
@@ -22,7 +22,7 @@ htrsh_pagexsd="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15/p
 
 htrsh_keeptmp="0";
 
-htrsh_text_translit="yes";
+htrsh_text_translit="no";
 
 htrsh_feat_txtenhcfg="-r 0.16 -w 20 -k 0.1";
 
@@ -30,13 +30,12 @@ htrsh_feat_padding="0.5"; # Left and right white padding in mm for line images
 htrsh_feat_contour="yes"; # Whether to compute connected components contours
 htrsh_feat_dilradi="0.5"; # Dilation radius in mm for contours
 
-#htrsh_feat_pcadim="20";  # Features reduced dimensionality for PCA
-
 htrsh_feat="dotmatrix";    # Type of features to extract
 htrsh_dotmatrix_shift="2"; # Sliding window shift in px, should change this to mm
 htrsh_dotmatrix_win="20";  # Sliding window width in px, should change this to mm
 htrsh_dotmatrix_W="8";     # Width of normalized frame in px, should change this to mm
 htrsh_dotmatrix_H="32";    # Height of normalized frame in px, should change this to mm
+htrsh_dotmatrix_mom="yes"; # Whether to add moments to features
 
 htrsh_hmm_states="6"; # Number of HMM states (excluding special initial and final)
 htrsh_hmm_nummix="4"; # Number of Gaussian mixture components
@@ -87,7 +86,7 @@ htrsh_unload () {
 htrsh_check_req () {
   local FN="htrsh_check_req";
   local cmd;
-  for cmd in xmlstarlet convert octave HVite pfl2htk imgtxtenh imglineclean imgpageborder imgccomp imageSlant realpath page_format_generate_contour pca; do
+  for cmd in xmlstarlet convert octave HVite pfl2htk imgtxtenh imglineclean imgpageborder imgccomp imageSlant realpath page_format_generate_contour; do
     local c=$(which $cmd);
     [ ! -e "$c" ] &&
       echo "$FN: WARNING: unable to find command: $cmd" 1>&2;
@@ -102,7 +101,7 @@ htrsh_check_req () {
   for cmd in imgtxtenh imglineclean imgpageborder imgccomp; do
     $cmd --version;
   done
-  HVite -V;
+  HVite -V | grep HVite;
 
   return 0;
 }
@@ -166,20 +165,25 @@ htrsh_page_to_mlf () {
 
   echo '#!MLF!#';
   if [ "$htrsh_text_translit" != "yes" ]; then
-    xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" \
-        $IDop -o "$TAB" -v . -n "$XML";
+    cat "$XML" | tr '\t' ' ' \
+      | xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" \
+          $IDop -o "$TAB" -v . -n;
   else
-    xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" \
-        $IDop -o "$TAB" -v . -n "$XML" \
+    cat "$XML" | tr '\t' ' ' \
+      | xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" \
+          $IDop -o "$TAB" -v . -n \
       | iconv -f utf8 -t ascii//TRANSLIT;
   fi \
-    | sed "
+    | sed '
+        s|^  *||;
+        s|  *$||;
         s|   *| |g;
+        s|@|#|g;
         s| |@|g;
         #s|---*|—|g;
         s|---*|-|g;
-        s|Z|z|g;
-        " \
+        #s|Z|z|g;
+        ' \
     | awk -F'\t' '
         { printf("\"*/%s.lab\"\n",$1);
           printf("@\n");
@@ -215,7 +219,7 @@ htrsh_pageimg_info () {
       echo "Usage: $FN XMLFILE";
     } 1>&2;
     return 1;
-  elif ! [ -f "$XML" ]; then
+  elif [ ! -f "$XML" ]; then
     echo "$FN: error: page file not found: $XML" 1>&2;
     return 1;
   elif [ $(eval xmlstarlet val $VAL "$XML" | grep ' invalid$' | wc -l) != 0 ]; then
@@ -229,7 +233,7 @@ htrsh_pageimg_info () {
     local XMLSIZE=$(xmlstarlet sel -t -v //@imageWidth -o x -v //@imageHeight "$XML");
     IMSIZE=$(identify -format %wx%h "$IMFILE" 2>/dev/null);
 
-    if ! [ -f "$IMFILE" ]; then
+    if [ ! -f "$IMFILE" ]; then
       echo "$FN: error: image file not found: $IMFILE" 1>&2;
       return 1;
     elif [ "$IMSIZE" != "$XMLSIZE" ]; then
@@ -261,15 +265,17 @@ htrsh_pageimg_info () {
 ##
 htrsh_pageimg_resize () {
   local FN="htrsh_pageimg_resize";
+  local INRES="";
   #local OUTRES="118";
   local OUTRES="95";
-  local INRES="";
+  local SFACT="";
   if [ $# -lt 2 ]; then
     { echo "$FN: error: not enough input arguments";
       echo "Usage: $FN XML OUTDIR [ OPTIONS ]";
       echo "Options:";
-      echo " -o OUTRES   Output image resolution in ppc (def.=$OUTRES)";
       echo " -i INRES    Input image resolution in ppc (def.=use image metadata)";
+      echo " -o OUTRES   Output image resolution in ppc (def.=$OUTRES)";
+      echo " -s SFACT    Scaling factor in % (def.=inferred from resolutions)";
     } 1>&2;
     return 1;
   fi
@@ -278,10 +284,12 @@ htrsh_pageimg_resize () {
   local OUTDIR="$2";
   shift 2;
   while [ $# -gt 0 ]; do
-    if [ "$1" = "-o" ]; then
-      OUTRES="$2";
-    elif [ "$1" = "-i" ]; then
+    if [ "$1" = "-i" ]; then
       INRES="$2";
+    elif [ "$1" = "-o" ]; then
+      OUTRES="$2";
+    elif [ "$1" = "-s" ]; then
+      SFACT="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -300,7 +308,7 @@ htrsh_pageimg_resize () {
   elif [ "$INRES" = "" ] && [ $(printf %.0f $IMRES) -lt 50 ]; then
     echo "$FN: error: image resolution ($IMRES ppc) apparently incorrect since it is unusually low to be a text document image: $IMFILE" 1>&2;
     return 1;
-  elif ! [ -d "$OUTDIR" ]; then
+  elif [ ! -d "$OUTDIR" ]; then
     echo "$FN: error: output directory does not exists: $OUTDIR" 1>&2;
     return 1;
   elif [ "$XMLDIR" = $(realpath --relative-to=. "$OUTDIR") ]; then
@@ -308,10 +316,14 @@ htrsh_pageimg_resize () {
     return 1;
   fi
 
-  if [ "$INRES" = "" ]; then
-    INRES="$IMRES";
+  [ "$INRES" = "" ] && INRES="$IMRES";
+
+  if [ "$SFACT" = "" ]; then
+    SFACT=$(echo $OUTRES $INRES | awk '{printf("%g%%",100*$1/$2)}');
+  else
+    SFACT=$(echo $SFACT | sed '/%$/!s|$|%|');
+    OUTRES=$(echo $SFACT $INRES | awk '{printf("%g",0.01*$1*$2)}');
   fi
-  local SFACT=$(echo $OUTRES $INRES | awk '{printf("%g%%",100*$1/$2)}');
 
   local IMBASE=$(echo "$IMFILE" | sed 's|.*/||');
   local XMLBASE=$(echo "$XML" | sed 's|.*/||');
@@ -409,7 +421,24 @@ htrsh_pagexml_resize () {
           </xsl:choose> 
         </xsl:for-each>
       </xsl:attribute>
-      <xsl:apply-templates select="@*[local-name() != '"'points'"'] | node()" />
+      <xsl:if test="@fpgram">
+      <xsl:attribute name="fpgram">
+        <xsl:for-each select="str:tokenize(@fpgram,'"', '"')">
+          <xsl:choose>
+            <xsl:when test="position() = 1">
+              <xsl:value-of select="round(number($scaleWidth)*number(.))"/>
+            </xsl:when>
+            <xsl:when test="position() mod 2 = 0">
+              <xsl:text>,</xsl:text><xsl:value-of select="round(number($scaleHeight)*number(.))"/>
+            </xsl:when>
+            <xsl:otherwise>
+              <xsl:text> </xsl:text><xsl:value-of select="round(number($scaleWidth)*number(.))"/>
+            </xsl:otherwise>
+          </xsl:choose> 
+        </xsl:for-each>
+      </xsl:attribute>
+      </xsl:if>
+      <xsl:apply-templates select="@*[local-name() != '"'points'"' and local-name() != '"'fpgram'"'] | node()" />
     </xsl:copy>
   </xsl:template>
 
@@ -458,7 +487,7 @@ htrsh_pageimg_clean () {
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
-  if ! [ -d "$OUTDIR" ]; then
+  if [ ! -d "$OUTDIR" ]; then
     echo "$FN: error: output directory does not exists: $OUTDIR" 1>&2;
     return 1;
   elif [ "$XMLDIR" = $(realpath --relative-to=. "$OUTDIR") ]; then
@@ -698,13 +727,13 @@ htrsh_feats_discretize () {
   local CBOOK="$2";
   local OUTDIR="$3";
 
-  if ! [ -e "$FEATLST" ]; then
+  if [ ! -e "$FEATLST" ]; then
     echo "$FN: error: features list file does not exists: $FEATLST" 1>&2;
     return 1;
-  elif ! [ -e "$CBOOK" ]; then
+  elif [ ! -e "$CBOOK" ]; then
     echo "$FN: error: codebook file does not exists: $CBOOK" 1>&2;
     return 1;
-  elif ! [ -d "$OUTDIR" ]; then
+  elif [ ! -d "$OUTDIR" ]; then
     echo "$FN: error: output directory does not exists: $OUTDIR" 1>&2;
     return 1;
   fi
@@ -767,8 +796,13 @@ htrsh_extract_feats () {
   ### Extract features ###
   if [ "$htrsh_feat" = "dotmatrix" ]; then
     local featcfg="-SwNXg --width $htrsh_dotmatrix_W --height $htrsh_dotmatrix_H --shift=$htrsh_dotmatrix_shift --win-size=$htrsh_dotmatrix_win";
-    dotmatrix $featcfg "$IMGIN" > "$FEAOUT";
-    dotmatrix $featcfg --aux "$IMGIN" > "$FBASE.mfea";
+    #dotmatrix $featcfg "$IMGIN" > "$FEAOUT";
+    #dotmatrix $featcfg --aux "$IMGIN" > "$FBASE.mfea";
+    if [ "$htrsh_dotmatrix_mom" = "yes" ]; then
+      paste -d " " <( dotmatrix $featcfg --aux "$IMGIN" ) <( dotmatrix $featcfg "$IMGIN" );
+    else
+      dotmatrix $featcfg "$IMGIN";
+    fi > "$FBASE.tfea";
   else
     echo "$FN: error: unknown features type: $htrsh_feat" 1>&2;
     return 1;
@@ -777,10 +811,14 @@ htrsh_extract_feats () {
   ### Project features if requested and concatenate mfea to fea ###
   # @todo this can be improved considerably
   if [ "$PBASE" != "" ]; then
-    { awk '{print NF}' "$FEAOUT" \
+    #{ awk '{print NF}' "$FEAOUT" \
+    #    | uniq -c \
+    #    | sed 's|^  *||';
+    #  cat "$FEAOUT";
+    { awk '{print NF}' "$FBASE.tfea" \
         | uniq -c \
         | sed 's|^  *||';
-      cat "$FEAOUT";
+      cat "$FBASE.tfea";
     } > "$FBASE.ofea";
 
     pca -o PROJ -i ROWS -e ROWS -p "$PBASE" -d "$FBASE.ofea" -x "$FBASE.pfea";
@@ -789,13 +827,15 @@ htrsh_extract_feats () {
         | awk '{ NF='$((RDIM-4))'; print; }';
     else
       sed '1d; s|  *| |g;' "$FBASE.pfea";
-    fi | paste -d " " - "$FBASE.mfea";
-  else
-    paste -d " " "$FEAOUT" "$FBASE.mfea";
-  fi > "$FBASE.cfea";
+    fi > "$FBASE.tfea";
+    #fi | paste -d " " - "$FBASE.mfea";
+  #else
+  #  paste -d " " "$FEAOUT" "$FBASE.mfea";
+  fi #> "$FBASE.cfea";
 
   ### Convert to HTK format ###
-  pfl2htk "$FBASE.cfea" "$FEAOUT" 2>/dev/null;
+  pfl2htk "$FBASE.tfea" "$FEAOUT" 2>/dev/null;
+  #pfl2htk "$FBASE.cfea" "$FEAOUT" 2>/dev/null;
 
   ### gzip if requested ###
   [ "$GZIP" = "yes" ] && gzip "$FEAOUT";
@@ -804,7 +844,178 @@ htrsh_extract_feats () {
 
   ### Remove temporal files ###
   [ "$htrsh_keeptmp" -lt 3 ] &&
-    rm -f "$FBASE".{c,m,o,p}fea;
+    rm -f "$FBASE".{t,o,p}fea;
+    #rm -f "$FBASE".{c,m,o,p}fea;
+
+  return 0;
+}
+
+##
+## Function that computes a PCA base for a given list of HTK features
+##
+htrsh_feats_pca () {
+  local FN="htrsh_feats_pca";
+  local EXCL="[]";
+  local RDIM="";
+  local TMPDIR=".";
+  if [ $# -lt 2 ]; then
+    { echo "$FN: error: not enough input arguments";
+      echo "Usage: $FN FEATLST OUTMAT [ OPTIONS ]";
+      echo "Options:";
+      echo " -e EXCL     Dimensions to exclude in matlab range format (def.=false)";
+      echo " -r RDIM     Return base of RDIM dimensions (def.=all)";
+      echo " -d TMPDIR   Directory for temporary files (def.=$TMPDIR)";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input agruments ###
+  local FEATLST="$1";
+  local OUTMAT="$2";
+  shift 2;
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "-e" ]; then
+      EXCL="$2";
+    elif [ "$1" = "-r" ]; then
+      RDIM="$2";
+    elif [ "$1" = "-d" ]; then
+      TMPDIR="$2";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
+    shift 2;
+  done
+
+  if [ ! -e "$FEATLST" ]; then
+    echo "$FN: error: feature list not found: $FEATLST" 1>&2;
+    return 1;
+  elif [ $(cat "$FEATLST" | wc -l) != $(sed 's|$|.gz|' "$FEATLST" | xargs ls | wc -l) ]; then
+    echo "$FN: error: some files in list not found: $FEATLST" 1>&2;
+    return 1;
+  fi
+
+  local f;
+  local FEATS=$(
+    for f in $(cat "$FEATLST"); do
+      local ff="$TMPDIR/"$(echo $f | sed 's|.*/||');
+      zcat "$f.gz" > "$ff";
+      echo "$ff";
+    done
+    );
+
+  local xEXCL=""; [ "$EXCL" != "[]" ] && xEXCL="x(:,$EXCL) = [];";
+
+  { f=$(echo "$FEATS" | head -n 1);
+    echo "
+      x = readhtk('$f'); $xEXCL
+      N = size(x,1);
+      s = sum(x)';
+      ss = x'*x;
+    ";
+    for f in $(echo "$FEATS" | tail -n +2); do
+      echo "
+        x = readhtk('$f'); $xEXCL
+        N = N + size(x,1);
+        s = s + sum(x)';
+        ss = ss + x'*x;
+      ";
+    done
+    echo "
+      s = (1/N)*s;
+      covm = (1/N)*ss - s*s';
+      covm = 0.5*(covm+covm');
+      [ B, V ] = eig(covm);
+      V = real(diag(V));
+      [ srt, idx ] = sort(-1*V);
+      V = V(idx);
+      B = B(:,idx);
+      D = size(covm,1);
+    ";
+    if [ "$EXCL" != "[]" ]; then
+      echo "
+        DD = length($EXCL);
+        sel = true(D+DD,1);
+        sel($EXCL) = false;
+        BB = zeros(D+DD);
+        BB(sel,sel) = B;
+        BB(~sel,~sel) = eye(DD);
+        B = BB;
+      ";
+    fi
+    if [ "$RDIM" != "" ]; then
+      echo "B = B(:,1:$RDIM);"
+    fi
+    echo "save -z $OUTMAT B V;";
+  } | octave -q;
+
+  [ "$?" != 0 ] &&
+    echo "$FN: error: problems computing PCA" 1>&2 &&
+    return 1;
+
+  echo "$FEATS" | xargs rm -f;
+
+  return 0;
+}
+
+##
+## Function that projects a list of features for a given base
+##
+htrsh_feats_project () {
+  local FN="htrsh_feats_project";
+  if [ $# -lt 3 ]; then
+    { echo "$FN: error: not enough input arguments";
+      echo "Usage: $FN FEATLST PBASE OUTDIR";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input agruments ###
+  local FEATLST="$1";
+  local PBASE="$2";
+  local OUTDIR="$3";
+
+  if [ ! -e "$FEATLST" ]; then
+    echo "$FN: error: features list file does not exists: $FEATLST" 1>&2;
+    return 1;
+  elif [ ! -e "$PBASE" ]; then
+    echo "$FN: error: projection base does not exists: $PBASE" 1>&2;
+    return 1;
+  elif [ ! -d "$OUTDIR" ]; then
+    echo "$FN: error: output directory does not exists: $OUTDIR" 1>&2;
+    return 1;
+  fi
+
+  local f;
+  local FEATS=$(
+    for f in $(cat "$FEATLST"); do
+      local ff="$OUTDIR/"$(echo $f | sed 's|.*/||');
+      zcat "$f.gz" > "$ff";
+      echo "$ff";
+    done
+    );
+
+  { echo "load('$PBASE');"
+    for f in $(echo "$FEATS"); do
+      echo "
+        [x,FP,DT,TC,T] = readhtk('$f');
+        x = x*B;
+        %writehtk('$f',x,FP,TC);
+        save('-ascii','$f','x');
+      ";
+    done
+  } | octave -q;
+
+  for f in $(echo "$FEATS"); do
+    pfl2htk "$f" "$f~" 2>/dev/null;
+    mv "$f~" "$f";
+  done
+
+  [ "$?" != 0 ] &&
+    echo "$FN: error: problems computing PCA" 1>&2 &&
+    return 1;
+
+  gzip -f $FEATS;
 
   return 0;
 }
@@ -1078,12 +1289,12 @@ htrsh_hmm_proto () {
               printf("<DProb>");
               if(RAND=="yes") {
                 tot=0;
-                for(d=1;d<=D;d++) {
-                  rnd[d]=rand();
-                  tot+=rnd[d];
-                }
                 for(d=1;d<=D;d++)
-                  printf(" %.0f",-2371.8*log(rnd[d]/tot));
+                  tot+=rnd[d]=rand();
+                for(d=1;d<=D;d++) {
+                  v=int(sprintf("%.0f",-2371.8*log(rnd[d]/tot)));
+                  printf(" %d",v>32767?32767:v);
+                }
                 delete rnd;
               }
               else
@@ -1156,6 +1367,8 @@ htrsh_hmm_train () {
   local FN="htrsh_hmm_train";
   local OUTDIR=".";
   local CODES="0";
+  local PROTO="";
+  local KEEPROTO="no";
   local KEEPIT="no";
   local RAND="no";
   if [ $# -lt 2 ]; then
@@ -1164,8 +1377,10 @@ htrsh_hmm_train () {
       echo "Options:";
       echo " -d OUTDIR    Directory for output models and temporary files (def.=$OUTDIR)";
       echo " -c CODES     Train discrete model with given codebook size (def.=false)";
+      echo " -P PROTO     Use PROTO as initialization prototype (def.=false)";
+      echo " -p (yes|no)  Keep initialization prototype (def.=$KEEPROTO)";
       echo " -i (yes|no)  Keep models per iteration (def.=$KEEPIT)";
-      echo " -R (yes|no)  Whether to randomize (def.=$RAND)";
+      echo " -R (yes|no)  Whether to randomize initialization prototype (def.=$RAND)";
     } 1>&2;
     return 1;
   fi
@@ -1179,6 +1394,10 @@ htrsh_hmm_train () {
       OUTDIR="$2";
     elif [ "$1" = "-c" ]; then
       CODES="$2";
+    elif [ "$1" = "-P" ]; then
+      PROTO="$2";
+    elif [ "$1" = "-p" ]; then
+      KEEPROTO="$2";
     elif [ "$1" = "-i" ]; then
       KEEPIT="$2";
     elif [ "$1" = "-R" ]; then
@@ -1190,11 +1409,14 @@ htrsh_hmm_train () {
     shift 2;
   done
 
-  if ! [ -e "$FEATLST" ]; then
+  if [ ! -e "$FEATLST" ]; then
     echo "$FN: error: feature list not found: $FEATLST" 1>&2;
     return 1;
-  elif ! [ -e "$MLF" ]; then
+  elif [ ! -e "$MLF" ]; then
     echo "$FN: error: feature list not found: $MLF" 1>&2;
+    return 1;
+  elif [ "$PROTO" != "" ] && [ ! -e "$PROTO" ]; then
+    echo "$FN: error: initialization prototype not found: $PROTO" 1>&2;
     return 1;
   fi
 
@@ -1212,8 +1434,15 @@ htrsh_hmm_train () {
   ### Discrete training ###
   if [ "$CODES" -gt 0 ]; then
     ### Initialization ###
-    htrsh_hmm_proto "$CODES" "$htrsh_hmm_states" -n "$HMMLST" -R $RAND -D yes \
-      | gzip > "$OUTDIR/Macros_hmm.gz";
+    if [ "$PROTO" != "" ]; then
+      cp -p "$PROTO" "$OUTDIR/Macros_hmm.gz";
+
+    else
+      htrsh_hmm_proto "$CODES" "$htrsh_hmm_states" -n "$HMMLST" -R $RAND -D yes \
+        | gzip > "$OUTDIR/Macros_hmm.gz";
+
+      [ "$KEEPROTO" = "yes" ] && cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/proto.gz";
+    fi
 
     ### Iterate ###
     local i;
@@ -1221,6 +1450,11 @@ htrsh_hmm_train () {
       echo "$FN: info: HERest iteration $i";
       HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_baseHTKcfg" ) \
         -S "$FEATLST" -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" <( echo "$HMMLST" );
+      if [ "$?" != 0 ]; then
+        echo "$FN: error: problem with HERest" 1>&2;
+        mv "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_i${i}_err.gz"
+        return 1;
+      fi
       [ "$KEEPIT" = "yes" ] &&
         cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_i$i.gz";
     done
@@ -1230,31 +1464,38 @@ htrsh_hmm_train () {
   ### Continuous training ###
   else
     ### Initialization ###
-    htrsh_hmm_proto "$DIMS" "$htrsh_hmm_states" -R $RAND \
-      | gzip > "$OUTDIR/proto";
-    HCompV $htrsh_HTK_HCompV_opts -C <( echo "$htrsh_baseHTKcfg" ) -S "$FEATLST" -M "$OUTDIR" "$OUTDIR/proto";
+    if [ "$PROTO" != "" ]; then
+      cp -p "$PROTO" "$OUTDIR/Macros_hmm.gz";
 
-    { zcat "$OUTDIR/proto" \
-        | head -n 3;
-      cat "$OUTDIR/vFloors";
-      zcat "$OUTDIR/proto" \
-        | awk -v file=<( echo "$HMMLST" ) \
-            'BEGIN {
-               List=0;
-               while(getline m[++List] < file > 0);
-             }
-             NR>4 {
-               l[NR-4]=$0;
-             }
-             END {
-              for(i=1;i<=List;i++) {
-                print "~h \""m[i]"\"";
-                for(j=1;j<=NR-4;j++)
-                  print l[j];
-              }
-            }';
-    } | gzip \
-      > "$OUTDIR/Macros_hmm.gz";
+    else
+      htrsh_hmm_proto "$DIMS" "$htrsh_hmm_states" -R $RAND \
+        | gzip > "$OUTDIR/proto";
+      HCompV $htrsh_HTK_HCompV_opts -C <( echo "$htrsh_baseHTKcfg" ) -S "$FEATLST" -M "$OUTDIR" "$OUTDIR/proto";
+
+      { zcat "$OUTDIR/proto" \
+          | head -n 3;
+        cat "$OUTDIR/vFloors";
+        zcat "$OUTDIR/proto" \
+          | awk -v file=<( echo "$HMMLST" ) \
+              'BEGIN {
+                 List=0;
+                 while(getline m[++List] < file > 0);
+               }
+               NR>4 {
+                 l[NR-4]=$0;
+               }
+               END {
+                for(i=1;i<=List;i++) {
+                  print "~h \""m[i]"\"";
+                  for(j=1;j<=NR-4;j++)
+                    print l[j];
+                }
+              }';
+      } | gzip \
+        > "$OUTDIR/Macros_hmm.gz";
+
+      [ "$KEEPROTO" = "yes" ] && cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/proto.gz";
+    fi
 
     ### Iterate for single Gaussian ###
     local i;
@@ -1262,6 +1503,9 @@ htrsh_hmm_train () {
       echo "$FN: info: 1 Gaussians HERest iteration $i";
       HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_baseHTKcfg" ) \
         -S "$FEATLST" -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" <( echo "$HMMLST" );
+      [ "$?" != 0 ] &&
+        echo "$FN: error: problem with HERest" 1>&2 &&
+        return 1;
       [ "$KEEPIT" = "yes" ] &&
         cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g001_i$i.gz";
     done
@@ -1283,6 +1527,9 @@ htrsh_hmm_train () {
         echo "$FN: info: $gg Gaussians HERest iteration $i";
         HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_baseHTKcfg" ) \
           -S "$FEATLST" -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" <( echo "$HMMLST" );
+        [ "$?" != 0 ] &&
+          echo "$FN: error: problem with HERest" 1>&2 &&
+          return 1;
         [ "$KEEPIT" = "yes" ] &&
           cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g${ggg}_i$i.gz";
       done
