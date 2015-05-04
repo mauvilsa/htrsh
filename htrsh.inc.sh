@@ -17,8 +17,9 @@
 # Default configuration #
 #-----------------------#
 
-htrsh_valschema="no";
-htrsh_pagexsd="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15/pagecontent.xsd";
+htrsh_valschema="yes";
+#htrsh_pagexsd="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15/pagecontent.xsd";
+htrsh_pagexsd="http://mvillegas.info/xsd/2013-07-15/pagecontent.xsd";
 
 htrsh_keeptmp="0";
 
@@ -68,7 +69,7 @@ HMMDEFOFILTER  = "gzip -c > $"
 ##
 htrsh_version () {
   echo '$Revision$$Date$' \
-    | sed 's|^$Revision:|htrsh: revision|; s| (.*|)|; s|[$][$]Date: |(|;';
+    | sed 's|^$Revision:|htrsh: revision|; s| (.*|)|; s|[$][$]Date: |(|;' 1>&2;
 }
 
 ##
@@ -94,14 +95,18 @@ htrsh_check_req () {
       #return 1;
   done
 
-  { htrsh_version; echo; } 1>&2;
-  { printf "xmlstarlet "; xmlstarlet --version | sed '2,$s|^|  |'; echo; } 1>&2;
-  { convert --version | sed -n '1{ s|^Version: ||; p; }'; echo; } 1>&2;
-  { octave --version | head -n 1; echo; } 1>&2;
+  [ $(octave -q --eval 'which readhtk' | wc -l) = 0 ] &&
+    echo "$FN: WARNING: unable to find octave command: readhtk" 1>&2;
+
+  htrsh_version;
   for cmd in imgtxtenh imglineclean imgpageborder imgccomp; do
     $cmd --version;
   done
-  HVite -V | grep HVite;
+  { printf "xmlstarlet "; xmlstarlet --version | head -n 1;
+    convert --version | sed -n '1{ s|^Version: ||; p; }';
+    octave --version | head -n 1;
+    HVite -V | grep HVite | cat;
+  } 1>&2;
 
   return 0;
 }
@@ -213,7 +218,7 @@ htrsh_page_to_mlf () {
 htrsh_pageimg_info () {
   local FN="htrsh_pageimg_info";
   local XML="$1";
-  local VAL=""; [ "$htrsh_valschema" = "yes" ] && VAL="-s '$htrsh_pagexsd'";
+  local VAL=""; [ "$htrsh_valschema" = "yes" ] && VAL="-e -s '$htrsh_pagexsd'";
   if [ $# -lt 1 ]; then
     { echo "$FN: error: not enough input arguments";
       echo "Usage: $FN XMLFILE";
