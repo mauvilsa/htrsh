@@ -25,7 +25,8 @@ htrsh_keeptmp="0";
 
 htrsh_text_translit="no";
 
-htrsh_feat_txtenhcfg="-r 0.16 -w 20 -k 0.1";
+htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.1"; # Options for imgtxtenh tool
+htrsh_imglineclean_opts="-m 99%";            # Options for imglineclean tool
 
 htrsh_feat_padding="0.5"; # Left and right white padding in mm for line images
 htrsh_feat_contour="yes"; # Whether to compute connected components contours
@@ -91,8 +92,6 @@ htrsh_check_req () {
     local c=$(which $cmd);
     [ ! -e "$c" ] &&
       echo "$FN: WARNING: unable to find command: $cmd" 1>&2;
-      #echo "$FN: error: unable to find command: $cmd" 1>&2 &&
-      #return 1;
   done
 
   [ $(octave -q --eval 'which readhtk' | wc -l) = 0 ] &&
@@ -122,7 +121,7 @@ htrsh_check_req () {
 # @todo this needs to be improved a lot
 htrsh_page_to_mlf () {
   local FN="htrsh_page_to_mlf";
-  local XPATH='//*[@type="paragraph"]';
+  local XPATH='//_:TextRegion[@type="paragraph"]';
   local REGSRC="no";
   if [ $# -lt 1 ]; then
     { echo "$FN: error: not enough input arguments";
@@ -180,6 +179,7 @@ htrsh_page_to_mlf () {
       | iconv -f utf8 -t ascii//TRANSLIT;
   fi \
     | sed '
+        #s|\xc2\xad|-|g;
         s|^  *||;
         s|  *$||;
         s|   *| |g;
@@ -464,12 +464,12 @@ htrsh_pagexml_resize () {
 ##
 htrsh_pageimg_clean () {
   local FN="htrsh_pageimg_clean";
-  #local XPATH='//*[@type="paragraph"]';
+  local XPATH='//_:TextRegion[@type="paragraph"]';
   if [ $# -lt 2 ]; then
     { echo "$FN: error: not enough input arguments";
       echo "Usage: $FN XML OUTDIR [ OPTIONS ]";
-      #echo "Options:";
-      #echo " -x XPATH    XPath for region selection (def.=$XPATH)";
+      echo "Options:";
+      echo " -x XPATH    XPath for region selection (def.=$XPATH)";
     } 1>&2;
     return 1;
   fi
@@ -502,11 +502,12 @@ htrsh_pageimg_clean () {
 
   local IMBASE=$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
   local XMLBASE=$(echo "$XML" | sed 's|.*/||');
+  local IXPATH=$(echo "$XPATH" | sed 's|\[\([^[]*\)]|[not(\1)]|');
 
-  local textreg=$(xmlstarlet sel -t -m '//_:TextRegion[@type="paragraph"]/_:Coords' -v @points -n \
+  local textreg=$(xmlstarlet sel -t -m "$XPATH/_:Coords" -v @points -n \
                     "$XML" 2>/dev/null \
                     | awk '{printf(" -draw \"polyline %s\"",$0)}');
-  local othreg=$(xmlstarlet sel -t -m '//_:TextRegion[@type!="paragraph"]/_:Coords' -v @points -n \
+  local othreg=$(xmlstarlet sel -t -m "$IXPATH/_:Coords" -v @points -n \
                    "$XML" 2>/dev/null \
                    | awk '{printf(" -draw \"polyline %s\"",$0)}');
 
@@ -516,7 +517,7 @@ htrsh_pageimg_clean () {
       -fill black -stroke black $othreg \
       -alpha copy "'$IMFILE'" +swap \
       -compose copy-opacity -composite png:- \
-    | imgtxtenh $htrsh_feat_txtenhcfg - "$OUTDIR/$IMBASE.png" 2>&1;
+    | imgtxtenh $htrsh_imgtxtenh_opts - "$OUTDIR/$IMBASE.png" 2>&1;
   [ "$?" != 0 ] &&
     echo "$FN: error: problems enhancing image: $IMFILE" 1>&2 &&
     return 1;
@@ -533,7 +534,7 @@ htrsh_pageimg_clean () {
 ##
 htrsh_pageimg_quadborderclean () {
   local FN="htrsh_pageimg_quadborderclean";
-  local XPATH='//*[@type="paragraph"]';
+  local XPATH='//_:TextRegion[@type="paragraph"]';
   local TMPDIR=".";
   local CFG="";
   if [ $# -lt 2 ]; then
@@ -646,7 +647,7 @@ htrsh_pageimg_quadborderclean () {
 ##
 htrsh_pageimg_extract_lines () {
   local FN="htrsh_pageimg_extract_lines";
-  local XPATH='//*[@type="paragraph"]';
+  local XPATH='//_:TextRegion[@type="paragraph"]';
   local OUTDIR=".";
   local IMFILE="";
   if [ $# -lt 1 ]; then
@@ -765,16 +766,9 @@ SAVEASVQ       = T
 # @todo needs to be improved to handle different types of features
 htrsh_extract_feats () {
   local FN="htrsh_extract_feats";
-  local PBASE="";
-  local RDIM="";
-  local GZIP="yes";
   if [ $# -lt 2 ]; then
     { echo "$FN: error: not enough input arguments";
-      echo "Usage: $FN IMGIN FEAOUT [ OPTIONS ]";
-      echo "Options:";
-      echo " -b PBASE    Project features using given base (def.=false)";
-      echo " -r RDIM     Reduced dimensionality (def.=from matrix)";
-      echo " -z (yes|no) Whether to gzip features (def.=$GZIP)";
+      echo "Usage: $FN IMGIN FEAOUT";
     } 1>&2;
     return 1;
   fi
@@ -782,75 +776,28 @@ htrsh_extract_feats () {
   ### Parse input agruments ###
   local IMGIN="$1";
   local FEAOUT="$2";
-  local FBASE=$(echo "$FEAOUT" | sed 's|\.fea$||');
-  shift 2;
-  while [ $# -gt 0 ]; do
-    if [ "$1" = "-b" ]; then
-      PBASE="$2";
-    elif [ "$1" = "-r" ]; then
-      RDIM="$2";
-    elif [ "$1" = "-z" ]; then
-      GZIP="$2";
-    else
-      echo "$FN: error: unexpected input argument: $1" 1>&2;
-      return 1;
-    fi
-    shift 2;
-  done
 
   ### Extract features ###
   if [ "$htrsh_feat" = "dotmatrix" ]; then
     local featcfg="-SwNXg --width $htrsh_dotmatrix_W --height $htrsh_dotmatrix_H --shift=$htrsh_dotmatrix_shift --win-size=$htrsh_dotmatrix_win";
-    #dotmatrix $featcfg "$IMGIN" > "$FEAOUT";
-    #dotmatrix $featcfg --aux "$IMGIN" > "$FBASE.mfea";
     if [ "$htrsh_dotmatrix_mom" = "yes" ]; then
       paste -d " " <( dotmatrix $featcfg --aux "$IMGIN" ) <( dotmatrix $featcfg "$IMGIN" );
     else
       dotmatrix $featcfg "$IMGIN";
-    fi > "$FBASE.tfea";
+    fi > "$FEAOUT.tfea";
   else
     echo "$FN: error: unknown features type: $htrsh_feat" 1>&2;
     return 1;
   fi
 
-  ### Project features if requested and concatenate mfea to fea ###
-  # @todo this can be improved considerably
-  if [ "$PBASE" != "" ]; then
-    #{ awk '{print NF}' "$FEAOUT" \
-    #    | uniq -c \
-    #    | sed 's|^  *||';
-    #  cat "$FEAOUT";
-    { awk '{print NF}' "$FBASE.tfea" \
-        | uniq -c \
-        | sed 's|^  *||';
-      cat "$FBASE.tfea";
-    } > "$FBASE.ofea";
-
-    pca -o PROJ -i ROWS -e ROWS -p "$PBASE" -d "$FBASE.ofea" -x "$FBASE.pfea";
-    if [ "$RDIM" != "" ]; then
-      sed '1d; s|  *| |g;' "$FBASE.pfea" \
-        | awk '{ NF='$((RDIM-4))'; print; }';
-    else
-      sed '1d; s|  *| |g;' "$FBASE.pfea";
-    fi > "$FBASE.tfea";
-    #fi | paste -d " " - "$FBASE.mfea";
-  #else
-  #  paste -d " " "$FEAOUT" "$FBASE.mfea";
-  fi #> "$FBASE.cfea";
-
   ### Convert to HTK format ###
-  pfl2htk "$FBASE.tfea" "$FEAOUT" 2>/dev/null;
-  #pfl2htk "$FBASE.cfea" "$FEAOUT" 2>/dev/null;
+  pfl2htk "$FEAOUT.tfea" "$FEAOUT" 2>/dev/null;
 
-  ### gzip if requested ###
-  [ "$GZIP" = "yes" ] && gzip "$FEAOUT";
-
-  echo "$FEAOUT";
+  ### gzip features ###
+  gzip "$FEAOUT";
 
   ### Remove temporal files ###
-  [ "$htrsh_keeptmp" -lt 3 ] &&
-    rm -f "$FBASE".{t,o,p}fea;
-    #rm -f "$FBASE".{c,m,o,p}fea;
+  rm -f "$FEAOUT.tfea";
 
   return 0;
 }
@@ -1030,12 +977,10 @@ htrsh_feats_project () {
 ##
 htrsh_pageimg_extract_linefeats () {
   local FN="htrsh_pageimg_extract_linefeats";
-  local XPATH='//*[@type="paragraph"]';
+  local XPATH='//_:TextRegion[@type="paragraph"]';
   local OUTDIR=".";
   local FEATLST="$OUTDIR/feats.lst";
   local PBASE="";
-  local RDIM="";
-  local GZIP="yes";
   local REPLC="yes";
   if [ $# -lt 2 ]; then
     { echo "$FN: error: not enough input arguments";
@@ -1045,8 +990,6 @@ htrsh_pageimg_extract_linefeats () {
       echo " -d OUTDIR   Output directory for features (def.=$OUTDIR)";
       echo " -l FEATLST  Output list of features to file (def.=$FEATLST)";
       echo " -b PBASE    Project features using given base (def.=false)";
-      echo " -r RDIM     Reduced dimensionality (def.=from matrix)";
-      echo " -z (yes|no) Whether to gzip features (def.=$GZIP)";
       echo " -c (yes|no) Whether to replace Coords/@points with the features contour (def.=$REPLC)";
     } 1>&2;
     return 1;
@@ -1065,10 +1008,6 @@ htrsh_pageimg_extract_linefeats () {
       FEATLST="$2";
     elif [ "$1" = "-b" ]; then
       PBASE="-b $2";
-    elif [ "$1" = "-r" ]; then
-      RDIM="-r $2";
-    elif [ "$1" = "-z" ]; then
-      GZIP="$2";
     elif [ "$1" = "-c" ]; then
       REPLC="$2";
     else
@@ -1088,6 +1027,7 @@ htrsh_pageimg_extract_linefeats () {
   [ "$?" != 0 ] && return 1;
 
   local ed="";
+  local FEATS="";
 
   ### Process each line ###
   local n;
@@ -1098,7 +1038,7 @@ htrsh_pageimg_extract_linefeats () {
     echo "$FN: processing line image ${ff}.png";
 
     ### Clean and trim line image ###
-    imglineclean -m 99% ${ff}.png ${ff}_clean.png 2>&1;
+    imglineclean $htrsh_imglineclean_opts ${ff}.png ${ff}_clean.png 2>&1;
     [ "$?" != 0 ] &&
       echo "$FN: error: problems cleaning line image: ${ff}.png" 1>&2 &&
       return 1;
@@ -1198,9 +1138,12 @@ htrsh_pageimg_extract_linefeats () {
     fi 2>&1;
 
     ### Extract features ###
-    htrsh_extract_feats "${ff}_fea.png" "${ff}.fea" -z "$GZIP" $PBASE $RDIM \
-      >> "$FEATLST";
+    htrsh_extract_feats "${ff}_fea.png" "${ff}.fea";
     [ "$?" != 0 ] && return 1;
+
+    echo "${ff}.fea" >> "$FEATLST";
+
+    [ "$PBASE" != "" ] && FEATS=$( echo "$FEATS"; echo "${ff}.fea"; );
 
     ### Remove temporal files ###
     [ "$htrsh_keeptmp" -lt 1 ] &&
@@ -1210,6 +1153,12 @@ htrsh_pageimg_extract_linefeats () {
     [ "$htrsh_keeptmp" -lt 3 ] &&
       rm -f "${ff}_deskew.png" "${ff}_deslant.png";
   done
+
+  ### Project features if requested ###
+  if [ "$PBASE" != "" ]; then
+    htrsh_feats_project <( echo "$FEATS" | sed '/^$/d' ) "$PBASE" "$OUTDIR";
+    [ "$?" != 0 ] && return 1;
+  fi
 
   ### Generate new PAGE XML file ###
   eval xmlstarlet ed -P $ed "$XML" > "$XMLOUT";
@@ -1548,6 +1497,32 @@ htrsh_hmm_train () {
   fi
 
   rm -f "$OUTDIR/proto" "$OUTDIR/vFloors" "$OUTDIR/Macros_hmm.gz";
+
+  return 0;
+}
+
+##
+## Function that fixes utf8 characters in an HTK recognition file
+##
+htrsh_fix_rec_utf8 () {
+  local FN="htrsh_fix_rec_utf8";
+  if [ $# -lt 2 ]; then
+    { echo "$FN: error: not enough input arguments";
+      echo "Usage: $FN MODEL RECMLF";
+    } 1>&2;
+    return 1;
+  fi
+
+  local RECOVUTF8=$(
+    zcat "$1" \
+      | sed -n '/^~h/{ s|^~h "\(.*\)"$|\1|; p; }' \
+      | sed -n '
+          /^\\[0-9][0-9][0-9]\\[0-9][0-9][0-9]$/ {
+            s|^\\\(.*\)\\\(.*\)$|s/\\\\\1\\\\\2/\\o\1\\o\2/g;|;
+            p;
+          }');
+
+  sed -i "$RECOVUTF8" "$2";
 
   return 0;
 }
