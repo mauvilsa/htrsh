@@ -25,9 +25,12 @@ htrsh_keeptmp="0";
 
 htrsh_text_translit="no";
 
+htrsh_xpath_regions='//_:TextRegion'; # XPATH for selecting page regions to process
+
 htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.1"; # Options for imgtxtenh tool
 htrsh_imglineclean_opts="-m 99%";            # Options for imglineclean tool
 
+htrsh_feat_deslant="yes"; # Whether to correct slant of the text
 htrsh_feat_padding="0.5"; # Left and right white padding in mm for line images
 htrsh_feat_contour="yes"; # Whether to compute connected components contours
 htrsh_feat_dilradi="0.5"; # Dilation radius in mm for contours
@@ -59,6 +62,10 @@ HPARMOFILTER   = "gzip -c > $.gz"
 HMMDEFFILTER   = "gzip -d -c $"
 HMMDEFOFILTER  = "gzip -c > $"
 ';
+
+htrsh_realpath="realpath";
+[ $(realpath --help 2>&1 | grep relative | wc -l) != 0 ] &&
+  htrsh_realpath="realpath --relative-to=.";
 
 
 #---------------------------#
@@ -121,13 +128,11 @@ htrsh_check_req () {
 # @todo this needs to be improved a lot
 htrsh_page_to_mlf () {
   local FN="htrsh_page_to_mlf";
-  local XPATH='//_:TextRegion[@type="paragraph"]';
   local REGSRC="no";
   if [ $# -lt 1 ]; then
     { echo "$FN: error: not enough input arguments";
       echo "Usage: $FN XMLFILE [ OPTIONS ]";
       echo "Options:";
-      echo " -x XPATH     XPath for region selection (def.=$XPATH)";
       echo " -r (yes|no)  Whether to get TextEquiv from regions instead of lines (def.=$REGSRC)";
     } 1>&2;
     return 1;
@@ -136,9 +141,7 @@ htrsh_page_to_mlf () {
   local XML="$1";
   shift;
   while [ $# -gt 0 ]; do
-    if [ "$1" = "-x" ]; then
-      XPATH="$2";
-    elif [ "$1" = "-r" ]; then
+    if [ "$1" = "-r" ]; then
       REGSRC="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
@@ -154,12 +157,12 @@ htrsh_page_to_mlf () {
   local TAB=$(printf "\t");
   local PG=$(xmlstarlet sel -t -v //@imageFilename "$XML" | sed 's|.*/||; s|\.[^.]*$||;');
 
-  local IDop;
+  local XPATH IDop;
   if [ "$REGSRC" = "yes" ]; then
-    XPATH="$XPATH/_:TextEquiv/_:Unicode";
+    XPATH="$htrsh_xpath_regions/_:TextEquiv/_:Unicode";
     IDop="-o $PG. -v ../../@id";
   else
-    XPATH="$XPATH/_:TextLine/_:TextEquiv/_:Unicode";
+    XPATH="$htrsh_xpath_regions/_:TextLine/_:TextEquiv/_:Unicode";
     IDop="-o $PG. -v ../../../@id -o . -v ../../@id";
   fi
 
@@ -180,13 +183,14 @@ htrsh_page_to_mlf () {
   fi \
     | sed '
         #s|\xc2\xad|-|g;
-        s|^  *||;
+        #s|^  *||;
+        s|\t  *|\t|;
         s|  *$||;
         s|   *| |g;
-        s|@|#|g;
-        s| |@|g;
+        #s|@|#|g;
+        #s| |@|g;
         #s|---*|—|g;
-        s|---*|-|g;
+        #s|---*|-|g;
         #s|Z|z|g;
         ' \
     | awk -F'\t' '
@@ -194,12 +198,24 @@ htrsh_page_to_mlf () {
           printf("@\n");
           N = split($2,txt,"");
           for( n=1; n<=N; n++ ) {
-            if( txt[n] == "—" )
-              printf("<dash>\n");
+            if( txt[n] == " " )
+              printf("@\n");
+            else if( txt[n] == "@" )
+              printf("{at}\n");
             else if( txt[n] == "\"" )
-              printf("<dquote>\n");
+              printf("{dquote}\n");
             else if( txt[n] == "\x27" )
-              printf("<quote>\n");
+              printf("{quote}\n");
+            else if( txt[n] == "&" )
+              printf("{amp}\n");
+            else if( txt[n] == "<" )
+              printf("{lt}\n");
+            else if( txt[n] == ">" )
+              printf("{gt}\n");
+            else if( txt[n] == "{" )
+              printf("{lbrace}\n");
+            else if( txt[n] == "}" )
+              printf("{rbrace}\n");
             else if( match(txt[n],"[.0-9]") )
               printf("\"%s\"\n",txt[n]);
             else
@@ -233,7 +249,7 @@ htrsh_pageimg_info () {
   fi
 
   if [ $# -eq 1 ] || [ "$2" != "noinfo" ]; then
-    XMLDIR=$(realpath --relative-to=. $(dirname "$XML"));
+    XMLDIR=$($htrsh_realpath $(dirname "$XML"));
     IMFILE="$XMLDIR/"$(xmlstarlet sel -t -v //@imageFilename "$XML");
     local XMLSIZE=$(xmlstarlet sel -t -v //@imageWidth -o x -v //@imageHeight "$XML");
     IMSIZE=$(identify -format %wx%h "$IMFILE" 2>/dev/null);
@@ -316,7 +332,7 @@ htrsh_pageimg_resize () {
   elif [ ! -d "$OUTDIR" ]; then
     echo "$FN: error: output directory does not exists: $OUTDIR" 1>&2;
     return 1;
-  elif [ "$XMLDIR" = $(realpath --relative-to=. "$OUTDIR") ]; then
+  elif [ "$XMLDIR" = $($htrsh_realpath "$OUTDIR") ]; then
     echo "$FN: error: output directory has to be different from the one containing the input XML: $XMLDIR" 1>&2;
     return 1;
   fi
@@ -464,12 +480,12 @@ htrsh_pagexml_resize () {
 ##
 htrsh_pageimg_clean () {
   local FN="htrsh_pageimg_clean";
-  local XPATH='//_:TextRegion[@type="paragraph"]';
+  local INRES="";
   if [ $# -lt 2 ]; then
     { echo "$FN: error: not enough input arguments";
       echo "Usage: $FN XML OUTDIR [ OPTIONS ]";
       echo "Options:";
-      echo " -x XPATH    XPath for region selection (def.=$XPATH)";
+      echo " -i INRES    Input image resolution in ppc (def.=use image metadata)";
     } 1>&2;
     return 1;
   fi
@@ -478,8 +494,8 @@ htrsh_pageimg_clean () {
   local OUTDIR="$2";
   shift 2;
   while [ $# -gt 0 ]; do
-    if [ "$1" = "-x" ]; then
-      XPATH="$2";
+    if [ "$1" = "-i" ]; then
+      INRES="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -495,29 +511,37 @@ htrsh_pageimg_clean () {
   if [ ! -d "$OUTDIR" ]; then
     echo "$FN: error: output directory does not exists: $OUTDIR" 1>&2;
     return 1;
-  elif [ "$XMLDIR" = $(realpath --relative-to=. "$OUTDIR") ]; then
+  elif ( [ "$INRES" = "" ] && [ $(printf %.0f $IMRES) -lt 50 ] ); then
+    echo "$FN: error: image resolution ($IMRES ppc) apparently incorrect since it is unusually low to be a text document image: $IMFILE" 1>&2;
+    return 1;
+  elif [ "$XMLDIR" = $($htrsh_realpath "$OUTDIR") ]; then
     echo "$FN: error: output directory has to be different from the one containing the input XML: $XMLDIR" 1>&2;
     return 1;
   fi
 
   local IMBASE=$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
   local XMLBASE=$(echo "$XML" | sed 's|.*/||');
-  local IXPATH=$(echo "$XPATH" | sed 's|\[\([^[]*\)]|[not(\1)]|');
+  local IXPATH="";
+  [ $(echo "$htrsh_xpath_regions" | grep -F '[' | wc -l) = 1 ] &&
+    IXPATH=$(echo "$XPATH" | sed 's|\[\([^[]*\)]|[not(\1)]|');
 
-  local textreg=$(xmlstarlet sel -t -m "$XPATH/_:Coords" -v @points -n \
+  local textreg=$(xmlstarlet sel -t -m "$htrsh_xpath_regions/_:Coords" -v @points -n \
                     "$XML" 2>/dev/null \
                     | awk '{printf(" -draw \"polyline %s\"",$0)}');
-  local othreg=$(xmlstarlet sel -t -m "$IXPATH/_:Coords" -v @points -n \
+  local othreg="";
+  [ "$IXPATH" != "" ] &&
+    othreg=$(xmlstarlet sel -t -m "$IXPATH/_:Coords" -v @points -n \
                    "$XML" 2>/dev/null \
                    | awk '{printf(" -draw \"polyline %s\"",$0)}');
 
   ### Create mask and enhance selected text regions ###
+  [ "$INRES" != "" ] && INRES="-d $INRES";
   eval convert -size $IMSIZE xc:black \
       -fill white -stroke white $textreg \
       -fill black -stroke black $othreg \
       -alpha copy "'$IMFILE'" +swap \
       -compose copy-opacity -composite png:- \
-    | imgtxtenh $htrsh_imgtxtenh_opts - "$OUTDIR/$IMBASE.png" 2>&1;
+    | imgtxtenh $htrsh_imgtxtenh_opts $INRES - "$OUTDIR/$IMBASE.png" 2>&1;
   [ "$?" != 0 ] &&
     echo "$FN: error: problems enhancing image: $IMFILE" 1>&2 &&
     return 1;
@@ -534,14 +558,12 @@ htrsh_pageimg_clean () {
 ##
 htrsh_pageimg_quadborderclean () {
   local FN="htrsh_pageimg_quadborderclean";
-  local XPATH='//_:TextRegion[@type="paragraph"]';
   local TMPDIR=".";
   local CFG="";
   if [ $# -lt 2 ]; then
     { echo "$FN: error: not enough input arguments";
       echo "Usage: $FN XML OUTIMG [ OPTIONS ]";
       echo "Options:";
-      echo " -x XPATH    XPath for region selection (def.=$XPATH)";
       echo " -c CFG      Options for imgpageborder (def.=$CFG)";
       echo " -d TMPDIR   Directory for temporary files (def.=$TMPDIR)";
     } 1>&2;
@@ -552,9 +574,7 @@ htrsh_pageimg_quadborderclean () {
   local OUTIMG="$2";
   shift 2;
   while [ $# -gt 0 ]; do
-    if [ "$1" = "-x" ]; then
-      XPATH="$2";
-    elif [ "$1" = "-c" ]; then
+    if [ "$1" = "-c" ]; then
       CFG="$2";
     elif [ "$1" = "-d" ]; then
       TMPDIR="$2";
@@ -576,7 +596,7 @@ htrsh_pageimg_quadborderclean () {
   local IMBASE=$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
 
   ### Get quadrilaterals ###
-  local QUADs=$(xmlstarlet sel -t -m "$XPATH/_:Coords" -v @points -n "$XML");
+  local QUADs=$(xmlstarlet sel -t -m "$htrsh_xpath_regions/_:Coords" -v @points -n "$XML");
   local N=$(echo "$QUADs" | wc -l);
 
   local comps="";
@@ -647,14 +667,12 @@ htrsh_pageimg_quadborderclean () {
 ##
 htrsh_pageimg_extract_lines () {
   local FN="htrsh_pageimg_extract_lines";
-  local XPATH='//_:TextRegion[@type="paragraph"]';
   local OUTDIR=".";
   local IMFILE="";
   if [ $# -lt 1 ]; then
     { echo "$FN: error: not enough input arguments";
       echo "Usage: $FN XMLFILE [ OPTIONS ]";
       echo "Options:";
-      echo " -x XPATH    XPath for region selection (def.=$XPATH)";
       echo " -d OUTDIR   Output directory for images (def.=$OUTDIR)";
       echo " -i IMFILE   Extract from provided image (def.=@imageFilename in XML)";
     } 1>&2;
@@ -664,9 +682,7 @@ htrsh_pageimg_extract_lines () {
   local XML="$1";
   shift;
   while [ $# -gt 0 ]; do
-    if [ "$1" = "-x" ]; then
-      XPATH="$2";
-    elif [ "$1" = "-d" ]; then
+    if [ "$1" = "-d" ]; then
       OUTDIR="$2";
     elif [ "$1" = "-i" ]; then
       IMFILE="$2";
@@ -682,14 +698,36 @@ htrsh_pageimg_extract_lines () {
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
-  local NUMLINES=$(xmlstarlet sel -t -v "count($XPATH/_:TextLine/_:Coords)" "$XML");
+  local NUMLINES=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextLine/_:Coords)" "$XML");
 
   if [ "$NUMLINES" -gt 0 ]; then
     local base="$OUTDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
-    local extr=$(
-      xmlstarlet sel -t -m "$XPATH/_:TextLine/_:Coords" \
+
+    #local extr=$(
+    #  xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
+    #      -v ../../@id -o " " -v ../@id -o " " -v @points -n "$XML" \
+    #    | awk -F'[ ,]' -v sz="$IMSIZE" -v base="$base" '
+    #        { mn_x=$3; mx_x=$3;
+    #          mn_y=$4; mx_y=$4;
+    #          for( n=5; n<=NF; n+=2 ) {
+    #            if( mn_x>$n ) mn_x = $n;
+    #            if( mx_x<$n ) mx_x = $n;
+    #            if( mn_y>$(n+1) ) mn_y = $(n+1);
+    #            if( mx_y<$(n+1) ) mx_y = $(n+1);
+    #          }
+    #          fn = sprintf( "%s.%s.%s.png", base, $1, $2 );
+    #          printf(" \\( -size %s xc:black -draw \"polyline", sz );
+    #          for( n=3; n<=NF; n+=2 )
+    #            printf(" %s,%s", $n,$(n+1) );
+    #          printf("\" -alpha copy -clone 0 +swap -composite");
+    #          printf(" -crop %dx%d+%d+%d", mx_x-mn_x+1, mx_y-mn_y+1, mn_x, mn_y );
+    #          printf(" -write \"%s\" -print \"%s\\n\" +delete \\)", fn, fn );
+    #        }');
+    #eval convert -fill white -stroke white -compose copy-opacity "$IMFILE" $extr null:;
+
+    xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
           -v ../../@id -o " " -v ../@id -o " " -v @points -n "$XML" \
-        | awk -F'[ ,]' -v sz="$IMSIZE" -v base="$base" '
+        | awk -F'[ ,]' -v sz="$IMSIZE" -v base="$base" -v im="$IMFILE" -v num=$NUMLINES '
             { mn_x=$3; mx_x=$3;
               mn_y=$4; mx_y=$4;
               for( n=5; n<=NF; n+=2 ) {
@@ -698,16 +736,20 @@ htrsh_pageimg_extract_lines () {
                 if( mn_y>$(n+1) ) mn_y = $(n+1);
                 if( mx_y<$(n+1) ) mx_y = $(n+1);
               }
+              w = mx_x-mn_x+1;
+              h = mx_y-mn_y+1;
               fn = sprintf( "%s.%s.%s.png", base, $1, $2 );
-              printf(" \\( -size %s xc:black -draw \"polyline", sz );
+              printf( "convert \"%s[%dx%d+%d+%d]\" +repage", im, w, h, mn_x, mn_y );
+              printf( " \\( -size %dx%d xc:black -fill white -stroke white -draw \"polyline", w, h );
               for( n=3; n<=NF; n+=2 )
-                printf(" %s,%s", $n,$(n+1) );
-              printf("\" -alpha copy -clone 0 +swap -composite");
-              printf(" -crop %dx%d+%d+%d", mx_x-mn_x+1, mx_y-mn_y+1, mn_x, mn_y );
-              printf(" -write \"%s\" -print \"%s\\n\" +delete \\)", fn, fn );
-            }');
+                printf( " %s,%s", $n-mn_x,$(n+1)-mn_y );
+              printf( "\" -alpha copy -clone 0 +swap -compose copy-opacity -composite" );
+              printf( " -page %s+%d+%d -write \"%s\" -print \"%s\\n\" +delete \\) null:", sz, mn_x, mn_y, fn, fn );
+              if( NR != num )
+              	printf(" &&\n");
+            }' \
+        | bash;
 
-    eval convert -fill white -stroke white -compose copy-opacity "$IMFILE" $extr null:;
     [ "$?" != 0 ] &&
       echo "$FN: error: line image extraction failed" 1>&2 &&
       return 1;
@@ -794,7 +836,7 @@ htrsh_extract_feats () {
   pfl2htk "$FEAOUT.tfea" "$FEAOUT" 2>/dev/null;
 
   ### gzip features ###
-  gzip "$FEAOUT";
+  gzip -f "$FEAOUT";
 
   ### Remove temporal files ###
   rm -f "$FEAOUT.tfea";
@@ -898,7 +940,7 @@ htrsh_feats_pca () {
     if [ "$RDIM" != "" ]; then
       echo "B = B(:,1:$RDIM);"
     fi
-    echo "save -z $OUTMAT B V;";
+    echo "save('-z','$OUTMAT','B','V');";
   } | octave -q;
 
   [ "$?" != 0 ] &&
@@ -977,7 +1019,6 @@ htrsh_feats_project () {
 ##
 htrsh_pageimg_extract_linefeats () {
   local FN="htrsh_pageimg_extract_linefeats";
-  local XPATH='//_:TextRegion[@type="paragraph"]';
   local OUTDIR=".";
   local FEATLST="$OUTDIR/feats.lst";
   local PBASE="";
@@ -986,7 +1027,6 @@ htrsh_pageimg_extract_linefeats () {
     { echo "$FN: error: not enough input arguments";
       echo "Usage: $FN XMLIN XMLOUT [ OPTIONS ]";
       echo "Options:";
-      echo " -x XPATH    XPath for region selection (def.=$XPATH)";
       echo " -d OUTDIR   Output directory for features (def.=$OUTDIR)";
       echo " -l FEATLST  Output list of features to file (def.=$FEATLST)";
       echo " -b PBASE    Project features using given base (def.=false)";
@@ -1000,9 +1040,7 @@ htrsh_pageimg_extract_linefeats () {
   local XMLOUT="$2";
   shift 2;
   while [ $# -gt 0 ]; do
-    if [ "$1" = "-x" ]; then
-      XPATH="$2";
-    elif [ "$1" = "-d" ]; then
+    if [ "$1" = "-d" ]; then
       OUTDIR="$2";
     elif [ "$1" = "-l" ]; then
       FEATLST="$2";
@@ -1023,7 +1061,7 @@ htrsh_pageimg_extract_linefeats () {
   [ "$?" != 0 ] && return 1;
 
   ### Extract lines from line coordinates ###
-  htrsh_pageimg_extract_lines "$XML" -x "$XPATH" -d "$OUTDIR" > "$OUTDIR/lines.lst";
+  htrsh_pageimg_extract_lines "$XML" -d "$OUTDIR" > "$OUTDIR/lines.lst";
   [ "$?" != 0 ] && return 1;
 
   local ed="";
@@ -1051,8 +1089,10 @@ htrsh_pageimg_extract_linefeats () {
     local skew=$(convert ${ff}_clean.png +repage -flatten \
                    -deskew 40% -print '%[deskew:angle]\n' \
                    -trim +repage ${ff}_deskew.png);
-    local slant=$(imageSlant -v 1 -g -i ${ff}_deskew.png -o ${ff}_deslant.png 2>&1 \
-                    | sed -n '/Slant medio/{s|.*: ||;p;}');
+    local slant="";
+    [ "$htrsh_feat_deslant" = "yes" ] &&
+      slant=$(imageSlant -v 1 -g -i ${ff}_deskew.png -o ${ff}_deslant.png 2>&1 \
+                | sed -n '/Slant medio/{s|.*: ||;p;}');
     [ "$slant" = "" ] && slant="0";
 
     local affine=$(echo "
@@ -1071,7 +1111,7 @@ htrsh_pageimg_extract_linefeats () {
 
       %mn = round(min([0 0 1; w-1 h-1 1; 0 h-1 1; w-1 0 1]*A0))-1; % Jv3pT: incorrect 5 out of 1117 = 0.45%
 
-      save ${ff}_affine.mat A0 A1;
+      save('${ff}_affine.mat','A0','A1');
 
       printf('%.12g,%.12g,%.12g,%.12g,%.12g,%.12g\n',
         A0(1,1), A0(1,2), A0(2,1), A0(2,2), A0(3,1), A0(3,2) );
@@ -1097,7 +1137,7 @@ htrsh_pageimg_extract_linefeats () {
 
     ### Compute features parallelogram ###
     local fbox=$(echo "
-      load ${ff}_affine.mat;
+      load('${ff}_affine.mat');
 
       off = [ $(identify -format %w,%h,%X,%Y ${ff}_affine.png) ];
       w = off(1);
@@ -1128,6 +1168,7 @@ htrsh_pageimg_extract_linefeats () {
     ### Prepare information to add to XML ###
     #ed="$ed -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n bbox -v '$bbox'";
     #ed="$ed -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n slope -v '$skew'";
+    #[ "$htrsh_feat_deslant" = "yes" ] &&
     #ed="$ed -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n slant -v '$slant'";
     ed="$ed -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n fpgram -v '$fbox'";
 
@@ -1288,6 +1329,7 @@ htrsh_hmm_proto () {
               if(RAND=="yes") {
                 if( a == aa ) {
                   pr=rand();
+                  pr=pr<1e-9?1e-9:pr;
                   printf(" %g",pr);
                 }
                 else if( a == aa+1 )
@@ -1392,8 +1434,37 @@ htrsh_hmm_train () {
       cp -p "$PROTO" "$OUTDIR/Macros_hmm.gz";
 
     else
-      htrsh_hmm_proto "$CODES" "$htrsh_hmm_states" -n "$HMMLST" -R $RAND -D yes \
-        | gzip > "$OUTDIR/Macros_hmm.gz";
+      if [ "$RAND" = "yes" ]; then
+        htrsh_hmm_proto "$CODES" "$htrsh_hmm_states" -D yes -n "$HMMLST" -R $RAND \
+          | gzip > "$OUTDIR/Macros_hmm.gz";
+      else
+        htrsh_hmm_proto "$CODES" "$htrsh_hmm_states" -D yes \
+          | gzip > "$OUTDIR/proto.gz";
+        HInit -C <( echo "$htrsh_baseHTKcfg" ) -i 0 -S "$FEATLST" -M "$OUTDIR" "$OUTDIR/proto.gz";
+        mv "$OUTDIR/proto.gz" "$OUTDIR/proto";
+
+        # @todo not tested yet, this code could be much better
+        { zcat "$OUTDIR/proto" \
+            | head -n 3;
+          zcat "$OUTDIR/proto" \
+            | awk -v file=<( echo "$HMMLST" ) \
+                'BEGIN {
+                   List=0;
+                   while(getline m[++List] < file > 0);
+                 }
+                 NR>4 {
+                   l[NR-4]=$0;
+                 }
+                 END {
+                  for(i=1;i<=List;i++) {
+                    print "~h \""m[i]"\"";
+                    for(j=1;j<=NR-4;j++)
+                      print l[j];
+                  }
+                }';
+        } | gzip \
+          > "$OUTDIR/Macros_hmm.gz";
+      fi
 
       [ "$KEEPROTO" = "yes" ] && cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/proto.gz";
     fi
@@ -1422,7 +1493,8 @@ htrsh_hmm_train () {
       cp -p "$PROTO" "$OUTDIR/Macros_hmm.gz";
 
     else
-      htrsh_hmm_proto "$DIMS" "$htrsh_hmm_states" -R $RAND \
+      # @todo implement random ?
+      htrsh_hmm_proto "$DIMS" "$htrsh_hmm_states" \
         | gzip > "$OUTDIR/proto";
       HCompV $htrsh_HTK_HCompV_opts -C <( echo "$htrsh_baseHTKcfg" ) -S "$FEATLST" -M "$OUTDIR" "$OUTDIR/proto";
 
@@ -1497,6 +1569,33 @@ htrsh_hmm_train () {
   fi
 
   rm -f "$OUTDIR/proto" "$OUTDIR/vFloors" "$OUTDIR/Macros_hmm.gz";
+
+  return 0;
+}
+
+##
+## Function that replaces special HMM model names with corresponding characters
+##
+htrsh_fix_rec_names () {
+  local FN="htrsh_fix_rec_names";
+  if [ $# -lt 1 ]; then
+    { echo "$FN: error: not enough input arguments";
+      echo "Usage: $FN XMLIN";
+    } 1>&2;
+    return 1;
+  fi
+
+  sed -i '
+    s|@| |g;
+    s|{at}|@|g;
+    s|{dquote}|"|g;
+    s|{quote}|'"'"'|g;
+    s|{amp}|\&amp;|g;
+    s|{lt}|\&lt;|g;
+    s|{gt}|\&gt;|g;
+    s|{lbrace}|{|g;
+    s|{rbrace}|}|g;
+    ' "$1";
 
   return 0;
 }
