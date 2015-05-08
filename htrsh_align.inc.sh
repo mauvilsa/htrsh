@@ -57,8 +57,10 @@ htrsh_pageimg_forcealign_lines () {
     return 1;
   fi
 
+  local XMLBASE=$(echo "$XML" | sed 's|.*/||;s|\.xml$||;');
+
   ### Create MLF from XML ###
-  htrsh_page_to_mlf "$XML" > "$TMPDIR/$FN.mlf";
+  htrsh_page_to_mlf "$XML" > "$TMPDIR/$XMLBASE.mlf";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems creating MLF file: $XML" 1>&2 &&
     return 1;
@@ -68,12 +70,12 @@ htrsh_pageimg_forcealign_lines () {
   local DIC=$(echo "$HMMLST" | awk '{printf("\"%s\" [%s] 1.0 %s\n",$1,$1,$1)}');
 
   ### Do forced alignment with HVite ###
-  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_baseHTKcfg" ) -H "$MODEL" -S "$FEATLST" -m -I "$TMPDIR/$FN.mlf" -i "$TMPDIR/${FN}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
+  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_baseHTKcfg" ) -H "$MODEL" -S "$FEATLST" -m -I "$TMPDIR/$XMLBASE.mlf" -i "$TMPDIR/${XMLBASE}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
   [ "$?" != 0 ] &&
     echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
     return 1;
 
-  htrsh_fix_rec_utf8 "$MODEL" "$TMPDIR/${FN}_aligned.mlf";
+  htrsh_fix_rec_utf8 "$MODEL" "$TMPDIR/${XMLBASE}_aligned.mlf";
 
   ### Prepare command to add alignments to XML ###
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating Page XML with alignments ..." 1>&2;
@@ -83,103 +85,105 @@ htrsh_pageimg_forcealign_lines () {
   [ "$htrsh_align_isect" = "yes" ] &&
     local size=$(xmlstarlet sel -t -v //@imageWidth -o x -v //@imageHeight "$XML");
 
-  local M="$TMPDIR/_forcealign";
-  mathd_init "$M" -D "$htrsh_math_daemon";
+  local ids=$(xmlstarlet sel -t -m //_:TextLine/_:Coords/@fpgram \
+                -v ../../@id -n "$XML");
 
-  local n;
-  for n in $(seq 1 $(cat "$FEATLST" | wc -l)); do
-    local ff=$(sed -n "$n"'{ s|.*/||; s|\.fea$||; p; }' "$FEATLST");
-    local id=$(echo "$ff" | sed 's|.*\.||');
+  #local TS=$(($(date +%s%N)/1000000));
 
-    local fbox=$(xmlstarlet sel -t -v "//*[@id=\"${id}\"]/_:Coords/@fpgram" "$XML" | tr ' ' ';');
-    [ "$htrsh_align_isect" = "yes" ] &&
-      local contour=$(xmlstarlet sel -t -v "//*[@id=\"${id}\"]/_:Coords/@points" "$XML");
-
-    echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): alignments for line $n ..." 1>&2;
-    ### Parse aligned line ###
-    local align=$(
-      sed -n '
-        /\/'${ff}'\.rec"$/{
-          :loop;
-          N;
-          /\n\.$/!b loop;
-          s|^[^\n]*\n||;
-          s|\n\.$||;
-          #s|<dquote>|{dquote}|g;
-          #s|<quote>|{quote}|g;
-          #s|<GAP>|{GAP}|g;
-          #s|&|&amp;|g;
-          p; q;
-        }' "$TMPDIR/${FN}_aligned.mlf" \
-        | awk '
-            { $1 = $1==0 ? 0 : $1/100000-1 ;
-              $2 = $2/100000-1 ;
-              NF = 3;
-              print;
-            }'
+  local aligns=$(
+    awk '
+      { if( NR > 1 ) {
+          if( match( $0, /\.rec"$/ ) )
+            LID = gensub(/.*\.([^.]+)\.rec"$/, "\\1", "", $0 );
+          else if( $0 != "." ) {
+            NF = 3;
+            $2 = $2/100000-1 ;
+            $1 = $1==0 ? 0 : $1/100000-1 ;
+            $1 = ( LID " " $1 );
+            print;
+          }
+        }
+      }
+      ' "$TMPDIR/${XMLBASE}_aligned.mlf"
       );
 
-    if [ "$align" = "" ]; then
-      continue;
-    fi
+  local acoords=$(
+    echo "
+      fpgram = [ "$(
+        xmlstarlet sel -t -m //@fpgram -v . -n "$XML" \
+          | sed 's| |,|g; $!s|$|;|;' \
+          | tr -d '\n'
+          )" ];
+      aligns = [ "$(
+        echo "$aligns" \
+          | awk '
+              { if( FILENAME != "-" )
+                  rid[$1] = FNR;
+                else
+                  printf("%s,%s\n",rid[$1],$3);
+              }' <( echo "$ids" ) - \
+          | sed '$!s|$|;|' \
+          | tr -d '\n'
+          )" ];
 
-    local a=$(echo "$align" | sed 's| [^ ]*$|;|; s| |,|g; $s|;$||;' | tr -d '\n');
+      for l = unique(aligns(:,1))'
+        a = [ aligns( aligns(:,1)==l, 2 ) ];
+        a = [ 0 a(1:end-1)'; a' ]';
+        f = reshape(fpgram(l,:),2,4)';
 
-    ### Get parallelogram coordinates of alignments ###
-    #local coords=$(
-    #  echo "
-    #    fbox = [ $fbox ];
-    #    a = [ $a ];
-    #    dx = ( fbox(2,1)-fbox(1,1) ) / a(end) ;
-    #    dy = ( fbox(2,2)-fbox(1,2) ) / a(end) ;
+        dx = ( f(2,1)-f(1,1) ) / a(end) ;
+        dy = ( f(2,2)-f(1,2) ) / a(end) ;
 
-    #    xup = round( fbox(1,1) + dx*a );
-    #    yup = round( fbox(1,2) + dy*a );
-    #    xdown = round( fbox(4,1) + dx*a );
-    #    ydown = round( fbox(4,2) + dy*a );
+        xup = round( f(1,1) + dx*a );
+        yup = round( f(1,2) + dy*a );
+        xdown = round( f(4,1) + dx*a );
+        ydown = round( f(4,2) + dy*a );
 
-    #    for n = 1:size(a,1)
-    #      printf('%d,%d %d,%d %d,%d %d,%d\n',
-    #        xdown(n,1), ydown(n,1),
-    #        xup(n,1), yup(n,1),
-    #        xup(n,2), yup(n,2),
-    #        xdown(n,2), ydown(n,2) );
-    #    end
-    #  " | octave -q);
-
-    mathd_input;
-      echo "
-        fbox = [ $fbox ];
-        a = [ $a ];
-        dx = ( fbox(2,1)-fbox(1,1) ) / a(end) ;
-        dy = ( fbox(2,2)-fbox(1,2) ) / a(end) ;
-
-        xup = round( fbox(1,1) + dx*a );
-        yup = round( fbox(1,2) + dy*a );
-        xdown = round( fbox(4,1) + dx*a );
-        ydown = round( fbox(4,2) + dy*a );
-
-        fi = fopen('${M}_coords.txt','w');
         for n = 1:size(a,1)
-          fprintf(fi,'%d,%d %d,%d %d,%d %d,%d\n',
+          printf('%d %d,%d %d,%d %d,%d %d,%d\n',
+            l,
             xdown(n,1), ydown(n,1),
             xup(n,1), yup(n,1),
             xup(n,2), yup(n,2),
             xdown(n,2), ydown(n,2) );
         end
-        fclose(fi);
-      " >> $M.m;
-    mathd_exec;
-    local coords=$(cat ${M}_coords.txt);
+      end" \
+    | octave -q \
+    | awk '
+        { if( FILENAME != "-" )
+            rid[FNR] = $1;
+          else {
+            $1 = rid[$1];
+            print;
+          }
+        }' <( echo "$ids" ) - ;
+    );
+
+  #local TE=$(($(date +%s%N)/1000000)); echo "time 0: $((TE-TS)) ms" 1>&2; TS="$TE";
+
+  local n;
+  for n in $(seq 1 $(cat "$FEATLST" | wc -l)); do
+    local id=$(sed -n "$n"'{ s|.*\.\([^.]*\)\.fea$|\1|; p; }' "$FEATLST");
+
+    echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): alignments for line $n (id=$id) ..." 1>&2;
+
+    [ "$htrsh_align_isect" = "yes" ] &&
+      local contour=$(xmlstarlet sel -t -v '//*[@id="'$id'"]/_:Coords/@points' "$XML");
+
+    local align=$(echo "$aligns" | sed -n "/^$id /{ s|^$id ||; p; }");
+    [ "$align" = "" ] && continue;
+    local coords=$(echo "$acoords" | sed -n "/^$id /{ s|^$id ||; p; }");
 
     #local cmd="xmlstarlet ed -P --inplace -d '//*[@id=\"${id}\"]/_:TextEquiv'";
-    cmd="$cmd -d '//*[@id=\"${id}\"]/_:TextEquiv'";
+    cmd="$cmd -d '//*[@id=\"$id\"]/_:TextEquiv'";
+
+    #TE=$(($(date +%s%N)/1000000)); echo "time 1: $((TE-TS)) ms" 1>&2; TS="$TE";
 
     ### Word level alignments ###
     local W=$(echo "$align" | grep ' @$' | wc -l); W=$((W-1));
     local w;
     for w in $(seq 1 $W); do
-      #echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): alignments for line $n word $w ..." 1>&2;
+      #TE=$(($(date +%s%N)/1000000)); echo "time 2: $((TE-TS)) ms" 1>&2; TS="$TE";
       local ww=$(printf %.2d $w);
       local pS=$(echo "$align" | grep -n ' @$' | sed -n "$w{s|:.*||;p;}"); pS=$((pS+1));
       local pE=$(echo "$align" | grep -n ' @$' | sed -n "$((w+1)){s|:.*||;p;}"); pE=$((pE-1));
@@ -192,16 +196,49 @@ htrsh_pageimg_forcealign_lines () {
           | tr '\n' ' ' \
           | sed 's| $||');
       fi
+      #TE=$(($(date +%s%N)/1000000)); echo "time 3: $((TE-TS)) ms" 1>&2; TS="$TE";
 
       [ "$htrsh_align_isect" = "yes" ] &&
+      #  pts=$(
+      #    convert -fill white -stroke white \
+      #        \( -size $size xc:black -draw "polyline $contour" \) \
+      #        \( -size $size xc:black -draw "polyline $pts" \) \
+      #        -compose Darken -composite -trim png:- \
+      #      | imgccomp -V0 -JS - );
         pts=$(
-          convert -fill white -stroke white \
-              \( -size $size xc:black -draw "polyline $contour" \) \
-              \( -size $size xc:black -draw "polyline $pts" \) \
-              -compose Darken -composite -trim png:- \
+          eval $(
+            { echo "$contour";
+              echo "$pts";
+            } | awk -F'[ ,]' -v sz=$size '
+              BEGIN {
+                printf( "convert -fill white -stroke white" );
+              }
+              { if( NR == 1 ) {
+                  mn_x=$1; mx_x=$1;
+                  mn_y=$2; mx_y=$2;
+                  for( n=3; n<=NF; n+=2 ) {
+                    if( mn_x > $n ) mn_x = $n;
+                    if( mx_x < $n ) mx_x = $n;
+                    if( mn_y > $(n+1) ) mn_y = $(n+1);
+                    if( mx_y < $(n+1) ) mx_y = $(n+1);
+                  }
+                  w = mx_x-mn_x+1;
+                  h = mx_y-mn_y+1;
+                }
+                printf( " \\( -size %dx%d xc:black -draw \"polyline", w, h );
+                for( n=1; n<=NF; n+=2 )
+                  printf( " %d,%d", $n-mn_x, $(n+1)-mn_y );
+                printf( "\" \\)" );
+              }
+              END {
+                printf( " -compose darken -composite -page %s+%d+%d png:-\n", sz, mn_x, mn_y );
+              }
+              ' ) \
             | imgccomp -V0 -JS - );
 
-      cmd="$cmd -s '//*[@id=\"${id}\"]' -t elem -n TMPNODE";
+      #TE=$(($(date +%s%N)/1000000)); echo "time 4: $((TE-TS)) ms" 1>&2; TS="$TE";
+
+      cmd="$cmd -s '//*[@id=\"$id\"]' -t elem -n TMPNODE";
       cmd="$cmd -i '//TMPNODE' -t attr -n id -v '${id}_w${ww}'";
       cmd="$cmd -s '//TMPNODE' -t elem -n Coords";
       cmd="$cmd -i '//TMPNODE/Coords' -t attr -n points -v '$pts'";
@@ -228,20 +265,22 @@ htrsh_pageimg_forcealign_lines () {
         done
       fi
 
+      #TE=$(($(date +%s%N)/1000000)); echo "time 5: $((TE-TS)) ms" 1>&2; TS="$TE";
+
       local text=$(echo "$align" | sed -n "$pS,$pE{s|.* ||;p;}" | tr -d '\n');
 
       cmd="$cmd -s '//*[@id=\"${id}_w${ww}\"]' -t elem -n TextEquiv";
       cmd="$cmd -s '//*[@id=\"${id}_w${ww}\"]/TextEquiv' -t elem -n Unicode -v '$text'";
+
+      #TE=$(($(date +%s%N)/1000000)); echo "time 6: $((TE-TS)) ms" 1>&2; TS="$TE";
     done
 
     local text=$(echo "$align" | sed -n '1d; $d; s|.* ||; s|@| |; p;' | tr -d '\n');
 
-    cmd="$cmd -s '//*[@id=\"${id}\"]' -t elem -n TextEquiv";
-    cmd="$cmd -s '//*[@id=\"${id}\"]/TextEquiv' -t elem -n Unicode -v '$text'";
+    cmd="$cmd -s '//*[@id=\"$id\"]' -t elem -n TextEquiv";
+    cmd="$cmd -s '//*[@id=\"$id\"]/TextEquiv' -t elem -n Unicode -v '$text'";
     #eval $cmd "$XMLOUT";
   done
-
-  mathd_term;
 
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): edit XML ..." 1>&2;
   ### Create new XML including alignments ###
@@ -253,7 +292,7 @@ htrsh_pageimg_forcealign_lines () {
   htrsh_fix_rec_names "$XMLOUT";
 
   [ "$htrsh_keeptmp" -lt 1 ] &&
-    rm -f "$TMPDIR/$FN.mlf" "$TMPDIR/${FN}_aligned.mlf";
+    rm -f "$TMPDIR/$XMLBASE.mlf" "$TMPDIR/${XMLBASE}_aligned.mlf";
 
   return 0;
 }
