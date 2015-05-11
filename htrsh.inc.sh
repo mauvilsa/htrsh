@@ -672,7 +672,6 @@ htrsh_pageimg_extract_lines () {
   fi
 
   local XML="$1";
-  shift;
   while [ $# -gt 0 ]; do
     if [ "$1" = "-d" ]; then
       OUTDIR="$2";
@@ -695,123 +694,9 @@ htrsh_pageimg_extract_lines () {
   if [ "$NUMLINES" -gt 0 ]; then
     local base="$OUTDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
 
-    if true; then
-      xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
-          -o "$base." -v ../../@id -o "." -v ../@id -o ".png " -v @points -n "$XML" \
-        | imgpolycrop "$IMFILE";
-    fi
-
-    if false; then
-    local extr=$(
-      xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
-          -v ../../@id -o " " -v ../@id -o " " -v @points -n "$XML" \
-        | awk -F'[ ,]' -v sz="$IMSIZE" -v base="$base" '
-            { mn_x=$3; mx_x=$3;
-              mn_y=$4; mx_y=$4;
-              for( n=5; n<=NF; n+=2 ) {
-                if( mn_x>$n ) mn_x = $n;
-                if( mx_x<$n ) mx_x = $n;
-                if( mn_y>$(n+1) ) mn_y = $(n+1);
-                if( mx_y<$(n+1) ) mx_y = $(n+1);
-              }
-              fn = sprintf( "%s.%s.%s.png", base, $1, $2 );
-              printf(" \\( -size %s xc:black -draw \"polyline", sz );
-              for( n=3; n<=NF; n+=2 )
-                printf(" %s,%s", $n,$(n+1) );
-              printf("\" -alpha copy -clone 0 +swap -composite");
-              printf(" -crop %dx%d+%d+%d", mx_x-mn_x+1, mx_y-mn_y+1, mn_x, mn_y );
-              printf(" -write \"%s\" -print \"%s\\n\" +delete \\)", fn, fn );
-            }');
-    eval convert -fill white -stroke white -compose copy-opacity "$IMFILE" $extr null:;
-    fi
-
-    if false; then
-    local extr=$(
-      xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
-          -v ../../@id -o " " -v ../@id -o " " -v @points -n "$XML" \
-        | awk -F'[ ,]' -v sz="$IMSIZE" -v base="$base" '
-            { mn_x=$3; mx_x=$3;
-              mn_y=$4; mx_y=$4;
-              for( n=5; n<=NF; n+=2 ) {
-                if( mn_x>$n ) mn_x = $n;
-                if( mx_x<$n ) mx_x = $n;
-                if( mn_y>$(n+1) ) mn_y = $(n+1);
-                if( mx_y<$(n+1) ) mx_y = $(n+1);
-              }
-              fn = sprintf( "%s.%s.%s.png", base, $1, $2 );
-              printf(" \\( -size %s \"xc:rgba(0,0,0,0)\" -draw \"polygon", sz );
-              for( n=3; n<=NF; n+=2 )
-                printf(" %s,%s", $n,$(n+1) );
-              printf("\" -clone 0 +swap -composite");
-              printf(" -crop %dx%d+%d+%d", mx_x-mn_x+1, mx_y-mn_y+1, mn_x, mn_y );
-              printf(" -write \"%s\" -print \"%s\\n\" +delete \\)", fn, fn );
-            }');
-    echo "eval convert -fill 'rgba(0,0,0,1)' -stroke 'rgba(0,0,0,1)' -compose copy-opacity $IMFILE $extr null:" > /tmp/kkk.sh;
-    fi
-
-    if false; then
     xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
-          -v ../../@id -o " " -v ../@id -o " " -v @points -n "$XML" \
-        | awk -F'[ ,]' -v sz="$IMSIZE" -v base="$base" -v im="$IMFILE" -v num=$NUMLINES '
-            { mn_x=$3; mx_x=$3;
-              mn_y=$4; mx_y=$4;
-              for( n=5; n<=NF; n+=2 ) {
-                if( mn_x>$n ) mn_x = $n;
-                if( mx_x<$n ) mx_x = $n;
-                if( mn_y>$(n+1) ) mn_y = $(n+1);
-                if( mx_y<$(n+1) ) mx_y = $(n+1);
-              }
-              w = mx_x-mn_x+1;
-              h = mx_y-mn_y+1;
-              fn = sprintf( "%s.%s.%s.png", base, $1, $2 );
-              printf( "convert \"%s[%dx%d+%d+%d]\" +repage", im, w, h, mn_x, mn_y );
-              printf( " \\( -size %dx%d xc:black -fill white -stroke white -draw \"polyline", w, h );
-              for( n=3; n<=NF; n+=2 )
-                printf( " %s,%s", $n-mn_x,$(n+1)-mn_y );
-              printf( "\" -alpha copy -clone 0 +swap -compose copy-opacity -composite" );
-              printf( " -page %s+%d+%d -write \"%s\" -print \"%s\\n\" +delete \\) null:", sz, mn_x, mn_y, fn, fn );
-              if( NR != num )
-              	printf(" &&\n");
-            }' \
-        | bash;
-    fi
-
-    if false; then
-
-    local XMLBASE=$(echo "$XML" | sed 's|\.xml$||');
-
-    page_format_tool -i "$IMFILE" -l "$XML" -m FILE >/dev/null;
-    rm ${XMLBASE}_??_??_*.txt;
-    for f in ${XMLBASE}_??_??_*.png; do
-      id=$(echo $f | sed 's|.*_\([^_]*\)_\([^._]*\)\.png$|\1.\2|');
-      mv $f ${base}.${id}.png;
-    done
-
-    local canv=$(
-      xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
-          -v ../../@id -o " " -v ../@id -o " " -v @points -n "$XML" \
-        | awk -F'[ ,]' -v sz="$IMSIZE" -v base="$base" -v im="$IMFILE" -v num=$NUMLINES '
-            { mn_x=$3; mx_x=$3;
-              mn_y=$4; mx_y=$4;
-              for( n=5; n<=NF; n+=2 ) {
-                if( mn_x>$n ) mn_x = $n;
-                if( mx_x<$n ) mx_x = $n;
-                if( mn_y>$(n+1) ) mn_y = $(n+1);
-                if( mx_y<$(n+1) ) mx_y = $(n+1);
-              }
-              w = mx_x-mn_x+1;
-              h = mx_y-mn_y+1;
-              fn = sprintf( "%s.%s.%s.png", base, $1, $2 );
-              printf( " \"%s\" -page %s+%d+%d -units PixelsPerCentimeter -density %s -print \"%s\\n\"", fn, sz, mn_x, mn_y, '$IMRES', fn );
-              if( NR != num )
-                printf( " -write \"%s\" +delete", fn );
-              else
-                printf( " \"%s\"", fn );
-            }' \
-        );
-    eval convert $canv;
-
-    fi
+        -o "$base." -v ../../@id -o "." -v ../@id -o ".png " -v @points -n "$XML" \
+      | imgpolycrop "$IMFILE";
 
     [ "$?" != 0 ] &&
       echo "$FN: error: line image extraction failed" 1>&2 &&
