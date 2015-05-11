@@ -672,6 +672,7 @@ htrsh_pageimg_extract_lines () {
   fi
 
   local XML="$1";
+  shift;
   while [ $# -gt 0 ]; do
     if [ "$1" = "-d" ]; then
       OUTDIR="$2";
