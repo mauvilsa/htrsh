@@ -207,8 +207,8 @@ htrsh_pageimg_forcealign_lines () {
       #      | imgccomp -V0 -JS - );
         pts=$(
           eval $(
-            { echo "$contour";
-              echo "$pts";
+            { echo "$pts";
+              echo "$contour";
             } | awk -F'[ ,]' -v sz=$size '
               BEGIN {
                 printf( "convert -fill white -stroke white" );
@@ -231,7 +231,7 @@ htrsh_pageimg_forcealign_lines () {
                 printf( "\" \\)" );
               }
               END {
-                printf( " -compose darken -composite -page %s+%d+%d png:-\n", sz, mn_x, mn_y );
+                printf( " -compose darken -composite -page %s+%d+%d miff:-\n", sz, mn_x, mn_y );
               }
               ' ) \
             | imgccomp -V0 -JS - );
@@ -610,7 +610,7 @@ htrsh_pageimg_forcealign () {
   shift 2;
   while [ $# -gt 0 ]; do
     if [ "$1" = "-d" ]; then
-      TMPDIR="$2";
+      TMPDIR=$(echo "$2" | sed '/^[./]/!s|^|./|');
     elif [ "$1" = "-i" ]; then
       INRES="$2";
     elif [ "$1" = "-m" ]; then
@@ -636,7 +636,7 @@ htrsh_pageimg_forcealign () {
     echo -n "$FN: temporary directory ($TMPDIR) already exists, continue? " 1>&2;
     local RMTMP="";
     read RMTMP;
-    if [ "${RMTMP:0:1}" = "yes" ]; then
+    if [ "${RMTMP:0:1}" = "y" ]; then
       rm -r "$TMPDIR";
     else
       echo "$FN: aborting ..." 1>&2;
@@ -648,8 +648,8 @@ htrsh_pageimg_forcealign () {
   htrsh_pageimg_info "$XML" noinfo;
   [ "$?" != 0 ] && return 1;
 
-  local RCNT=$(xmlstarlet sel -t -v 'count(//*[@type="paragraph"]/_:TextEquiv/_:Unicode)' "$XML");
-  local LCNT=$(xmlstarlet sel -t -v 'count(//*[@type="paragraph"]/_:TextLine/_:TextEquiv/_:Unicode)' "$XML");
+  local RCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextEquiv/_:Unicode)" "$XML");
+  local LCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextLine/_:TextEquiv/_:Unicode)" "$XML");
   [ "$RCNT" = 0 ] && [ "$LCNT" = 0 ] &&
     echo "$FN: error: no TextEquiv/Unicode nodes for processing: $XML" 1>&2 &&
     return 1;
@@ -684,7 +684,7 @@ htrsh_pageimg_forcealign () {
   fi
 
   ### Generate contours from baselines ###
-  if [ $(xmlstarlet sel -t -v 'count(//*[@type="paragraph"]/_:TextLine/_:Coords[@points and @points!="0,0 0,0"])' "$TMPDIR/$B.xml") = 0 ]; then
+  if [ $(xmlstarlet sel -t -v 'count(//'"$htrsh_xpath_regions"'/_:TextLine/_:Coords[@points and @points!="0,0 0,0"])' "$TMPDIR/$B.xml") = 0 ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating line contours from baselines ...";
     page_format_generate_contour -a 75 -d 25 -p "$TMPDIR/$B.xml" -o "$TMPDIR/${B}_contours.xml";
     [ "$?" != 0 ] &&
