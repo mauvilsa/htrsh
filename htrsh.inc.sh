@@ -95,7 +95,7 @@ htrsh_unload () {
 htrsh_check_req () {
   local FN="htrsh_check_req";
   local cmd;
-  for cmd in xmlstarlet convert octave HVite pfl2htk imgtxtenh imglineclean imgpageborder imgccomp imageSlant realpath page_format_generate_contour; do
+  for cmd in xmlstarlet convert octave HVite pfl2htk imgtxtenh imglineclean imgpageborder imgccomp imgpolycrop imageSlant realpath page_format_generate_contour; do
     local c=$(which $cmd);
     [ ! -e "$c" ] &&
       echo "$FN: WARNING: unable to find command: $cmd" 1>&2;
@@ -125,7 +125,6 @@ htrsh_check_req () {
 ##
 ## Function that prints to stdout an MLF created from an XML PAGE file
 ##
-# @todo this needs to be improved a lot
 htrsh_page_to_mlf () {
   local FN="htrsh_page_to_mlf";
   local REGSRC="no";
@@ -182,16 +181,9 @@ htrsh_page_to_mlf () {
       | iconv -f utf8 -t ascii//TRANSLIT;
   fi \
     | sed '
-        #s|\xc2\xad|-|g;
-        #s|^  *||;
         s|\t  *|\t|;
         s|  *$||;
         s|   *| |g;
-        #s|@|#|g;
-        #s| |@|g;
-        #s|---*|—|g;
-        #s|---*|-|g;
-        #s|Z|z|g;
         ' \
     | awk -F'\t' '
         { printf("\"*/%s.lab\"\n",$1);
@@ -703,28 +695,61 @@ htrsh_pageimg_extract_lines () {
   if [ "$NUMLINES" -gt 0 ]; then
     local base="$OUTDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
 
-    #local extr=$(
-    #  xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
-    #      -v ../../@id -o " " -v ../@id -o " " -v @points -n "$XML" \
-    #    | awk -F'[ ,]' -v sz="$IMSIZE" -v base="$base" '
-    #        { mn_x=$3; mx_x=$3;
-    #          mn_y=$4; mx_y=$4;
-    #          for( n=5; n<=NF; n+=2 ) {
-    #            if( mn_x>$n ) mn_x = $n;
-    #            if( mx_x<$n ) mx_x = $n;
-    #            if( mn_y>$(n+1) ) mn_y = $(n+1);
-    #            if( mx_y<$(n+1) ) mx_y = $(n+1);
-    #          }
-    #          fn = sprintf( "%s.%s.%s.png", base, $1, $2 );
-    #          printf(" \\( -size %s xc:black -draw \"polyline", sz );
-    #          for( n=3; n<=NF; n+=2 )
-    #            printf(" %s,%s", $n,$(n+1) );
-    #          printf("\" -alpha copy -clone 0 +swap -composite");
-    #          printf(" -crop %dx%d+%d+%d", mx_x-mn_x+1, mx_y-mn_y+1, mn_x, mn_y );
-    #          printf(" -write \"%s\" -print \"%s\\n\" +delete \\)", fn, fn );
-    #        }');
-    #eval convert -fill white -stroke white -compose copy-opacity "$IMFILE" $extr null:;
+    if true; then
+      xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
+          -o "$base." -v ../../@id -o "." -v ../@id -o ".png " -v @points -n "$XML" \
+        | imgpolycrop "$IMFILE";
+    fi
 
+    if false; then
+    local extr=$(
+      xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
+          -v ../../@id -o " " -v ../@id -o " " -v @points -n "$XML" \
+        | awk -F'[ ,]' -v sz="$IMSIZE" -v base="$base" '
+            { mn_x=$3; mx_x=$3;
+              mn_y=$4; mx_y=$4;
+              for( n=5; n<=NF; n+=2 ) {
+                if( mn_x>$n ) mn_x = $n;
+                if( mx_x<$n ) mx_x = $n;
+                if( mn_y>$(n+1) ) mn_y = $(n+1);
+                if( mx_y<$(n+1) ) mx_y = $(n+1);
+              }
+              fn = sprintf( "%s.%s.%s.png", base, $1, $2 );
+              printf(" \\( -size %s xc:black -draw \"polyline", sz );
+              for( n=3; n<=NF; n+=2 )
+                printf(" %s,%s", $n,$(n+1) );
+              printf("\" -alpha copy -clone 0 +swap -composite");
+              printf(" -crop %dx%d+%d+%d", mx_x-mn_x+1, mx_y-mn_y+1, mn_x, mn_y );
+              printf(" -write \"%s\" -print \"%s\\n\" +delete \\)", fn, fn );
+            }');
+    eval convert -fill white -stroke white -compose copy-opacity "$IMFILE" $extr null:;
+    fi
+
+    if false; then
+    local extr=$(
+      xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
+          -v ../../@id -o " " -v ../@id -o " " -v @points -n "$XML" \
+        | awk -F'[ ,]' -v sz="$IMSIZE" -v base="$base" '
+            { mn_x=$3; mx_x=$3;
+              mn_y=$4; mx_y=$4;
+              for( n=5; n<=NF; n+=2 ) {
+                if( mn_x>$n ) mn_x = $n;
+                if( mx_x<$n ) mx_x = $n;
+                if( mn_y>$(n+1) ) mn_y = $(n+1);
+                if( mx_y<$(n+1) ) mx_y = $(n+1);
+              }
+              fn = sprintf( "%s.%s.%s.png", base, $1, $2 );
+              printf(" \\( -size %s \"xc:rgba(0,0,0,0)\" -draw \"polygon", sz );
+              for( n=3; n<=NF; n+=2 )
+                printf(" %s,%s", $n,$(n+1) );
+              printf("\" -clone 0 +swap -composite");
+              printf(" -crop %dx%d+%d+%d", mx_x-mn_x+1, mx_y-mn_y+1, mn_x, mn_y );
+              printf(" -write \"%s\" -print \"%s\\n\" +delete \\)", fn, fn );
+            }');
+    echo "eval convert -fill 'rgba(0,0,0,1)' -stroke 'rgba(0,0,0,1)' -compose copy-opacity $IMFILE $extr null:" > /tmp/kkk.sh;
+    fi
+
+    if false; then
     xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
           -v ../../@id -o " " -v ../@id -o " " -v @points -n "$XML" \
         | awk -F'[ ,]' -v sz="$IMSIZE" -v base="$base" -v im="$IMFILE" -v num=$NUMLINES '
@@ -749,6 +774,44 @@ htrsh_pageimg_extract_lines () {
               	printf(" &&\n");
             }' \
         | bash;
+    fi
+
+    if false; then
+
+    local XMLBASE=$(echo "$XML" | sed 's|\.xml$||');
+
+    page_format_tool -i "$IMFILE" -l "$XML" -m FILE >/dev/null;
+    rm ${XMLBASE}_??_??_*.txt;
+    for f in ${XMLBASE}_??_??_*.png; do
+      id=$(echo $f | sed 's|.*_\([^_]*\)_\([^._]*\)\.png$|\1.\2|');
+      mv $f ${base}.${id}.png;
+    done
+
+    local canv=$(
+      xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
+          -v ../../@id -o " " -v ../@id -o " " -v @points -n "$XML" \
+        | awk -F'[ ,]' -v sz="$IMSIZE" -v base="$base" -v im="$IMFILE" -v num=$NUMLINES '
+            { mn_x=$3; mx_x=$3;
+              mn_y=$4; mx_y=$4;
+              for( n=5; n<=NF; n+=2 ) {
+                if( mn_x>$n ) mn_x = $n;
+                if( mx_x<$n ) mx_x = $n;
+                if( mn_y>$(n+1) ) mn_y = $(n+1);
+                if( mx_y<$(n+1) ) mx_y = $(n+1);
+              }
+              w = mx_x-mn_x+1;
+              h = mx_y-mn_y+1;
+              fn = sprintf( "%s.%s.%s.png", base, $1, $2 );
+              printf( " \"%s\" -page %s+%d+%d -units PixelsPerCentimeter -density %s -print \"%s\\n\"", fn, sz, mn_x, mn_y, '$IMRES', fn );
+              if( NR != num )
+                printf( " -write \"%s\" +delete", fn );
+              else
+                printf( " \"%s\"", fn );
+            }' \
+        );
+    eval convert $canv;
+
+    fi
 
     [ "$?" != 0 ] &&
       echo "$FN: error: line image extraction failed" 1>&2 &&
@@ -1409,7 +1472,7 @@ htrsh_hmm_train () {
     echo "$FN: error: feature list not found: $FEATLST" 1>&2;
     return 1;
   elif [ ! -e "$MLF" ]; then
-    echo "$FN: error: feature list not found: $MLF" 1>&2;
+    echo "$FN: error: MLF file not found: $MLF" 1>&2;
     return 1;
   elif [ "$PROTO" != "" ] && [ ! -e "$PROTO" ]; then
     echo "$FN: error: initialization prototype not found: $PROTO" 1>&2;
@@ -1443,7 +1506,7 @@ htrsh_hmm_train () {
         HInit -C <( echo "$htrsh_baseHTKcfg" ) -i 0 -S "$FEATLST" -M "$OUTDIR" "$OUTDIR/proto.gz";
         mv "$OUTDIR/proto.gz" "$OUTDIR/proto";
 
-        # @todo not tested yet, this code could be much better
+        # @todo not tested yet so test it and this code could be much better
         { zcat "$OUTDIR/proto" \
             | head -n 3;
           zcat "$OUTDIR/proto" \
