@@ -2,10 +2,13 @@
 
 htrsh_align_chars="no"; # Whether to align at a character level
 htrsh_align_isect="yes"; # Whether to intersect parallelograms with line contour
+htrsh_align_prefer_baselines="yes"; # Whether to always generate contours from baselines
 
 #htrsh_hmm_iter="10";
 htrsh_keeptmp="1";
 htrsh_imglineclean_opts="-m 99% -b 0";
+htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.5";
+
 
 #htrsh_feat_deslant="no";
 
@@ -199,12 +202,6 @@ htrsh_pageimg_forcealign_lines () {
       #TE=$(($(date +%s%N)/1000000)); echo "time 3: $((TE-TS)) ms" 1>&2; TS="$TE";
 
       [ "$htrsh_align_isect" = "yes" ] &&
-      #  pts=$(
-      #    convert -fill white -stroke white \
-      #        \( -size $size xc:black -draw "polyline $contour" \) \
-      #        \( -size $size xc:black -draw "polyline $pts" \) \
-      #        -compose Darken -composite -trim png:- \
-      #      | imgccomp -V0 -JS - );
         pts=$(
           eval $(
             { echo "$pts";
@@ -337,8 +334,10 @@ htrsh_pageimg_forcealign_regions () {
     return 1;
   fi
 
+  local XMLBASE=$(echo "$XML" | sed 's|.*/||;s|\.xml$||;');
+
   ### Create MLF from XML ###
-  htrsh_page_to_mlf "$XML" -r yes > "$TMPDIR/$FN.mlf";
+  htrsh_page_to_mlf "$XML" -r yes > "$TMPDIR/$XMLBASE.mlf";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems creating MLF file: $XML" 1>&2 &&
     return 1;
@@ -348,16 +347,16 @@ htrsh_pageimg_forcealign_regions () {
   local DIC=$(echo "$HMMLST" | awk '{printf("\"%s\" [%s] 1.0 %s\n",$1,$1,$1)}');
 
   ### Do forced alignment with HVite ###
-  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_baseHTKcfg" ) -H "$MODEL" -S "$FEATLST" -m -I "$TMPDIR/$FN.mlf" -i "$TMPDIR/${FN}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
+  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_baseHTKcfg" ) -H "$MODEL" -S "$FEATLST" -m -I "$TMPDIR/$XMLBASE.mlf" -i "$TMPDIR/${XMLBASE}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
   [ "$?" != 0 ] &&
     echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
     return 1;
 
-  htrsh_fix_rec_utf8 "$MODEL" "$TMPDIR/${FN}_aligned.mlf";
+  htrsh_fix_rec_utf8 "$MODEL" "$TMPDIR/${XMLBASE}_aligned.mlf";
 
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating Page XML with alignments ..." 1>&2;
 
-  local ff=$(sed -n '/\.rec"$/{ s|.*/||; s|\.rec"||; p; }' "$TMPDIR/${FN}_aligned.mlf");
+  local ff=$(sed -n '/\.rec"$/{ s|.*/||; s|\.rec"||; p; }' "$TMPDIR/${XMLBASE}_aligned.mlf");
 
   local align=$(
       sed -n '
@@ -367,12 +366,8 @@ htrsh_pageimg_forcealign_regions () {
           /\n\.$/!b loop;
           s|^[^\n]*\n||;
           s|\n\.$||;
-          #s|<dquote>|{dquote}|g;
-          #s|<quote>|{quote}|g;
-          #s|<GAP>|{GAP}|g;
-          #s|&|&amp;|g;
           p; q;
-        }' "$TMPDIR/${FN}_aligned.mlf" \
+        }' "$TMPDIR/${XMLBASE}_aligned.mlf" \
         | awk '
             { $1 = $1==0 ? 0 : $1/100000-1 ;
               $2 = $2/100000-1 ;
@@ -380,6 +375,8 @@ htrsh_pageimg_forcealign_regions () {
               print;
             }'
       );
+
+  echo "$align" > "$TMPDIR/var_align0.txt";
 
   local size=$(xmlstarlet sel -t -v //@imageWidth -o x -v //@imageHeight "$XML");
   local fbox=$(xmlstarlet sel -t -m '//_:TextLine/_:Coords/@fpgram' -v . -n "$XML" \
@@ -408,7 +405,7 @@ htrsh_pageimg_forcealign_regions () {
         for n = 1:N
           sel = sum( a>=cframes(n,1) & a<=cframes(n,2), 2 );
           for m = find(sel==1)'
-            if a(m,1) < cframes(n,1) && a(m,2)-cframes(n,1) >= cframes(n,1)-a(m,2)
+            if a(m,1) < cframes(n,1) && a(m,2)-cframes(n,1) >= cframes(n,1)-a(m,1)
               sel(m) = 2;
             elseif a(m,2) > cframes(n,2) && cframes(n,2)-a(m,1) >= a(m,2)-cframes(n,2)
               sel(m) = 2;
@@ -420,10 +417,15 @@ htrsh_pageimg_forcealign_regions () {
           dx = ( fbox(n,3)-fbox(n,1) ) / ( frames(n)-1 ) ;
           dy = ( fbox(n,4)-fbox(n,2) ) / ( frames(n)-1 ) ;
 
-          xup = round( fbox(n,1) + dx*(a(sel,:)-cframes(n,1)) );
-          yup = round( fbox(n,2) + dy*(a(sel,:)-cframes(n,1)) );
-          xdown = round( fbox(n,7) + dx*(a(sel,:)-cframes(n,1)) );
-          ydown = round( fbox(n,8) + dy*(a(sel,:)-cframes(n,1)) );
+          aa = a(sel,:);
+          aa(aa<cframes(n,1)) = cframes(n,1);
+          aa(aa>cframes(n,2)) = cframes(n,2);
+          aa = aa-cframes(n,1);
+
+          xup = round( fbox(n,1) + dx*aa );
+          yup = round( fbox(n,2) + dy*aa );
+          xdown = round( fbox(n,7) + dx*aa );
+          ydown = round( fbox(n,8) + dy*aa );
 
           coords(sel,:) = [ xdown(:,1) ydown(:,1) xup(:,1) yup(:,1) xup(:,2) yup(:,2) xdown(:,2) ydown(:,2) ];
         end
@@ -436,9 +438,12 @@ htrsh_pageimg_forcealign_regions () {
             coords(k,5), coords(k,6),
             coords(k,7), coords(k,8) );
         end" \
+      | tee "$TMPDIR/var_align.m" \
       | octave -q \
       | paste -d " " - <( echo "$align" | awk '{print $NF}' )
     );
+
+  echo "$align" > "$TMPDIR/var_align.txt";
 
   ### Prepare command to add alignments to XML ###
   local cmd="xmlstarlet ed -P -d //_:Word -d //_:Glyph";
@@ -485,15 +490,39 @@ htrsh_pageimg_forcealign_regions () {
 
       if [ "$htrsh_align_isect" = "yes" ]; then
         local pts2=$(
-          convert -fill white -stroke white \
-              \( -size $size xc:black -draw "polyline $contour" \) \
-              \( -size $size xc:black -draw "polyline $pts" \) \
-              -compose Darken -composite -trim png:- \
+          eval $(
+            { echo "$pts";
+              echo "$contour";
+            } | awk -F'[ ,]' -v sz=$size '
+              BEGIN {
+                printf( "convert -fill white -stroke white" );
+              }
+              { if( NR == 1 ) {
+                  mn_x=$1; mx_x=$1;
+                  mn_y=$2; mx_y=$2;
+                  for( n=3; n<=NF; n+=2 ) {
+                    if( mn_x > $n ) mn_x = $n;
+                    if( mx_x < $n ) mx_x = $n;
+                    if( mn_y > $(n+1) ) mn_y = $(n+1);
+                    if( mx_y < $(n+1) ) mx_y = $(n+1);
+                  }
+                  w = mx_x-mn_x+1;
+                  h = mx_y-mn_y+1;
+                }
+                printf( " \\( -size %dx%d xc:black -draw \"polyline", w, h );
+                for( n=1; n<=NF; n+=2 )
+                  printf( " %d,%d", $n-mn_x, $(n+1)-mn_y );
+                printf( "\" \\)" );
+              }
+              END {
+                printf( " -compose darken -composite -page %s+%d+%d miff:-\n", sz, mn_x, mn_y );
+              }
+              ' ) \
             | imgccomp -V0 -JS - );
         [ "$pts2" != "" ] && pts="$pts2";
       fi
 
-      cmd="$cmd -s '//*[@id=\"${id}\"]' -t elem -n TMPNODE";
+      cmd="$cmd -s '//*[@id=\"$id\"]' -t elem -n TMPNODE";
       cmd="$cmd -i '//TMPNODE' -t attr -n id -v '${id}_w${ww}'";
       cmd="$cmd -s '//TMPNODE' -t elem -n Coords";
       cmd="$cmd -i '//TMPNODE/Coords' -t attr -n points -v '$pts'";
@@ -529,12 +558,13 @@ htrsh_pageimg_forcealign_regions () {
     ### Check if word spans multiple lines ###
     local L=$(echo "$a" | sort -u | wc -l);
     [ "$L" -gt 2 ] &&
-      echo "$FN: error: word spans more than 2 lines, this possibility not considered yet: $XML" 1>&2 &&
+      echo "$a" >> "$TMPDIR/var_a.txt" &&
+      echo "$FN: error: word spans more than $L lines, this possibility not considered yet: $XML" 1>&2 &&
       return 1;
 
     ### Word spans two lines ###
     if [ "$L" = 2 ]; then
-      l=$(echo "$a" | sort -u | sed -n 2p);
+      l=$(echo "$a" | sort -nu | sed -n 2p);
       id=$(xmlstarlet sel -t -m "(//_:TextLine/_:Coords[@fpgram])[$l]" -v ../@id "$XML");
       [ "$htrsh_align_isect" = "yes" ] &&
         contour=$(xmlstarlet sel -t -v "//*[@id=\"${id}\"]/_:Coords/@points" "$XML");
@@ -553,14 +583,15 @@ htrsh_pageimg_forcealign_regions () {
   for l in $(seq 1 $L); do
     id=$(xmlstarlet sel -t -m "(//_:TextLine/_:Coords[@fpgram])[$l]" -v ../@id "$XML");
 
-    local text=$(echo "$align" | sed -n "/^${l} /{ s|.* ||; s|@| |; p; }" | tr -d '\n' | sed 's|^ ||; s| $||;');
+    local text=$(echo "$align" | sed -n "/^$l /{ s|.* ||; s|@| |; p; }" | tr -d '\n' | sed 's|^ ||; s| $||;');
 
-    cmd="$cmd -d '//*[@id=\"${id}\"]/_:TextEquiv'";
-    cmd="$cmd -s '//*[@id=\"${id}\"]' -t elem -n TextEquiv";
-    cmd="$cmd -s '//*[@id=\"${id}\"]/TextEquiv' -t elem -n Unicode -v '$text'";
+    cmd="$cmd -d '//*[@id=\"$id\"]/_:TextEquiv'";
+    cmd="$cmd -s '//*[@id=\"$id\"]' -t elem -n TextEquiv";
+    cmd="$cmd -s '//*[@id=\"$id\"]/TextEquiv' -t elem -n Unicode -v '$text'";
   done
 
   ### Create new XML including alignments ###
+  echo eval $cmd "$XML" > "$TMPDIR/var_cmd.txt";
   eval $cmd "$XML" > "$XMLOUT";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems creating XML file: $XMLOUT" 1>&2 &&
@@ -569,13 +600,13 @@ htrsh_pageimg_forcealign_regions () {
   htrsh_fix_rec_names "$XMLOUT";
 
   [ "$htrsh_keeptmp" -lt 1 ] &&
-    rm -f "$TMPDIR/$FN.mlf" "$TMPDIR/${FN}_aligned.mlf";
+    rm -f "$TMPDIR/$XMLBASE.mlf" "$TMPDIR/${XMLBASE}_aligned.mlf";
 
   return 0;
 }
 
 ##
-## Function that does a forced alignment given only a page with baselines and optionally a model
+## Function that does a forced alignment given only a page with baselines or contours and optionally a model
 ##
 htrsh_pageimg_forcealign () {
   local FN="htrsh_pageimg_forcealign";
@@ -684,7 +715,8 @@ htrsh_pageimg_forcealign () {
   fi
 
   ### Generate contours from baselines ###
-  if [ $(xmlstarlet sel -t -v 'count(//'"$htrsh_xpath_regions"'/_:TextLine/_:Coords[@points and @points!="0,0 0,0"])' "$TMPDIR/$B.xml") = 0 ]; then
+  if [ $(xmlstarlet sel -t -v 'count(//'"$htrsh_xpath_regions"'/_:TextLine/_:Coords[@points and @points!="0,0 0,0"])' "$TMPDIR/$B.xml") = 0 ] ||
+     [ "$htrsh_align_prefer_baselines" = "yes" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating line contours from baselines ...";
     page_format_generate_contour -a 75 -d 25 -p "$TMPDIR/$B.xml" -o "$TMPDIR/${B}_contours.xml";
     [ "$?" != 0 ] &&

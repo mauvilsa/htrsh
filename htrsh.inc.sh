@@ -27,6 +27,7 @@ htrsh_text_translit="no";
 
 htrsh_xpath_regions='//_:TextRegion'; # XPATH for selecting page regions to process
 
+htrsh_imgtxtenh_regmask="no";                # Whether to use a region-based processing mask
 htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.1"; # Options for imgtxtenh tool
 htrsh_imglineclean_opts="-m 99%";            # Options for imglineclean tool
 
@@ -171,11 +172,11 @@ htrsh_page_to_mlf () {
 
   echo '#!MLF!#';
   if [ "$htrsh_text_translit" != "yes" ]; then
-    cat "$XML" | tr '\t' ' ' \
+    cat "$XML" | tr '\t\n' '  ' \
       | xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" \
           $IDop -o "$TAB" -v . -n;
   else
-    cat "$XML" | tr '\t' ' ' \
+    cat "$XML" | tr '\t\n' '  ' \
       | xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" \
           $IDop -o "$TAB" -v . -n \
       | iconv -f utf8 -t ascii//TRANSLIT;
@@ -511,29 +512,37 @@ htrsh_pageimg_clean () {
     return 1;
   fi
 
+  [ "$INRES" != "" ] && INRES="-d $INRES";
   local IMBASE=$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
   local XMLBASE=$(echo "$XML" | sed 's|.*/||');
-  local IXPATH="";
-  [ $(echo "$htrsh_xpath_regions" | grep -F '[' | wc -l) = 1 ] &&
-    IXPATH=$(echo "$XPATH" | sed 's|\[\([^[]*\)]|[not(\1)]|');
 
-  local textreg=$(xmlstarlet sel -t -m "$htrsh_xpath_regions/_:Coords" -v @points -n \
-                    "$XML" 2>/dev/null \
-                    | awk '{printf(" -draw \"polyline %s\"",$0)}');
-  local othreg="";
-  [ "$IXPATH" != "" ] &&
-    othreg=$(xmlstarlet sel -t -m "$IXPATH/_:Coords" -v @points -n \
-                   "$XML" 2>/dev/null \
-                   | awk '{printf(" -draw \"polyline %s\"",$0)}');
+  ### Enhance image ###
+  if [ "$htrsh_imgtxtenh_regmask" != "yes" ]; then
+    imgtxtenh $htrsh_imgtxtenh_opts $INRES "$IMFILE" "$OUTDIR/$IMBASE.png" 2>&1;
 
-  ### Create mask and enhance selected text regions ###
-  [ "$INRES" != "" ] && INRES="-d $INRES";
-  eval convert -size $IMSIZE xc:black \
-      -fill white -stroke white $textreg \
-      -fill black -stroke black $othreg \
-      -alpha copy "'$IMFILE'" +swap \
-      -compose copy-opacity -composite png:- \
-    | imgtxtenh $htrsh_imgtxtenh_opts $INRES - "$OUTDIR/$IMBASE.png" 2>&1;
+  else
+    local IXPATH="";
+    [ $(echo "$htrsh_xpath_regions" | grep -F '[' | wc -l) = 1 ] &&
+      IXPATH=$(echo "$XPATH" | sed 's|\[\([^[]*\)]|[not(\1)]|');
+
+    local textreg=$(xmlstarlet sel -t -m "$htrsh_xpath_regions/_:Coords" -v @points -n \
+                      "$XML" 2>/dev/null \
+                      | awk '{printf(" -draw \"polygon %s\"",$0)}');
+    local othreg="";
+    [ "$IXPATH" != "" ] &&
+      othreg=$(xmlstarlet sel -t -m "$IXPATH/_:Coords" -v @points -n \
+                     "$XML" 2>/dev/null \
+                     | awk '{printf(" -draw \"polygon %s\"",$0)}');
+
+    ### Create mask and enhance selected text regions ###
+    eval convert -size $IMSIZE xc:black \
+        -fill white -stroke white $textreg \
+        -fill black -stroke black $othreg \
+        -alpha copy "'$IMFILE'" +swap \
+        -compose copy-opacity -composite miff:- \
+      | imgtxtenh $htrsh_imgtxtenh_opts $INRES - "$OUTDIR/$IMBASE.png" 2>&1;
+  fi
+
   [ "$?" != 0 ] &&
     echo "$FN: error: problems enhancing image: $IMFILE" 1>&2 &&
     return 1;
@@ -636,7 +645,7 @@ htrsh_pageimg_quadborderclean () {
       return 1;
 
     #eval convert -virtual-pixel white -background white "$TMPDIR/${IMBASE}~${n}-pborder.$IMEXT" $persp1 -white-threshold 1% "$TMPDIR/${IMBASE}~${n}-border.$IMEXT";
-    eval convert -virtual-pixel black -background black "$TMPDIR/${IMBASE}~${n}-pborder.$IMEXT" $persp1 -white-threshold 1% -stroke white -strokewidth 3 -fill none -draw \"polyline $quad $(echo $quad | sed 's| .*||')\" "$TMPDIR/${IMBASE}~${n}-border.$IMEXT";
+    eval convert -virtual-pixel black -background black "$TMPDIR/${IMBASE}~${n}-pborder.$IMEXT" $persp1 -white-threshold 1% -stroke white -strokewidth 3 -fill none -draw \"polygon $quad $(echo $quad | sed 's| .*||')\" "$TMPDIR/${IMBASE}~${n}-border.$IMEXT";
     #eval convert -virtual-pixel black -background black "$TMPDIR/${IMBASE}~${n}-pborder.$IMEXT" $persp1 -white-threshold 1% "$TMPDIR/${IMBASE}~${n}-border.$IMEXT";
 
     comps="$comps $TMPDIR/${IMBASE}~${n}-border.$IMEXT -composite";
