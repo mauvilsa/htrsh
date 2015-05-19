@@ -6,9 +6,9 @@ htrsh_align_prefer_baselines="yes"; # Whether to always generate contours from b
 
 #htrsh_hmm_iter="10";
 htrsh_keeptmp="1";
-htrsh_imglineclean_opts="-m 99% -b 0";
-htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.5";
-
+#htrsh_imglineclean_opts="-m 99% -b 0";
+#htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.5"; # Alc
+htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.2"; # Zwettl
 
 #htrsh_feat_deslant="no";
 

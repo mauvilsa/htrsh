@@ -32,9 +32,9 @@ htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.1"; # Options for imgtxtenh tool
 htrsh_imglineclean_opts="-m 99%";            # Options for imglineclean tool
 
 htrsh_feat_deslant="yes"; # Whether to correct slant of the text
-htrsh_feat_padding="0.5"; # Left and right white padding in mm for line images
+htrsh_feat_padding="1.0"; # Left and right white padding in mm for line images
 htrsh_feat_contour="yes"; # Whether to compute connected components contours
-htrsh_feat_dilradi="0.5"; # Dilation radius in mm for contours
+htrsh_feat_dilradi="0.0"; # Dilation radius in mm for contours
 
 htrsh_feat="dotmatrix";    # Type of features to extract
 htrsh_dotmatrix_shift="2"; # Sliding window shift in px, should change this to mm
@@ -255,6 +255,19 @@ htrsh_pageimg_info () {
       return 1;
     fi
 
+    IMRES=$(xmlstarlet sel -t -v //_:Page/@custom "$XML" \
+              | awk -F'[{}:; ]+' '
+                  { for( n=1; n<=NF; n++ )
+                      if( $n == "image-resolution" ) {
+                        n++;
+                        if( match($n,"dpcm") )
+                          printf("%g",$n);
+                        else if( match($n,"dpi") )
+                          printf("%g",$n/2.54);
+                      }
+                  }');
+
+    [ "$IMRES" = "" ] &&
     IMRES=$(
       identify -format "%x %y %U\n" "$IMFILE" \
         | awk '
@@ -319,7 +332,7 @@ htrsh_pageimg_resize () {
   if [ "$INRES" = "" ] && [ "$IMRES" = "" ]; then
     echo "$FN: error: resolution not given (-i option) and image does not specify resolution: $IMFILE" 1>&2;
     return 1;
-  elif [ "$INRES" = "" ] && [ $(printf %.0f $IMRES) -lt 50 ]; then
+  elif [ "$INRES" = "" ] && [ $(echo $IMRES | awk '{printf("%.0f",$1)}') -lt 50 ]; then
     echo "$FN: error: image resolution ($IMRES ppc) apparently incorrect since it is unusually low to be a text document image: $IMFILE" 1>&2;
     return 1;
   elif [ ! -d "$OUTDIR" ]; then
@@ -346,7 +359,13 @@ htrsh_pageimg_resize () {
   convert "$IMFILE" -units PixelsPerCentimeter -density $OUTRES -resize $SFACT "$OUTDIR/$IMBASE"; ### don't know why the density has to be set this way
 
   ### Resize XML Page ###
-  cat "$XML" | htrsh_pagexml_resize $SFACT > "$OUTDIR/$XMLBASE";
+  cat "$XML" \
+    | htrsh_pagexml_resize $SFACT \
+    | sed '
+        s|\( custom="[^"]*\)image-resolution:[^;]*;\([^"]*"\)|\1\2|;
+        s| custom="[^:"]*"||;
+        ' \
+    > "$OUTDIR/$XMLBASE";
 
   return 0;
 }
@@ -504,7 +523,7 @@ htrsh_pageimg_clean () {
   if [ ! -d "$OUTDIR" ]; then
     echo "$FN: error: output directory does not exists: $OUTDIR" 1>&2;
     return 1;
-  elif ( [ "$INRES" = "" ] && [ $(printf %.0f $IMRES) -lt 50 ] ); then
+  elif [ "$INRES" = "" ] && [ $(echo $IMRES | awk '{printf("%.0f",$1)}') -lt 50 ]; then
     echo "$FN: error: image resolution ($IMRES ppc) apparently incorrect since it is unusually low to be a text document image: $IMFILE" 1>&2;
     return 1;
   elif [ "$XMLDIR" = $($htrsh_realpath "$OUTDIR") ]; then
@@ -809,6 +828,7 @@ htrsh_feats_pca () {
   local FN="htrsh_feats_pca";
   local EXCL="[]";
   local RDIM="";
+  local RNDR="no";
   local TMPDIR=".";
   if [ $# -lt 2 ]; then
     { echo "$FN: error: not enough input arguments";
@@ -816,6 +836,7 @@ htrsh_feats_pca () {
       echo "Options:";
       echo " -e EXCL     Dimensions to exclude in matlab range format (def.=false)";
       echo " -r RDIM     Return base of RDIM dimensions (def.=all)";
+      echo " -R (yes|no) Random rotation (def.=$RNDR)";
       echo " -d TMPDIR   Directory for temporary files (def.=$TMPDIR)";
     } 1>&2;
     return 1;
@@ -830,6 +851,8 @@ htrsh_feats_pca () {
       EXCL="$2";
     elif [ "$1" = "-r" ]; then
       RDIM="$2";
+    elif [ "$1" = "-R" ]; then
+      RNDR="$2";
     elif [ "$1" = "-d" ]; then
       TMPDIR="$2";
     else
@@ -856,49 +879,62 @@ htrsh_feats_pca () {
     done
     );
 
-  local xEXCL=""; [ "$EXCL" != "[]" ] && xEXCL="x(:,$EXCL) = [];";
+  local xEXCL=""; [ "$EXCL" != "[]" ] && xEXCL="se = se + sum(x(:,$EXCL)); x(:,$EXCL) = [];";
+  local nRDIM="D"; [ "$RDIM" != "" ] && nRDIM="min(D,$RDIM)";
 
   { f=$(echo "$FEATS" | head -n 1);
     echo "
+      DE = length($EXCL);
+      se = zeros(1,DE);
       x = readhtk('$f'); $xEXCL
       N = size(x,1);
-      s = sum(x)';
-      ss = x'*x;
+      mu = sum(x);
+      sgma = x'*x;
     ";
     for f in $(echo "$FEATS" | tail -n +2); do
       echo "
         x = readhtk('$f'); $xEXCL
         N = N + size(x,1);
-        s = s + sum(x)';
-        ss = ss + x'*x;
+        mu = mu + sum(x);
+        sgma = sgma + x'*x;
       ";
     done
     echo "
-      s = (1/N)*s;
-      covm = (1/N)*ss - s*s';
-      covm = 0.5*(covm+covm');
-      [ B, V ] = eig(covm);
+      mu = (1/N)*mu;
+      sgma = (1/N)*sgma - mu'*mu;
+      sgma = 0.5*(sgma+sgma');
+      [ B, V ] = eig(sgma);
       V = real(diag(V));
       [ srt, idx ] = sort(-1*V);
       V = V(idx);
       B = B(:,idx);
-      D = size(covm,1);
+      D = size(sgma,1);
+      DR = $nRDIM-DE;
+      B = B(:,1:DR);
     ";
     if [ "$EXCL" != "[]" ]; then
       echo "
-        DD = length($EXCL);
-        sel = true(D+DD,1);
+        sel = true(DE+D,1);
         sel($EXCL) = false;
-        BB = zeros(D+DD);
-        BB(sel,sel) = B;
-        BB(~sel,~sel) = eye(DD);
+        selc = [ false(DE,1) ; true(DR,1) ];
+        BB = zeros(DE+D,DE+DR);
+        BB(sel,selc) = B;
+        BB(~sel,~selc) = eye(DE);
         B = BB;
+        mmu = zeros(1,DE+D);
+        mmu(sel) = mu;
+        mmu(~sel) = (1/N)*se;
+        mu = mmu;
       ";
     fi
-    if [ "$RDIM" != "" ]; then
-      echo "B = B(:,1:$RDIM);"
+    if [ "$RNDR" = "yes" ]; then
+      echo "
+        rand('state',1);
+        [ R, ~ ] = qr(rand(size(B,2)));
+        B = B*R;
+      ";
     fi
-    echo "save('-z','$OUTMAT','B','V');";
+    echo "save('-z','$OUTMAT','B','V','mu');";
   } | octave -q;
 
   [ "$?" != 0 ] &&
@@ -951,7 +987,7 @@ htrsh_feats_project () {
     for f in $(echo "$FEATS"); do
       echo "
         [x,FP,DT,TC,T] = readhtk('$f');
-        x = x*B;
+        x = (x-repmat(mu,size(x,1),1))*B;
         %writehtk('$f',x,FP,TC);
         save('-ascii','$f','x');
       ";
