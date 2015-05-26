@@ -21,6 +21,8 @@ htrsh_valschema="yes";
 #htrsh_pagexsd="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15/pagecontent.xsd";
 htrsh_pagexsd="http://mvillegas.info/xsd/2013-07-15/pagecontent.xsd";
 
+htrsh_fastpca="no";
+
 htrsh_keeptmp="0";
 
 htrsh_text_translit="no";
@@ -58,8 +60,8 @@ htrsh_HTK_HVite_opts="";           # Options for HVite tool
 #htrsh_HTK_HVite_opts="-A -T 1";
 
 htrsh_baseHTKcfg='
-HPARMFILTER    = "gzip -d -c $.gz"
-HPARMOFILTER   = "gzip -c > $.gz"
+#HPARMFILTER    = "gzip -d -c $.gz"
+#HPARMOFILTER   = "gzip -c > $.gz"
 HMMDEFFILTER   = "gzip -d -c $"
 HMMDEFOFILTER  = "gzip -c > $"
 ';
@@ -87,7 +89,6 @@ htrsh_version () {
 htrsh_unload () {
   unset $(compgen -A variable htrsh_);
   unset -f $(compgen -A function htrsh_);
-  return 0;
 }
 
 ##
@@ -124,14 +125,15 @@ htrsh_check_req () {
 #--------------------------------#
 
 ##
-## Function that prints to stdout an MLF created from an XML PAGE file
+## Function that prints to stdout an MLF created from an XML Page file
 ##
 htrsh_page_to_mlf () {
   local FN="htrsh_page_to_mlf";
   local REGSRC="no";
   if [ $# -lt 1 ]; then
-    { echo "$FN: error: not enough input arguments";
-      echo "Usage: $FN XMLFILE [ OPTIONS ]";
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Prints to stdout an MLF created from an XML Page file";
+      echo "Usage: $FN XMLFILE [ Options ]";
       echo "Options:";
       echo " -r (yes|no)  Whether to get TextEquiv from regions instead of lines (def.=$REGSRC)";
     } 1>&2;
@@ -172,11 +174,11 @@ htrsh_page_to_mlf () {
 
   echo '#!MLF!#';
   if [ "$htrsh_text_translit" != "yes" ]; then
-    cat "$XML" | tr '\t\n' '  ' \
+    tr '\t\n' '  ' < "$XML" \
       | xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" \
           $IDop -o "$TAB" -v . -n;
   else
-    cat "$XML" | tr '\t\n' '  ' \
+    tr '\t\n' '  ' < "$XML" \
       | xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" \
           $IDop -o "$TAB" -v . -n \
       | iconv -f utf8 -t ascii//TRANSLIT;
@@ -222,14 +224,15 @@ htrsh_page_to_mlf () {
 }
 
 ##
-## Function that checks and extracts basic info (XMLDIR, IMFILE, IMSIZE, IMRES) from an XML PAGE file and respective image
+## Function that checks and extracts basic info (XMLDIR, IMFILE, IMSIZE, IMRES) from an XML Page file and respective image
 ##
 htrsh_pageimg_info () {
   local FN="htrsh_pageimg_info";
   local XML="$1";
   local VAL=""; [ "$htrsh_valschema" = "yes" ] && VAL="-e -s '$htrsh_pagexsd'";
   if [ $# -lt 1 ]; then
-    { echo "$FN: error: not enough input arguments";
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Checks and extracts basic info (XMLDIR, IMFILE, IMSIZE, IMRES) from an XML Page file and respective image";
       echo "Usage: $FN XMLFILE";
     } 1>&2;
     return 1;
@@ -255,7 +258,7 @@ htrsh_pageimg_info () {
       return 1;
     fi
 
-    IMRES=$(xmlstarlet sel -t -v //_:Page/@custom "$XML" \
+    IMRES=$(xmlstarlet sel -t -v //_:Page/@custom "$XML" 2>/dev/null \
               | awk -F'[{}:; ]+' '
                   { for( n=1; n<=NF; n++ )
                       if( $n == "image-resolution" ) {
@@ -288,7 +291,7 @@ htrsh_pageimg_info () {
 }
 
 ##
-## Function that resizes a XML Page file along with its corresponding image
+## Function that resizes an XML Page file along with its corresponding image
 ##
 htrsh_pageimg_resize () {
   local FN="htrsh_pageimg_resize";
@@ -297,8 +300,9 @@ htrsh_pageimg_resize () {
   local OUTRES="95";
   local SFACT="";
   if [ $# -lt 2 ]; then
-    { echo "$FN: error: not enough input arguments";
-      echo "Usage: $FN XML OUTDIR [ OPTIONS ]";
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Resizes an XML Page file along with its corresponding image";
+      echo "Usage: $FN XML OUTDIR [ Options ]";
       echo "Options:";
       echo " -i INRES    Input image resolution in ppc (def.=use image metadata)";
       echo " -o OUTRES   Output image resolution in ppc (def.=$OUTRES)";
@@ -359,8 +363,7 @@ htrsh_pageimg_resize () {
   convert "$IMFILE" -units PixelsPerCentimeter -density $OUTRES -resize $SFACT "$OUTDIR/$IMBASE"; ### don't know why the density has to be set this way
 
   ### Resize XML Page ###
-  cat "$XML" \
-    | htrsh_pagexml_resize $SFACT \
+  htrsh_pagexml_resize $SFACT < "$XML" \
     | sed '
         s|\( custom="[^"]*\)image-resolution:[^;]*;\([^"]*"\)|\1\2|;
         s| custom="[^:"]*"||;
@@ -371,13 +374,14 @@ htrsh_pageimg_resize () {
 }
 
 ##
-## Function that resizes a XML Page file
+## Function that resizes an XML Page file
 ##
 htrsh_pagexml_resize () {
   local FN="htrsh_pagexml_resize";
   local newWidth newHeight scaleFact;
   if [ $# -lt 1 ]; then
-    { echo "$FN: error: not enough input arguments";
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Resizes an XML Page file";
       echo "Usage: $FN ( {newWidth}x{newHeight} | {scaleFact}% ) < XML_PAGE_FILE";
     } 1>&2;
     return 1;
@@ -395,7 +399,6 @@ htrsh_pagexml_resize () {
   xmlns:str="http://exslt.org/strings"
   xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
   xmlns:_="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
-  xmlns:DEFAULT="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
   extension-element-prefixes="str"
   version="1.0">
 
@@ -477,9 +480,205 @@ htrsh_pagexml_resize () {
 
 </xsl:stylesheet>';
 
-  cat /dev/stdin | xmlstarlet tr <( echo "$XSLT" );
+  xmlstarlet tr <( echo "$XSLT" ) < /dev/stdin;
 
   return $?;
+}
+
+
+##
+## Function that sorts TextLines within each TextRegion in an XML Page file
+## (sorts using only the first Y coordinate of baselines)
+##
+htrsh_pagexml_sort_lines () {
+  local FN="htrsh_pagexml_sort_lines";
+  if [ $# != 0 ]; then
+    { echo "$FN: error: function does not expect arguments";
+      echo "Description: Sorts TextLines within each TextRegion in an XML Page file (sorts using only the first Y coordinate of baselines)";
+      echo "Usage: $FN < XMLIN";
+    } 1>&2;
+    return 1;
+  fi
+
+  local XSLT='<?xml version="1.0"?>
+<xsl:stylesheet
+  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  xmlns:_="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  version="1.0">
+
+  <xsl:output method="xml" indent="yes" encoding="utf-8" omit-xml-declaration="no"/>
+
+  <xsl:template match="@* | node()">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()"/>
+    </xsl:copy>
+  </xsl:template>
+
+  <xsl:template match="//_:TextRegion">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()[not(self::_:TextLine)]" />
+      <xsl:apply-templates select="_:TextLine">
+        <xsl:sort select="number(substring-before(substring-after(_:Baseline/@points,&quot;,&quot;),&quot; &quot;))" data-type="number" order="ascending"/>
+      </xsl:apply-templates>
+    </xsl:copy>
+  </xsl:template>
+</xsl:stylesheet>';
+
+  xmlstarlet tr <( echo "$XSLT" ) < /dev/stdin;
+
+  return $?;
+}
+
+##
+## Function that sorts TextRegions in an XML Page file
+## (sorts using only the minimum Y coordinate of the region Coords)
+##
+htrsh_pagexml_sort_regions () {
+  local FN="htrsh_pagexml_sort_regions";
+  if [ $# != 0 ]; then
+    { echo "$FN: error: function does not expect arguments";
+      echo "Description: Sorts TextRegions in an XML Page file (sorts using only the minimum Y coordinate of the region Coords)";
+      echo "Usage: $FN < XMLIN";
+    } 1>&2;
+    return 1;
+  fi
+
+  local XSLT='<?xml version="1.0"?>
+<xsl:stylesheet
+  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  xmlns:_="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  version="2.0">
+
+  <xsl:output method="xml" indent="yes" encoding="utf-8" omit-xml-declaration="no"/>
+
+  <xsl:template match="@* | node()">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()"/>
+    </xsl:copy>
+  </xsl:template>
+
+  <xsl:template match="//_:Page">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()[not(self::_:TextRegion)]" />
+      <xsl:apply-templates select="_:TextRegion">
+        <xsl:sort select="number(min(tokenize(replace(_:Coords/@points,'"'\d+,'"','"''"'),'"' '"')))" data-type="number" order="ascending"/>
+      </xsl:apply-templates>
+    </xsl:copy>
+  </xsl:template>
+
+</xsl:stylesheet>';
+
+  saxonb-xslt -s:- -xsl:<( echo "$XSLT" ) < /dev/stdin;
+
+  return $?;
+}
+
+##
+## Function that relabels ids of TextRegions and TextLines in an XML Page file
+##
+htrsh_pagexml_relabel () {
+  local FN="htrsh_pagexml_relabel";
+  if [ $# != 0 ]; then
+    { echo "$FN: error: function does not expect arguments";
+      echo "Description: Relabels ids of TextRegions and TextLines in an XML Page file";
+      echo "Usage: $FN < XMLIN";
+    } 1>&2;
+    return 1;
+  fi
+
+  local XSLT1='<?xml version="1.0"?>
+<xsl:stylesheet
+  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  xmlns:_="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  version="1.0">
+
+  <xsl:output method="xml" indent="yes" encoding="utf-8" omit-xml-declaration="no"/>
+
+  <xsl:template match="@* | node()">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()"/>
+    </xsl:copy>
+  </xsl:template>
+
+  <xsl:template match="//_:TextRegion">
+    <xsl:copy>
+      <xsl:attribute name="id">
+        <xsl:value-of select="'"'t'"'"/>
+        <xsl:number count="//_:TextRegion"/>
+      </xsl:attribute>
+      <xsl:apply-templates select="@*[local-name() != '"'id'"'] | node()" />
+    </xsl:copy>
+  </xsl:template>
+
+</xsl:stylesheet>';
+
+  local XSLT2='<?xml version="1.0"?>
+<xsl:stylesheet
+  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  xmlns:_="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  version="1.0">
+
+  <xsl:output method="xml" indent="yes" encoding="utf-8" omit-xml-declaration="no"/>
+
+  <xsl:template match="@* | node()">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()"/>
+    </xsl:copy>
+  </xsl:template>
+
+  <xsl:template match="//_:TextRegion/_:TextLine">
+    <xsl:variable name="pid" select="../@id"/>
+    <xsl:copy>
+      <xsl:attribute name="id">
+        <xsl:value-of select="concat(../@id,&quot;_l&quot;)"/>
+        <xsl:number count="//_:TextRegion/_:TextLine"/>
+      </xsl:attribute>
+      <xsl:apply-templates select="@*[local-name() != '"'id'"'] | node()" />
+    </xsl:copy>
+  </xsl:template>
+
+</xsl:stylesheet>';
+
+  xmlstarlet tr <( echo "$XSLT1" ) < /dev/stdin \
+    | xmlstarlet tr <( echo "$XSLT2" );
+
+  return $?;
+}
+
+##
+## Function that replaces @points with the respective @fpgram in an XML Page file
+##
+htrsh_pagexml_fpgram2points () {
+  local FN="htrsh_pagexml_fpgram2points";
+  if [ $# -lt 1 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Replaces @points with the respective @fpgram in an XML Page file";
+      echo "Usage: $FN XML";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input agruments ###
+  local XML="$1";
+
+  local cmd="xmlstarlet ed";
+  local id;
+  for id in $(xmlstarlet sel -t -m '//_:TextLine/_:Coords[@fpgram]' -v ../@id -n "$XML"); do
+    cmd="$cmd -d '//_:TextLine[@id=\"$id\"]/_:Coords/@points'";
+    cmd="$cmd -r '//_:TextLine[@id=\"$id\"]/_:Coords/@fpgram' -v points";
+  done
+
+  eval $cmd "$XML";
+
+  return 0;
 }
 
 
@@ -494,8 +693,9 @@ htrsh_pageimg_clean () {
   local FN="htrsh_pageimg_clean";
   local INRES="";
   if [ $# -lt 2 ]; then
-    { echo "$FN: error: not enough input arguments";
-      echo "Usage: $FN XML OUTDIR [ OPTIONS ]";
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Cleans and enhances a text image based on regions defined in an XML Page file";
+      echo "Usage: $FN XML OUTDIR [ Options ]";
       echo "Options:";
       echo " -i INRES    Input image resolution in ppc (def.=use image metadata)";
     } 1>&2;
@@ -581,8 +781,9 @@ htrsh_pageimg_quadborderclean () {
   local TMPDIR=".";
   local CFG="";
   if [ $# -lt 2 ]; then
-    { echo "$FN: error: not enough input arguments";
-      echo "Usage: $FN XML OUTIMG [ OPTIONS ]";
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Removes noise from borders of a quadrilateral region defined in an XML Page file";
+      echo "Usage: $FN XML OUTIMG [ Options ]";
       echo "Options:";
       echo " -c CFG      Options for imgpageborder (def.=$CFG)";
       echo " -d TMPDIR   Directory for temporary files (def.=$TMPDIR)";
@@ -683,15 +884,16 @@ htrsh_pageimg_quadborderclean () {
 }
 
 ##
-## Function that extracts lines from an image given its XML PAGE file
+## Function that extracts lines from an image given its XML Page file
 ##
 htrsh_pageimg_extract_lines () {
   local FN="htrsh_pageimg_extract_lines";
   local OUTDIR=".";
   local IMFILE="";
   if [ $# -lt 1 ]; then
-    { echo "$FN: error: not enough input arguments";
-      echo "Usage: $FN XMLFILE [ OPTIONS ]";
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Extracts lines from an image given its XML Page file";
+      echo "Usage: $FN XMLFILE [ Options ]";
       echo "Options:";
       echo " -d OUTDIR   Output directory for images (def.=$OUTDIR)";
       echo " -i IMFILE   Extract from provided image (def.=@imageFilename in XML)";
@@ -736,12 +938,13 @@ htrsh_pageimg_extract_lines () {
 }
 
 ##
-## Function that discretizes a list of features for a given codebook
+## Function that discretizes a list of features using a given codebook
 ##
 htrsh_feats_discretize () {
   local FN="htrsh_feats_discretize";
   if [ $# -lt 3 ]; then
-    { echo "$FN: error: not enough input arguments";
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Discretizes a list of features using a given codebook";
       echo "Usage: $FN FEATLST CBOOK OUTDIR";
     } 1>&2;
     return 1;
@@ -786,7 +989,8 @@ SAVEASVQ       = T
 htrsh_extract_feats () {
   local FN="htrsh_extract_feats";
   if [ $# -lt 2 ]; then
-    { echo "$FN: error: not enough input arguments";
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Extracts features from an image";
       echo "Usage: $FN IMGIN FEAOUT";
     } 1>&2;
     return 1;
@@ -813,10 +1017,75 @@ htrsh_extract_feats () {
   pfl2htk "$FEAOUT.tfea" "$FEAOUT" 2>/dev/null;
 
   ### gzip features ###
-  gzip -f "$FEAOUT";
+  #gzip -f "$FEAOUT";
 
   ### Remove temporal files ###
   rm -f "$FEAOUT.tfea";
+
+  return 0;
+}
+
+##
+## Function that concatenates line features for regions defined in an XML Page file
+##
+htrsh_feats_catregions () {
+  local FN="htrsh_feats_catregions";
+  local FEATLST="/dev/stdout";
+  if [ $# -lt 2 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Concatenates line features for regions defined in an XML Page file";
+      echo "Usage: $FN XML FEATDIR [ Options ]";
+      echo "Options:";
+      echo " -l FEATLST  Output list of features to file (def.=$FEATLST)";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input agruments ###
+  local XML="$1";
+  local FEATDIR="$2";
+  shift 2;
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "-l" ]; then
+      FEATLST="$2";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
+    shift 2;
+  done
+
+  ### Check page and obtain basic info ###
+  local XMLDIR IMFILE IMSIZE IMRES;
+  htrsh_pageimg_info "$XML";
+  [ "$?" != 0 ] && return 1;
+
+  [ ! -e "$FEATDIR" ] &&
+    echo "$FN: error: features directory not found: $FEATDIR" 1>&2 &&
+    return 1;
+
+  local FBASE="$FEATDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
+
+  xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
+      -o "$FBASE." -v ../../@id -o "." -v ../@id -o ".fea" -n "$XML" \
+    | xargs ls >/dev/null;
+  [ "$?" != 0 ] &&
+    echo "$FN: error: some line features files not found" 1>&2 &&
+    return 1;
+
+  local id;
+  for id in $(xmlstarlet sel -t -m "$htrsh_xpath_regions[_:TextLine/_:Coords]" -v @id -n "$XML"); do
+    local f;
+    for f in $(xmlstarlet sel -t -m "//*[@id=\"$id\"]/_:TextLine[_:Coords]" -o "$FBASE.$id." -v @id -o ".fea" -n "$XML"); do
+      HList -r "$f";
+    done > $FBASE.$id.fea~;
+
+    pfl2htk $FBASE.$id.fea~ $FBASE.$id.fea 2>/dev/null;
+
+    echo "$FBASE.$id.fea" >> "$FEATLST";
+
+    rm $FBASE.$id.fea~;
+  done
 
   return 0;
 }
@@ -831,8 +1100,9 @@ htrsh_feats_pca () {
   local RNDR="no";
   local TMPDIR=".";
   if [ $# -lt 2 ]; then
-    { echo "$FN: error: not enough input arguments";
-      echo "Usage: $FN FEATLST OUTMAT [ OPTIONS ]";
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Computes a PCA base for a given list of HTK features";
+      echo "Usage: $FN FEATLST OUTMAT [ Options ]";
       echo "Options:";
       echo " -e EXCL     Dimensions to exclude in matlab range format (def.=false)";
       echo " -r RDIM     Return base of RDIM dimensions (def.=all)";
@@ -865,24 +1135,33 @@ htrsh_feats_pca () {
   if [ ! -e "$FEATLST" ]; then
     echo "$FN: error: feature list not found: $FEATLST" 1>&2;
     return 1;
-  elif [ $(cat "$FEATLST" | wc -l) != $(sed 's|$|.gz|' "$FEATLST" | xargs ls | wc -l) ]; then
+  #elif [ $(wc -l < "$FEATLST") != $(sed 's|$|.gz|' "$FEATLST" | xargs ls | wc -l) ]; then
+  elif [ $(wc -l < "$FEATLST") != $(xargs ls < "$FEATLST" | wc -l) ]; then
     echo "$FN: error: some files in list not found: $FEATLST" 1>&2;
     return 1;
   fi
 
-  local f;
-  local FEATS=$(
-    for f in $(cat "$FEATLST"); do
-      local ff="$TMPDIR/"$(echo $f | sed 's|.*/||');
-      zcat "$f.gz" > "$ff";
-      echo "$ff";
-    done
-    );
+  if [ "$htrsh_fastpca" = "yes" ]; then
+
+    local DIMS=$(HList -h -z $(head -n 1 < "$FEATLST") \
+            | sed -n '/^  Num Comps:/{s|^[^:]*: *||;s| .*||;p;}');
+    tail -qc +13 $(< "$FEATLST") | swap4bytes | fast_pca -C -e $EXCL -f binary -b 500 -p $DIMS -m "$OUTMAT";
+
+  else
 
   local xEXCL=""; [ "$EXCL" != "[]" ] && xEXCL="se = se + sum(x(:,$EXCL)); x(:,$EXCL) = [];";
   local nRDIM="D"; [ "$RDIM" != "" ] && nRDIM="min(D,$RDIM)";
 
-  { f=$(echo "$FEATS" | head -n 1);
+  local f;
+  #local FEATS=$(
+  #  for f in $(< "$FEATLST"); do
+  #    local ff="$TMPDIR/"$(echo $f | sed 's|.*/||');
+  #    zcat "$f.gz" > "$ff";
+  #    echo "$ff";
+  #  done
+  #  );
+
+  { f=$(head -n 1 < "$FEATLST");
     echo "
       DE = length($EXCL);
       se = zeros(1,DE);
@@ -891,7 +1170,7 @@ htrsh_feats_pca () {
       mu = sum(x);
       sgma = x'*x;
     ";
-    for f in $(echo "$FEATS" | tail -n +2); do
+    for f in $(tail -n +2 < "$FEATLST"); do
       echo "
         x = readhtk('$f'); $xEXCL
         N = N + size(x,1);
@@ -935,13 +1214,16 @@ htrsh_feats_pca () {
       ";
     fi
     echo "save('-z','$OUTMAT','B','V','mu');";
+    #echo "save('$OUTMAT','B','V','mu');";
   } | octave -q;
+
+  fi
 
   [ "$?" != 0 ] &&
     echo "$FN: error: problems computing PCA" 1>&2 &&
     return 1;
 
-  echo "$FEATS" | xargs rm -f;
+  #echo "$FEATS" | xargs rm -f;
 
   return 0;
 }
@@ -952,7 +1234,8 @@ htrsh_feats_pca () {
 htrsh_feats_project () {
   local FN="htrsh_feats_project";
   if [ $# -lt 3 ]; then
-    { echo "$FN: error: not enough input arguments";
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Projects a list of features for a given base";
       echo "Usage: $FN FEATLST PBASE OUTDIR";
     } 1>&2;
     return 1;
@@ -975,41 +1258,41 @@ htrsh_feats_project () {
   fi
 
   local f;
-  local FEATS=$(
-    for f in $(cat "$FEATLST"); do
-      local ff="$OUTDIR/"$(echo $f | sed 's|.*/||');
-      zcat "$f.gz" > "$ff";
-      echo "$ff";
-    done
-    );
+  #local FEATS=$(
+  #  for f in $(< "$FEATLST"); do
+  #    local ff="$OUTDIR/"$(echo $f | sed 's|.*/||');
+  #    zcat "$f.gz" > "$ff";
+  #    echo "$ff";
+  #  done
+  #  );
 
   { echo "load('$PBASE');"
-    for f in $(echo "$FEATS"); do
+    for f in $(< "$FEATLST"); do
       echo "
         [x,FP,DT,TC,T] = readhtk('$f');
         x = (x-repmat(mu,size(x,1),1))*B;
-        %writehtk('$f',x,FP,TC);
-        save('-ascii','$f','x');
+        writehtk('$f',x,FP,TC);
+        %save('-ascii','$f','x');
       ";
     done
   } | octave -q;
 
-  for f in $(echo "$FEATS"); do
-    pfl2htk "$f" "$f~" 2>/dev/null;
-    mv "$f~" "$f";
-  done
+  #for f in $(echo "$FEATS"); do
+  #  pfl2htk "$f" "$f~" 2>/dev/null;
+  #  mv "$f~" "$f";
+  #done
 
   [ "$?" != 0 ] &&
-    echo "$FN: error: problems computing PCA" 1>&2 &&
+    echo "$FN: error: problems extracting features" 1>&2 &&
     return 1;
 
-  gzip -f $FEATS;
+  #gzip -f $FEATS;
 
   return 0;
 }
 
 ##
-## Function that extracts line features from an image given its XML PAGE file
+## Function that extracts line features from an image given its XML Page file
 ##
 htrsh_pageimg_extract_linefeats () {
   local FN="htrsh_pageimg_extract_linefeats";
@@ -1018,8 +1301,9 @@ htrsh_pageimg_extract_linefeats () {
   local PBASE="";
   local REPLC="yes";
   if [ $# -lt 2 ]; then
-    { echo "$FN: error: not enough input arguments";
-      echo "Usage: $FN XMLIN XMLOUT [ OPTIONS ]";
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Extracts line features from an image given its XML Page file";
+      echo "Usage: $FN XMLIN XMLOUT [ Options ]";
       echo "Options:";
       echo " -d OUTDIR   Output directory for features (def.=$OUTDIR)";
       echo " -l FEATLST  Output list of features to file (def.=$FEATLST)";
@@ -1055,6 +1339,7 @@ htrsh_pageimg_extract_linefeats () {
   [ "$?" != 0 ] && return 1;
 
   ### Extract lines from line coordinates ###
+  ### @todo avoid $OUTDIR/lines.lst temp file or depend on input name
   htrsh_pageimg_extract_lines "$XML" -d "$OUTDIR" > "$OUTDIR/lines.lst";
   [ "$?" != 0 ] && return 1;
 
@@ -1063,7 +1348,7 @@ htrsh_pageimg_extract_linefeats () {
 
   ### Process each line ###
   local n;
-  for n in $(seq 1 $(cat "$OUTDIR/lines.lst" | wc -l)); do
+  for n in $(seq 1 $(wc -l < "$OUTDIR/lines.lst")); do
     local ff=$(sed -n ${n}p "$OUTDIR/lines.lst" | sed 's|\.png$||');
     local id=$(echo "$ff" | sed 's|.*\.||');
 
@@ -1113,15 +1398,17 @@ htrsh_pageimg_extract_linefeats () {
 
     ### Apply affine transformation to image ###
     local mn;
-    if [ "$affine" = "1,0,0,1,0,0" ]; then
-      ln -s $(echo "$ff" | sed 's|.*/||')_clean.png ${ff}_affine.png;
-      mn="0,0";
-    else
+    #if [ "$affine" = "1,0,0,1,0,0" ]; then
+       # @todo This doesn't work since offset of _clean.png and _affine.png differs, is off(3:4) still necessary
+    #  ln -s $(echo "$ff" | sed 's|.*/||')_clean.png ${ff}_affine.png;
+    #  mn="0,0";
+    #  #mn="-1,-1";
+    #else
       mn=$(convert ${ff}_clean.png +repage -flatten \
              -virtual-pixel white +distort AffineProjection ${affine} \
              -shave 1x1 -format %X,%Y -write info: \
              +repage -trim ${ff}_affine.png);
-    fi
+    #fi
 
     ### Add left and right padding ###
     local PADpx=$(echo $IMRES $htrsh_feat_padding | awk '{printf("%.0f",$1*$2/10)}');
@@ -1160,23 +1447,23 @@ htrsh_pageimg_extract_linefeats () {
       " | octave -q);
 
     ### Prepare information to add to XML ###
-    #ed="$ed -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n bbox -v '$bbox'";
-    #ed="$ed -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n slope -v '$skew'";
+    #ed="$ed -i '//*[@id=\"$id\"]/_:Coords' -t attr -n bbox -v '$bbox'";
+    #ed="$ed -i '//*[@id=\"$id\"]/_:Coords' -t attr -n slope -v '$skew'";
     #[ "$htrsh_feat_deslant" = "yes" ] &&
-    #ed="$ed -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n slant -v '$slant'";
-    ed="$ed -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n fpgram -v '$fbox'";
+    #ed="$ed -i '//*[@id=\"$id\"]/_:Coords' -t attr -n slant -v '$slant'";
+    ed="$ed -i '//*[@id=\"$id\"]/_:Coords' -t attr -n fpgram -v '$fbox'";
 
     ### Compute detailed contours if requested ###
     if [ "$htrsh_feat_contour" = "yes" ]; then
       local pts=$(imgccomp -V1 -NJS -A 0.5 -D $htrsh_feat_dilradi -R 5,2,2,2 ${ff}_clean.png);
-      ed="$ed -i '//*[@id=\"${id}\"]/_:Coords' -t attr -n fcontour -v '$pts'";
+      ed="$ed -i '//*[@id=\"$id\"]/_:Coords' -t attr -n fcontour -v '$pts'";
     fi 2>&1;
 
     ### Extract features ###
-    htrsh_extract_feats "${ff}_fea.png" "${ff}.fea";
+    htrsh_extract_feats "${ff}_fea.png" "$ff.fea";
     [ "$?" != 0 ] && return 1;
 
-    echo "${ff}.fea" >> "$FEATLST";
+    echo "$ff.fea" >> "$FEATLST";
 
     [ "$PBASE" != "" ] && FEATS=$( echo "$FEATS"; echo "${ff}.fea"; );
 
@@ -1195,7 +1482,7 @@ htrsh_pageimg_extract_linefeats () {
     [ "$?" != 0 ] && return 1;
   fi
 
-  ### Generate new PAGE XML file ###
+  ### Generate new XML Page file ###
   eval xmlstarlet ed -P $ed "$XML" > "$XMLOUT";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems generating XML file: $XMLOUT" 1>&2 &&
@@ -1222,16 +1509,17 @@ htrsh_pageimg_extract_linefeats () {
 #--------------------------------------#
 
 ##
-## Function that prints to stdout HMM prototype(s)
+## Function that prints to stdout HMM prototype(s) in HTK format
 ##
 htrsh_hmm_proto () {
   local FN="htrsh_hmm_proto";
   local PNAME="proto";
   local DISCR="no";
   local RAND="no";
-  if [ $# -lt 1 ]; then
-    { echo "$FN: error: not enough input arguments";
-      echo "Usage: $FN (DIMS|CODES) STATES [ OPTIONS ]";
+  if [ $# -lt 2 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Prints to stdout HMM prototype(s) in HTK format";
+      echo "Usage: $FN (DIMS|CODES) STATES [ Options ]";
       echo "Options:";
       echo " -n PNAME     Proto name(s), if several separated by '\n' (def.=$PNAME)";
       echo " -D (yes|no)  Whether proto should be discrete (def.=$DISCR)";
@@ -1362,8 +1650,9 @@ htrsh_hmm_train () {
   local KEEPIT="no";
   local RAND="no";
   if [ $# -lt 2 ]; then
-    { echo "$FN: error: not enough input arguments";
-      echo "Usage: $FN FEATLST MLF [ OPTIONS ]";
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Trains HMMs for a given feature list and mlf";
+      echo "Usage: $FN FEATLST MLF [ Options ]";
       echo "Options:";
       echo " -d OUTDIR    Directory for output models and temporary files (def.=$OUTDIR)";
       echo " -c CODES     Train discrete model with given codebook size (def.=false)";
@@ -1410,12 +1699,14 @@ htrsh_hmm_train () {
     return 1;
   fi
 
-  zcat $(head -n 1 "$FEATLST").gz > "$OUTDIR/tmp.fea";
-  local DIMS=$(HList -z -h "$OUTDIR/tmp.fea" | sed -n '/Num Comps:/{s|.*Num Comps: *||;s| .*||;p;}');
-  [ "$CODES" != 0 ] && [ $(HList -z -h "$OUTDIR/tmp.fea" | grep DISCRETE_K | wc -l) = 0 ] &&
+  #zcat $(head -n 1 "$FEATLST").gz > "$OUTDIR/tmp.fea";
+  #local DIMS=$(HList -z -h "$OUTDIR/tmp.fea" | sed -n '/Num Comps:/{s|.*Num Comps: *||;s| .*||;p;}');
+  #[ "$CODES" != 0 ] && [ $(HList -z -h "$OUTDIR/tmp.fea" | grep DISCRETE_K | wc -l) = 0 ] &&
+  local DIMS=$(HList -z -h "$(head -n 1 "$FEATLST")" | sed -n '/Num Comps:/{s|.*Num Comps: *||;s| .*||;p;}');
+  [ "$CODES" != 0 ] && [ $(HList -z -h "$(head -n 1 "$FEATLST")" | grep DISCRETE_K | wc -l) = 0 ] &&
     echo "$FN: error: features are not discrete" 1>&2 &&
     return 1;
-  rm "$OUTDIR/tmp.fea";
+  #rm "$OUTDIR/tmp.fea";
 
   local HMMLST=$(cat "$MLF" \
                    | sed '/^#!MLF!#/d; /^"\*\//d; /^\.$/d; s|^"||; s|"$||;' \
@@ -1573,7 +1864,8 @@ htrsh_hmm_train () {
 htrsh_fix_rec_names () {
   local FN="htrsh_fix_rec_names";
   if [ $# -lt 1 ]; then
-    { echo "$FN: error: not enough input arguments";
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Replaces special HMM model names with corresponding characters";
       echo "Usage: $FN XMLIN";
     } 1>&2;
     return 1;
@@ -1601,6 +1893,7 @@ htrsh_fix_rec_utf8 () {
   local FN="htrsh_fix_rec_utf8";
   if [ $# -lt 2 ]; then
     { echo "$FN: error: not enough input arguments";
+      echo "Description: Fixes utf8 characters in an HTK recognition file";
       echo "Usage: $FN MODEL RECMLF";
     } 1>&2;
     return 1;

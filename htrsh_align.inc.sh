@@ -3,12 +3,13 @@
 htrsh_align_chars="no"; # Whether to align at a character level
 htrsh_align_isect="yes"; # Whether to intersect parallelograms with line contour
 htrsh_align_prefer_baselines="yes"; # Whether to always generate contours from baselines
+htrsh_align_wordsplit="no"; # Whether to split words when aligning regions
 
 #htrsh_hmm_iter="10";
 htrsh_keeptmp="1";
 #htrsh_imglineclean_opts="-m 99% -b 0";
-#htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.5"; # Alc
-htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.2"; # Zwettl
+htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.5"; #htrsh_align_isect="no"; # Alc
+#htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.2"; # Zwettl
 
 #htrsh_feat_deslant="no";
 
@@ -28,8 +29,9 @@ htrsh_pageimg_forcealign_lines () {
   local FN="htrsh_pageimg_forcealign_lines";
   local TMPDIR=".";
   if [ $# -lt 4 ]; then
-    { echo "$FN: error: not enough input arguments";
-      echo "Usage: $FN XMLIN FEATLST MODEL XMLOUT [ OPTIONS ]";
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Does a forced alignment at a line level for a given XML Page, feature list and model";
+      echo "Usage: $FN XMLIN FEATLST MODEL XMLOUT [ Options ]";
       echo "Options:";
       echo " -d TMPDIR    Directory for temporary files (def.=$TMPDIR)";
     } 1>&2;
@@ -165,7 +167,7 @@ htrsh_pageimg_forcealign_lines () {
   #local TE=$(($(date +%s%N)/1000000)); echo "time 0: $((TE-TS)) ms" 1>&2; TS="$TE";
 
   local n;
-  for n in $(seq 1 $(cat "$FEATLST" | wc -l)); do
+  for n in $(seq 1 $(wc -l < "$FEATLST")); do
     local id=$(sed -n "$n"'{ s|.*\.\([^.]*\)\.fea$|\1|; p; }' "$FEATLST");
 
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): alignments for line $n (id=$id) ..." 1>&2;
@@ -295,14 +297,15 @@ htrsh_pageimg_forcealign_lines () {
 }
 
 ##
-## Function that does a forced alignment at a region level for a given XML Page, feature list and model
+## Function that does a forced alignment for a region given and XML Page file, model and directory to find the features
 ##
-htrsh_pageimg_forcealign_regions () {
-  local FN="htrsh_pageimg_forcealign_regions";
+htrsh_pageimg_forcealign_region () {
+  local FN="htrsh_pageimg_forcealign_region";
   local TMPDIR=".";
-  if [ $# -lt 4 ]; then
-    { echo "$FN: error: not enough input arguments";
-      echo "Usage: $FN XMLIN FEATLST NFRAMES MODEL XMLOUT [ OPTIONS ]";
+  if [ $# -lt 5 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Does a forced alignment for a region given and XML Page file, model and directory to find the features";
+      echo "Usage: $FN XMLIN REGID FEATDIR MODEL XMLOUT [ Options ]";
       echo "Options:";
       echo " -d TMPDIR    Directory for temporary files (def.=$TMPDIR)";
     } 1>&2;
@@ -311,8 +314,8 @@ htrsh_pageimg_forcealign_regions () {
 
   ### Parse input agruments ###
   local XML="$1";
-  local FEATLST="$2";
-  local NFRAMES="$3";
+  local REGID="$2";
+  local FEATDIR="$3";
   local MODEL="$4";
   local XMLOUT="$5";
   shift 5;
@@ -326,13 +329,35 @@ htrsh_pageimg_forcealign_regions () {
     shift 2;
   done
 
-  if ! [ -e "$FEATLST" ]; then
-    echo "$FN: error: feature list not found: $FEATLST" 1>&2;
-    return 1;
-  elif ! [ -e "$MODEL" ]; then
+  if ! [ -e "$MODEL" ]; then
     echo "$FN: error: model file not found: $MODEL" 1>&2;
     return 1;
   fi
+
+  ### Check page and obtain basic info ###
+  local XMLDIR IMFILE IMSIZE IMRES;
+  htrsh_pageimg_info "$XML";
+  [ "$?" != 0 ] && return 1;
+
+  local FBASE="$FEATDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
+
+  local FEATLST=$(
+    { echo "$FBASE.$REGID.fea";
+      xmlstarlet sel -t -m "//*[@id=\"$REGID\"]/_:TextLine/_:Coords" \
+        -o "$FBASE." -v ../../@id -o "." -v ../@id -o ".fea" -n "$XML";
+    } | xargs ls
+    );
+  [ "$?" != 0 ] &&
+    echo "$FN: error: some features files not found" 1>&2 &&
+    return 1;
+
+  local f;
+  local NFRAMES=$(
+    for f in $(xmlstarlet sel -t -m "//*[@id=\"$REGID\"]/_:TextLine/_:Coords" -o "$FBASE." -v ../../@id -o "." -v ../@id -o ".fea" -n "$XML"); do
+      echo $f | sed 's|.*/[^.]*\.[^.]*\.||; s|\.fea||' | tr '\n' ' ';
+      HList -h -z $f | sed -n '/Num Samples:/{ s|.*Num Samples: *||; s| .*||; p; }';
+    done
+    );
 
   local XMLBASE=$(echo "$XML" | sed 's|.*/||;s|\.xml$||;');
 
@@ -347,7 +372,8 @@ htrsh_pageimg_forcealign_regions () {
   local DIC=$(echo "$HMMLST" | awk '{printf("\"%s\" [%s] 1.0 %s\n",$1,$1,$1)}');
 
   ### Do forced alignment with HVite ###
-  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_baseHTKcfg" ) -H "$MODEL" -S "$FEATLST" -m -I "$TMPDIR/$XMLBASE.mlf" -i "$TMPDIR/${XMLBASE}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
+  echo "$FBASE.$REGID.fea" > "$TMPDIR/fea.lst";
+  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_baseHTKcfg" ) -H "$MODEL" -S "$TMPDIR/fea.lst" -m -I "$TMPDIR/$XMLBASE.mlf" -i "$TMPDIR/${XMLBASE}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
   [ "$?" != 0 ] &&
     echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
     return 1;
@@ -379,9 +405,9 @@ htrsh_pageimg_forcealign_regions () {
   echo "$align" > "$TMPDIR/var_align0.txt";
 
   local size=$(xmlstarlet sel -t -v //@imageWidth -o x -v //@imageHeight "$XML");
-  local fbox=$(xmlstarlet sel -t -m '//_:TextLine/_:Coords/@fpgram' -v . -n "$XML" \
+  local fbox=$(xmlstarlet sel -t -m "//*[@id=\"$REGID\"]/_:TextLine/_:Coords/@fpgram" -v . -n "$XML" \
                  | sed 's| |,|g; $!s|$|;|;' | tr -d '\n');
-  local frames=$(sed 's|.* ||;' "$NFRAMES" | tr '\n' ',' | sed 's|,$||');
+  local frames=$(sed 's|.* ||;' <( echo "$NFRAMES" ) | tr '\n' ',' | sed 's|,$||');
   local a=$(echo "$align" | sed 's|^[^ ]* ||; s| .*||; $!s|$|,|;' | tr -d '\n');
 
   ### Get parallelogram coordinates of alignments ###
@@ -445,8 +471,45 @@ htrsh_pageimg_forcealign_regions () {
 
   echo "$align" > "$TMPDIR/var_align.txt";
 
+  if [ "$htrsh_align_wordsplit" != "yes" ]; then
+    mv "$TMPDIR/var_align.txt" "$TMPDIR/var_align1.txt";
+
+    align=$(
+      echo "$align" \
+        | awk '
+            { ln[NR] = $1;
+              pgram[NR] = ( $2 " " $3 " " $4 " " $5 );
+              txt[NR] = $6;
+            }
+            END {
+              for( n=2; n<=NR; n++ )
+                if( ( ln[n] != ln[n-1] ) &&
+                    ! ( txt[n]=="@" || txt[n-1]=="@" ) ) {
+                  pS = n-1; while( pS > 1  && txt[pS-1] != "@" ) pS --;
+                  pF = n-1; while( pF < NR && txt[pF+1] != "@" ) pF ++;
+                  if( n - pS >= pF - n + 1 )
+                    for( m=n; m<=pF; m++ ) {
+                      ln[m] = ln[n-1];
+                      pgram[m] = pgram[n-1];
+                    }
+                  else
+                    for( m=pS; m<=n-1; m++ ) {
+                      ln[m] = ln[n];
+                      pgram[m] = pgram[n];
+                    }
+                }
+
+              for( n=1; n<=NR; n++ )
+                printf("%s %s %s\n",ln[n],pgram[n],txt[n]);
+            }'
+      );
+
+    echo "$align" > "$TMPDIR/var_align.txt";
+  fi
+
   ### Prepare command to add alignments to XML ###
-  local cmd="xmlstarlet ed -P -d //_:Word -d //_:Glyph";
+  local cmd="xmlstarlet ed";
+  cmd="$cmd -d '//*[@id=\"$REGID\"]/*/_:Word' -d '//*[@id=\"$REGID\"]/*/_:Glyph'";
 
   local id contour;
   local l="0";
@@ -466,9 +529,9 @@ htrsh_pageimg_forcealign_regions () {
 
     if [ "$l" != "$ll" ]; then
       l="$ll";
-      id=$(xmlstarlet sel -t -m "(//_:TextLine/_:Coords[@fpgram])[$l]" -v ../@id "$XML");
+      id=$(xmlstarlet sel -t -m "(//*[@id=\"$REGID\"]/_:TextLine/_:Coords[@fpgram])[$l]" -v ../@id "$XML");
       [ "$htrsh_align_isect" = "yes" ] &&
-        contour=$(xmlstarlet sel -t -v "//*[@id=\"${id}\"]/_:Coords/@points" "$XML");
+        contour=$(xmlstarlet sel -t -v "//*[@id=\"$id\"]/_:Coords/@points" "$XML");
     fi
 
     ### Word level alignments (left part if divided) ###
@@ -565,9 +628,9 @@ htrsh_pageimg_forcealign_regions () {
     ### Word spans two lines ###
     if [ "$L" = 2 ]; then
       l=$(echo "$a" | sort -nu | sed -n 2p);
-      id=$(xmlstarlet sel -t -m "(//_:TextLine/_:Coords[@fpgram])[$l]" -v ../@id "$XML");
+      id=$(xmlstarlet sel -t -m "(//*[@id=\"$REGID\"]/_:TextLine/_:Coords[@fpgram])[$l]" -v ../@id "$XML");
       [ "$htrsh_align_isect" = "yes" ] &&
-        contour=$(xmlstarlet sel -t -v "//*[@id=\"${id}\"]/_:Coords/@points" "$XML");
+        contour=$(xmlstarlet sel -t -v "//*[@id=\"$id\"]/_:Coords/@points" "$XML");
 
       ### Word level alignments (right part) ###
       pS=$(( pE + 1 ));
@@ -581,7 +644,7 @@ htrsh_pageimg_forcealign_regions () {
 
   local L="$l";
   for l in $(seq 1 $L); do
-    id=$(xmlstarlet sel -t -m "(//_:TextLine/_:Coords[@fpgram])[$l]" -v ../@id "$XML");
+    id=$(xmlstarlet sel -t -m "(//*[@id=\"$REGID\"]/_:TextLine/_:Coords[@fpgram])[$l]" -v ../@id "$XML");
 
     local text=$(echo "$align" | sed -n "/^$l /{ s|.* ||; s|@| |; p; }" | tr -d '\n' | sed 's|^ ||; s| $||;');
 
@@ -620,8 +683,9 @@ htrsh_pageimg_forcealign () {
   local KEEPAUX="no";
   local QBORD="no";
   if [ $# -lt 2 ]; then
-    { echo "$FN: error: not enough input arguments";
-      echo "Usage: $FN XMLIN XMLOUT [ OPTIONS ]";
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Does a forced alignment given only a page with baselines or contours and optionally a model";
+      echo "Usage: $FN XMLIN XMLOUT [ Options ]";
       echo "Options:";
       echo " -d TMPDIR    Directory for temporary files (def.=$TMPDIR)";
       echo " -i INRES     Input image resolution in ppc (def.=use image metadata)";
@@ -750,23 +814,8 @@ htrsh_pageimg_forcealign () {
     [ "$?" != 0 ] && return 1;
   fi
 
-  ### Concatenate line features to align whole region ###
-  if [ "$AREG" = "yes" ]; then
-    gunzip $TMPDIR/*.fea.gz;
-    local fea=$(head -n 1 $TMPDIR/${B}_feats.lst | sed 's|[^.]*\.fea|fea|');
-    for f in $(cat $TMPDIR/${B}_feats.lst); do
-      HList -r $f;
-    done > ${fea}~;
-    for f in $(cat $TMPDIR/${B}_feats.lst); do
-      echo $f | sed 's|.*/[^.]*\.[^.]*\.||; s|\.fea||' | tr '\n' ' ';
-      HList -h -z $f | sed -n '/Num Samples:/{ s|.*Num Samples: *||; s| .*||; p; }';
-    done > $TMPDIR/${B}_numframes.lst;
-
-    pfl2htk ${fea}~ ${fea} 2>/dev/null;
-    gzip ${fea};
-    rm $TMPDIR/*.fea ${fea}~;
-    echo "$fea" > $TMPDIR/${B}_feats.lst;
-  fi
+  [ "$AREG" = "yes" ] &&
+    htrsh_feats_catregions "$TMPDIR/${B}_feats.xml" "$TMPDIR" > $TMPDIR/${B}_feats.lst;
 
   ### Train HMMs model for this single page ###
   if [ "$MODEL" = "" ]; then
@@ -786,12 +835,17 @@ htrsh_pageimg_forcealign () {
   ### Do forced alignment using model ###
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): doing forced alignment ...";
   if [ "$AREG" = "yes" ]; then
-    # @todo how to handle multiple regions
-    htrsh_pageimg_forcealign_regions \
-      "$TMPDIR/${B}_feats.xml" "$TMPDIR/${B}_feats.lst" "$TMPDIR/${B}_numframes.lst" "$MODEL" \
-      "$XMLOUT" -d "$TMPDIR" \
-      > "$TMPDIR/${B}_forcealign.log";
-    [ "$?" != 0 ] && return 1;
+    cp "$TMPDIR/${B}_feats.xml" "$TMPDIR/${B}_align.xml";
+    local id;
+    for id in $(xmlstarlet sel -t -m "$htrsh_xpath_regions" -v @id -n "$XML"); do
+      echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): aligning region $id";
+      htrsh_pageimg_forcealign_region "$TMPDIR/${B}_align.xml" "$id" \
+        "$TMPDIR" "$MODEL" "$TMPDIR/${B}_align-.xml" -d "$TMPDIR" \
+        >> "$TMPDIR/${B}_forcealign.log";
+      [ "$?" != 0 ] && return 1;
+      mv "$TMPDIR/${B}_align-.xml" "$TMPDIR/${B}_align.xml";
+    done
+    cp -p "$TMPDIR/${B}_align.xml" "$XMLOUT";
   else
     htrsh_pageimg_forcealign_lines \
       "$TMPDIR/${B}_feats.xml" "$TMPDIR/${B}_feats.lst" "$MODEL" \
