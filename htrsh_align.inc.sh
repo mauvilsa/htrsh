@@ -1,14 +1,14 @@
 #!/bin/bash
 
-htrsh_align_chars="no"; # Whether to align at a character level
-htrsh_align_isect="yes"; # Whether to intersect parallelograms with line contour
-htrsh_align_prefer_baselines="yes"; # Whether to always generate contours from baselines
 htrsh_align_wordsplit="no"; # Whether to split words when aligning regions
+#htrsh_align_words="no"; # Whether to align at a word level when aligning regions
+
+htrsh_hmm_software="kaldi";
 
 #htrsh_hmm_iter="10";
 htrsh_keeptmp="1";
 #htrsh_imglineclean_opts="-m 99% -b 0";
-htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.5"; #htrsh_align_isect="no"; # Alc
+#htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.5"; #htrsh_align_isect="no"; # Alc
 #htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.2"; # Zwettl
 
 #htrsh_feat_deslant="no";
@@ -23,288 +23,14 @@ htrsh_feat_contour=$htrsh_align_isect;
 #-------------------------------------#
 
 ##
-## Function that does a forced alignment at a line level for a given XML Page, feature list and model
-##
-htrsh_pageimg_forcealign_lines () {
-  local FN="htrsh_pageimg_forcealign_lines";
-  local TMPDIR=".";
-  if [ $# -lt 4 ]; then
-    { echo "$FN: Error: Not enough input arguments";
-      echo "Description: Does a forced alignment at a line level for a given XML Page, feature list and model";
-      echo "Usage: $FN XMLIN FEATLST MODEL XMLOUT [ Options ]";
-      echo "Options:";
-      echo " -d TMPDIR    Directory for temporary files (def.=$TMPDIR)";
-    } 1>&2;
-    return 1;
-  fi
-
-  ### Parse input agruments ###
-  local XML="$1";
-  local FEATLST="$2";
-  local MODEL="$3";
-  local XMLOUT="$4";
-  shift 4;
-  while [ $# -gt 0 ]; do
-    if [ "$1" = "-d" ]; then
-      TMPDIR="$2";
-    else
-      echo "$FN: error: unexpected input argument: $1" 1>&2;
-      return 1;
-    fi
-    shift 2;
-  done
-
-  if ! [ -e "$FEATLST" ]; then
-    echo "$FN: error: feature list not found: $FEATLST" 1>&2;
-    return 1;
-  elif ! [ -e "$MODEL" ]; then
-    echo "$FN: error: model file not found: $MODEL" 1>&2;
-    return 1;
-  fi
-
-  local XMLBASE=$(echo "$XML" | sed 's|.*/||;s|\.xml$||;');
-
-  ### Create MLF from XML ###
-  htrsh_page_to_mlf "$XML" > "$TMPDIR/$XMLBASE.mlf";
-  [ "$?" != 0 ] &&
-    echo "$FN: error: problems creating MLF file: $XML" 1>&2 &&
-    return 1;
-
-  ### Create auxiliary files: HMM list and dictionary ###
-  local HMMLST=$(zcat "$MODEL" | sed -n '/^~h "/{ s|^~h "||; s|"$||; p; }');
-  local DIC=$(echo "$HMMLST" | awk '{printf("\"%s\" [%s] 1.0 %s\n",$1,$1,$1)}');
-
-  ### Do forced alignment with HVite ###
-  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_baseHTKcfg" ) -H "$MODEL" -S "$FEATLST" -m -I "$TMPDIR/$XMLBASE.mlf" -i "$TMPDIR/${XMLBASE}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
-  [ "$?" != 0 ] &&
-    echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
-    return 1;
-
-  htrsh_fix_rec_utf8 "$MODEL" "$TMPDIR/${XMLBASE}_aligned.mlf";
-
-  ### Prepare command to add alignments to XML ###
-  echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating Page XML with alignments ..." 1>&2;
-  local cmd="xmlstarlet ed -P -d //_:Word -d //_:Glyph";
-  #cp "$XML" "$XMLOUT";
-
-  [ "$htrsh_align_isect" = "yes" ] &&
-    local size=$(xmlstarlet sel -t -v //@imageWidth -o x -v //@imageHeight "$XML");
-
-  local ids=$(xmlstarlet sel -t -m //_:TextLine/_:Coords/@fpgram \
-                -v ../../@id -n "$XML");
-
-  #local TS=$(($(date +%s%N)/1000000));
-
-  local aligns=$(
-    awk '
-      { if( NR > 1 ) {
-          if( match( $0, /\.rec"$/ ) )
-            LID = gensub(/.*\.([^.]+)\.rec"$/, "\\1", "", $0 );
-          else if( $0 != "." ) {
-            NF = 3;
-            $2 = $2/100000-1 ;
-            $1 = $1==0 ? 0 : $1/100000-1 ;
-            $1 = ( LID " " $1 );
-            print;
-          }
-        }
-      }
-      ' "$TMPDIR/${XMLBASE}_aligned.mlf"
-      );
-
-  local acoords=$(
-    echo "
-      fpgram = [ "$(
-        xmlstarlet sel -t -m //@fpgram -v . -n "$XML" \
-          | sed 's| |,|g; $!s|$|;|;' \
-          | tr -d '\n'
-          )" ];
-      aligns = [ "$(
-        echo "$aligns" \
-          | awk '
-              { if( FILENAME != "-" )
-                  rid[$1] = FNR;
-                else
-                  printf("%s,%s\n",rid[$1],$3);
-              }' <( echo "$ids" ) - \
-          | sed '$!s|$|;|' \
-          | tr -d '\n'
-          )" ];
-
-      for l = unique(aligns(:,1))'
-        a = [ aligns( aligns(:,1)==l, 2 ) ];
-        a = [ 0 a(1:end-1)'; a' ]';
-        f = reshape(fpgram(l,:),2,4)';
-
-        dx = ( f(2,1)-f(1,1) ) / a(end) ;
-        dy = ( f(2,2)-f(1,2) ) / a(end) ;
-
-        xup = round( f(1,1) + dx*a );
-        yup = round( f(1,2) + dy*a );
-        xdown = round( f(4,1) + dx*a );
-        ydown = round( f(4,2) + dy*a );
-
-        for n = 1:size(a,1)
-          printf('%d %d,%d %d,%d %d,%d %d,%d\n',
-            l,
-            xdown(n,1), ydown(n,1),
-            xup(n,1), yup(n,1),
-            xup(n,2), yup(n,2),
-            xdown(n,2), ydown(n,2) );
-        end
-      end" \
-    | octave -q \
-    | awk '
-        { if( FILENAME != "-" )
-            rid[FNR] = $1;
-          else {
-            $1 = rid[$1];
-            print;
-          }
-        }' <( echo "$ids" ) - ;
-    );
-
-  #local TE=$(($(date +%s%N)/1000000)); echo "time 0: $((TE-TS)) ms" 1>&2; TS="$TE";
-
-  local n;
-  for n in $(seq 1 $(wc -l < "$FEATLST")); do
-    local id=$(sed -n "$n"'{ s|.*\.\([^.]*\)\.fea$|\1|; p; }' "$FEATLST");
-
-    echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): alignments for line $n (id=$id) ..." 1>&2;
-
-    [ "$htrsh_align_isect" = "yes" ] &&
-      local contour=$(xmlstarlet sel -t -v '//*[@id="'$id'"]/_:Coords/@points' "$XML");
-
-    local align=$(echo "$aligns" | sed -n "/^$id /{ s|^$id ||; p; }");
-    [ "$align" = "" ] && continue;
-    local coords=$(echo "$acoords" | sed -n "/^$id /{ s|^$id ||; p; }");
-
-    #local cmd="xmlstarlet ed -P --inplace -d '//*[@id=\"${id}\"]/_:TextEquiv'";
-    cmd="$cmd -d '//*[@id=\"$id\"]/_:TextEquiv'";
-
-    #TE=$(($(date +%s%N)/1000000)); echo "time 1: $((TE-TS)) ms" 1>&2; TS="$TE";
-
-    ### Word level alignments ###
-    local W=$(echo "$align" | grep ' @$' | wc -l); W=$((W-1));
-    local w;
-    for w in $(seq 1 $W); do
-      #TE=$(($(date +%s%N)/1000000)); echo "time 2: $((TE-TS)) ms" 1>&2; TS="$TE";
-      local ww=$(printf %.2d $w);
-      local pS=$(echo "$align" | grep -n ' @$' | sed -n "$w{s|:.*||;p;}"); pS=$((pS+1));
-      local pE=$(echo "$align" | grep -n ' @$' | sed -n "$((w+1)){s|:.*||;p;}"); pE=$((pE-1));
-      local pts;
-      if [ "$pS" = "$pE" ]; then
-        pts=$(echo "$coords" | sed -n "${pS}p");
-      else
-        pts=$(echo "$coords" \
-          | sed -n "$pS{s| [^ ]* [^ ]*$||;p;};$pE{s|^[^ ]* [^ ]* ||;p;};" \
-          | tr '\n' ' ' \
-          | sed 's| $||');
-      fi
-      #TE=$(($(date +%s%N)/1000000)); echo "time 3: $((TE-TS)) ms" 1>&2; TS="$TE";
-
-      [ "$htrsh_align_isect" = "yes" ] &&
-        pts=$(
-          eval $(
-            { echo "$pts";
-              echo "$contour";
-            } | awk -F'[ ,]' -v sz=$size '
-              BEGIN {
-                printf( "convert -fill white -stroke white" );
-              }
-              { if( NR == 1 ) {
-                  mn_x=$1; mx_x=$1;
-                  mn_y=$2; mx_y=$2;
-                  for( n=3; n<=NF; n+=2 ) {
-                    if( mn_x > $n ) mn_x = $n;
-                    if( mx_x < $n ) mx_x = $n;
-                    if( mn_y > $(n+1) ) mn_y = $(n+1);
-                    if( mx_y < $(n+1) ) mx_y = $(n+1);
-                  }
-                  w = mx_x-mn_x+1;
-                  h = mx_y-mn_y+1;
-                }
-                printf( " \\( -size %dx%d xc:black -draw \"polyline", w, h );
-                for( n=1; n<=NF; n+=2 )
-                  printf( " %d,%d", $n-mn_x, $(n+1)-mn_y );
-                printf( "\" \\)" );
-              }
-              END {
-                printf( " -compose darken -composite -page %s+%d+%d miff:-\n", sz, mn_x, mn_y );
-              }
-              ' ) \
-            | imgccomp -V0 -JS - );
-
-      #TE=$(($(date +%s%N)/1000000)); echo "time 4: $((TE-TS)) ms" 1>&2; TS="$TE";
-
-      cmd="$cmd -s '//*[@id=\"$id\"]' -t elem -n TMPNODE";
-      cmd="$cmd -i '//TMPNODE' -t attr -n id -v '${id}_w${ww}'";
-      cmd="$cmd -s '//TMPNODE' -t elem -n Coords";
-      cmd="$cmd -i '//TMPNODE/Coords' -t attr -n points -v '$pts'";
-      cmd="$cmd -r '//TMPNODE' -v Word";
-
-      ### Character level alignments ###
-      if [ "$htrsh_align_chars" = "yes" ]; then
-        local g=1;
-        local c;
-        for c in $(seq $pS $pE); do
-          local gg=$(printf %.2d $g);
-          local pts=$(echo "$coords" | sed -n "${c}p");
-          local text=$(echo "$align" | sed -n "$c{s|.* ||;p;}" | tr -d '\n');
-
-          cmd="$cmd -s '//*[@id=\"${id}_w${ww}\"]' -t elem -n TMPNODE";
-          cmd="$cmd -i '//TMPNODE' -t attr -n id -v '${id}_w${ww}_g${gg}'";
-          cmd="$cmd -s '//TMPNODE' -t elem -n Coords";
-          cmd="$cmd -i '//TMPNODE/Coords' -t attr -n points -v '$pts'";
-          cmd="$cmd -s '//TMPNODE' -t elem -n TextEquiv";
-          cmd="$cmd -s '//TMPNODE/TextEquiv' -t elem -n Unicode -v '$text'";
-          cmd="$cmd -r '//TMPNODE' -v Glyph";
-
-          g=$((g+1));
-        done
-      fi
-
-      #TE=$(($(date +%s%N)/1000000)); echo "time 5: $((TE-TS)) ms" 1>&2; TS="$TE";
-
-      local text=$(echo "$align" | sed -n "$pS,$pE{s|.* ||;p;}" | tr -d '\n');
-
-      cmd="$cmd -s '//*[@id=\"${id}_w${ww}\"]' -t elem -n TextEquiv";
-      cmd="$cmd -s '//*[@id=\"${id}_w${ww}\"]/TextEquiv' -t elem -n Unicode -v '$text'";
-
-      #TE=$(($(date +%s%N)/1000000)); echo "time 6: $((TE-TS)) ms" 1>&2; TS="$TE";
-    done
-
-    local text=$(echo "$align" | sed -n '1d; $d; s|.* ||; s|@| |; p;' | tr -d '\n');
-
-    cmd="$cmd -s '//*[@id=\"$id\"]' -t elem -n TextEquiv";
-    cmd="$cmd -s '//*[@id=\"$id\"]/TextEquiv' -t elem -n Unicode -v '$text'";
-    #eval $cmd "$XMLOUT";
-  done
-
-  echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): edit XML ..." 1>&2;
-  ### Create new XML including alignments ###
-  eval $cmd "$XML" > "$XMLOUT";
-  [ "$?" != 0 ] &&
-    echo "$FN: error: problems creating XML file: $XMLOUT" 1>&2 &&
-    return 1;
-
-  htrsh_fix_rec_names "$XMLOUT";
-
-  [ "$htrsh_keeptmp" -lt 1 ] &&
-    rm -f "$TMPDIR/$XMLBASE.mlf" "$TMPDIR/${XMLBASE}_aligned.mlf";
-
-  return 0;
-}
-
-##
-## Function that does a forced alignment for a region given and XML Page file, model and directory to find the features
+## Function that does a forced alignment for a region given an XML Page file, model and directory to find the features
 ##
 htrsh_pageimg_forcealign_region () {
   local FN="htrsh_pageimg_forcealign_region";
   local TMPDIR=".";
   if [ $# -lt 5 ]; then
     { echo "$FN: Error: Not enough input arguments";
-      echo "Description: Does a forced alignment for a region given and XML Page file, model and directory to find the features";
+      echo "Description: Does a forced alignment for a region given an XML Page file, model and directory to find the features";
       echo "Usage: $FN XMLIN REGID FEATDIR MODEL XMLOUT [ Options ]";
       echo "Options:";
       echo " -d TMPDIR    Directory for temporary files (def.=$TMPDIR)";
@@ -329,10 +55,10 @@ htrsh_pageimg_forcealign_region () {
     shift 2;
   done
 
-  if ! [ -e "$MODEL" ]; then
-    echo "$FN: error: model file not found: $MODEL" 1>&2;
-    return 1;
-  fi
+  #if ! [ -e "$MODEL" ]; then
+  #  echo "$FN: error: model file not found: $MODEL" 1>&2;
+  #  return 1;
+  #fi
 
   ### Check page and obtain basic info ###
   local XMLDIR IMFILE IMSIZE IMRES;
@@ -362,7 +88,14 @@ htrsh_pageimg_forcealign_region () {
   local XMLBASE=$(echo "$XML" | sed 's|.*/||;s|\.xml$||;');
 
   ### Create MLF from XML ###
-  htrsh_page_to_mlf "$XML" -r yes > "$TMPDIR/$XMLBASE.mlf";
+  if [ "$htrsh_hmm_software" = "htk" ]; then
+
+  if [ ! -e "$MODEL" ]; then
+    echo "$FN: error: model file not found: $MODEL" 1>&2;
+    return 1;
+  fi
+
+  htrsh_pagexml_to_mlf "$XML" -r yes > "$TMPDIR/$XMLBASE.mlf";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems creating MLF file: $XML" 1>&2 &&
     return 1;
@@ -378,7 +111,222 @@ htrsh_pageimg_forcealign_region () {
     echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
     return 1;
 
-  htrsh_fix_rec_utf8 "$MODEL" "$TMPDIR/${XMLBASE}_aligned.mlf";
+  #htrsh_fix_rec_utf8 "$MODEL" "$TMPDIR/${XMLBASE}_aligned.mlf";
+
+
+  elif [ "$htrsh_hmm_software" = "kaldi" ]; then
+
+    local REPLACE=$(echo "$MODEL" | awk -F: '{print $5}');
+    local CHARIDS=$(echo "$MODEL" | awk -F: '{print $4}');
+    local WORDIDS=$(echo "$MODEL" | awk -F: '{print $3}');
+    local FSTS=$(echo "$MODEL" | awk -F: '{print $2}');
+    MODEL=$(echo "$MODEL" | awk -F: '{print $1}');
+
+    if [ ! -e "$MODEL" ]; then
+      echo "$FN: error: model file not found: $MODEL" 1>&2;
+      return 1;
+    elif [ ! -e "$FSTS" ]; then
+      echo "$FN: error: transcription FST not found: $FSTS" 1>&2;
+      return 1;
+    elif [ ! -e "$WORDIDS" ]; then
+      echo "$FN: error: word identifier list not found: $WORDIDS" 1>&2;
+      return 1;
+    elif [ ! -e "$CHARIDS" ]; then
+      echo "$FN: error: character identifier list not found: $WORDIDS" 1>&2;
+      return 1;
+    elif [ "$REPLACE" != "" ] && [ ! -e "$REPLACE" ]; then
+      echo "$FN: error: replacement list not found: $REPLACE" 1>&2;
+      return 1;
+    fi
+
+    if [ $(file "$FSTS" | grep gzip | wc -l) = 0 ]; then
+      FSTS="ark:$FSTS";
+    else
+      FSTS="ark:zcat $FSTS |";
+    fi
+
+    ls "$FEATDIR/$XMLBASE.$REGID.fea" \
+      | htrsh_feats_htk_to_kaldi "$TMPDIR/${XMLBASE//,/-}.$REGID" 2>/dev/null;
+
+    local ALIGN=$(
+       gmm-align-compiled+ --write-outlabels --transition-scale=1.0 --acoustic-scale=0.1 --self-loop-scale=0.1 --beam=1000 --retry-beam=2000 "$MODEL" "$FSTS" "scp:$TMPDIR/${XMLBASE//,/-}.$REGID.scp" ark,t:- 2>/dev/null
+       );
+
+    if [ "$?" != 0 ] || [ "$ALIGN" = "" ]; then
+      echo "$FN: error: problems aligning with gmm-align-compiled+: $XML" 1>&2;
+      return 1;
+    fi
+
+    rm "$TMPDIR/${XMLBASE//,/-}.$REGID".{ark,scp};
+
+    { echo "$ALIGN" \
+        | awk '
+            { w = 0;
+              for( n=3; n<NF; n+=3 )
+                if( $n != 0 ) {
+                  printf( "%s%d %d", w==0?"":" ", $n, (n/3)-1 );
+                  w ++;
+                }
+              printf( "\n" );
+            }';
+      echo "$ALIGN" \
+        | sed 's|[0-9]\{1,\} ; ||g; s| [0-9]\{1,\} *$||;' \
+        | ali-to-phones --write-lengths "$MODEL" ark:- ark,t:- 2>/dev/null \
+        | sed 's|^[^ ]* ||; s| ;||g; s|  *$||;';
+    } | awk '
+          BEGIN {
+            print( "#!MLF!#" );
+            print( "\"*/'"$XMLBASE.$REGID"'.rec\"" );
+          }
+          { if( FILENAME == "'"$WORDIDS"'" )
+              words[$2] = $1;
+            else if( FILENAME == "'"$CHARIDS"'" )
+              chars[$2] = $1;
+            else if( FILENAME == "'"$REPLACE"'" )
+              replc[( $2 "|" $3 )] = $1;
+            else {
+              if( FNR == 1 ) {
+                NWORDS = NF/2;
+                for( n=1; n<NF; n+=2 ) {
+                  word[(n+1)/2] = words[$n];
+                  wordpos[(n+1)/2] = $(n+1);
+                }
+              }
+              else {
+                f = 0;
+                w = 1;
+                c = 1;
+                while( c < NF ) {
+                  if( chars[$c] != "0x20" )
+                    printf( "%d %d @\n", f, f );
+                  else {
+                    printf( "%d %d @\n", f, f+$(c+1)-1 );
+                    f += $(c+1);
+                    c += 2;
+                    if( c > NF )
+                      break;
+                  }
+                  if( f != wordpos[w] ) {
+                    printf("error: expected word %d in frame %d but reached this point in frame %d\n",word[w],wordpos[w],f) > "/dev/stderr";
+                    exit 1;
+                  }
+                  printf( "%d", f );
+                  ww = "";
+                  while( c < NF && 
+                         chars[$c] != "0x20" &&
+                         ( w == NWORDS || f < wordpos[w+1] ) ) {
+                    ww = ( ww chars[$c] );
+                    f += $(c+1);
+                    c += 2;
+                  }
+                  printf( " %d", f-1 );
+                  if( ww != word[w] ) {
+                    if( ( ww "|" word[w] ) in replc )
+                      ww = replc[( ww "|" word[w] )];
+                    else {
+                      ww1 = gensub( /[.,:;?\x27\x22-]*([^.,:;?\x27\x22-]+)[.,:;?\x27\x22-]*/, "\\1", "", word[w] );
+                      ww2 = gensub( /[.,:;?\x27\x22-]*([^.,:;?\x27\x22-]+)[.,:;?\x27\x22-]*/, "\\1", "", ww );
+                      #printf("abbrev: %s => %s (%s => %s)\n",word[w],ww,ww1,ww2) > "/dev/stderr";
+                      if( ( ww2 "|" ww1 ) in replc )
+                      ww = gensub( ("([.,:;?\x27\x22-]*)" ww2 "([.,:;?\x27\x22-]*)"), ("\\1" replc[( ww2 "|" ww1 )] "\\2"), "", ww );
+                    }
+                    ww = ( ww "$." word[w] );
+                  }
+                  printf( " %s\n", ww );
+                  w += 1;
+                }
+                if( w <= NWORDS ) {
+                  printf("error: more words than consumed characters\n") > "/dev/stderr";
+                  exit 1;
+                }
+                if( chars[$(NF-1)] != "0x20" )
+                  printf( "%d %d @\n", f-1, f-1 );
+              }
+            }
+          }
+          END {
+            print( "." );
+          }
+          ' "$WORDIDS" "$CHARIDS" "$REPLACE" - \
+      | awk '{if(NF==3){$1=100000*$1;$2=100000*$2;}print;}' \
+      | sed '
+          /^"/!s|"|{dquote}|g;
+          s|'"'"'|{quote}|g;
+          ' \
+      > "$TMPDIR/${XMLBASE}_aligned.mlf";
+
+    #sed -n '1p; /\/'$XMLBASE.$REGID'.rec"$/{ :loop; N; /\n\.$/!b loop; p; };' align.mlf \
+    #  | awk '{if(NF==3){$1=100000*$1;$2=100000*$2;}print;}' \
+    #  | sed "s|'|{quote}|g" \
+    #  > "$TMPDIR/${XMLBASE}_aligned.mlf";
+
+
+if false; then
+
+awk '{printf("%s #1\n",$0)}' kaldi/train/local/dict/lexiconp.txt > kaldi/train/local/dict/lexiconp+.txt;
+
+phone_disambig_symbol=$(grep \#0 kaldi/train/lang/phones.txt | awk '{print $2}');
+utils/make_lexicon_fst.pl \
+    --pron-probs kaldi/train/local/dict/lexiconp+.txt 0.5 0x20 '#1' \
+  | fstcompile \
+      --isymbols=kaldi/train/lang/phones.txt \
+      --osymbols=kaldi/train/lang/words.txt \
+      --keep_isymbols=false --keep_osymbols=false \
+  | fstarcsort --sort_type=olabel \
+  > kaldi/train/lang/L+.fst #|| exit 1;
+#  | fstaddselfloops \
+#    "echo $phone_disambig_symbol |" "echo |" \
+
+grep ^$XMLBASE.$REGID kaldi/train/text > kaldi/train/text+;
+
+compile-train-graphs kaldi/ns6/tree kaldi/ns6/gmm_7872/it_4/mdl kaldi/train/lang/L+.fst \
+    "ark:utils/sym2int.pl -f 2- kaldi/train/lang/words.txt < kaldi/train/text+ |" \
+    "ark:| gzip -c > kaldi/ns6/fsts+.gz" #|| exit 1;
+
+
+    { echo "$ALIGN" \
+        | awk '
+            { w = 0;
+              for( n=3; n<NF; n+=3 )
+                if( $n != 0 ) {
+                  printf( "%s%d %d", w==0?"":" ", $n, (n/3)-1 );
+                  w ++;
+                }
+              printf( "\n" );
+            }';
+      echo "$ALIGN" \
+        | sed 's|[0-9]\{1,\} ; ||g; s| [0-9]\{1,\} *$||;' \
+        | ali-to-phones --write-lengths "$MODEL" ark:- ark,t:- 2>/dev/null \
+        | sed 's|^[^ ]* ||; s| ;||g; s|  *$||;';
+    } | awk '
+          { if( FILENAME == "'"$WORDIDS"'" )
+              words[$2] = $1;
+            else if( FILENAME == "'"$CHARIDS"'" )
+              chars[$2] = $1;
+            else {
+              if( FNR == 1 ) {
+                for( n=1; n<NF; n+=2 )
+                  word[$(n+1)] = words[$n];
+              }
+              else {
+                f = 0;
+                for( c=1; c<NF; c+=2 ) {
+                  if( f in word )
+                    printf( "%s : %s\n", chars[$c], word[f] );
+                  else
+                    printf( "%s : %s\n", chars[$c], "<eps>" );
+                    f += $(c+1);
+                }
+              }
+            }
+          }
+          ' "$WORDIDS" "$CHARIDS" - | less
+
+
+fi
+
+
+  fi
 
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating Page XML with alignments ..." 1>&2;
 
@@ -402,7 +350,7 @@ htrsh_pageimg_forcealign_region () {
             }'
       );
 
-  echo "$align" > "$TMPDIR/var_align0.txt";
+  #echo "$align" > "$TMPDIR/var_align0.txt";
 
   local size=$(xmlstarlet sel -t -v //@imageWidth -o x -v //@imageHeight "$XML");
   local fbox=$(xmlstarlet sel -t -m "//*[@id=\"$REGID\"]/_:TextLine/_:Coords/@fpgram" -v . -n "$XML" \
@@ -464,15 +412,15 @@ htrsh_pageimg_forcealign_region () {
             coords(k,5), coords(k,6),
             coords(k,7), coords(k,8) );
         end" \
-      | tee "$TMPDIR/var_align.m" \
       | octave -q \
       | paste -d " " - <( echo "$align" | awk '{print $NF}' )
+      #| tee "$TMPDIR/var_align.m" \
     );
 
-  echo "$align" > "$TMPDIR/var_align.txt";
+  #echo "$align" > "$TMPDIR/var_align.txt";
 
   if [ "$htrsh_align_wordsplit" != "yes" ]; then
-    mv "$TMPDIR/var_align.txt" "$TMPDIR/var_align1.txt";
+    #mv "$TMPDIR/var_align.txt" "$TMPDIR/var_align1.txt";
 
     align=$(
       echo "$align" \
@@ -504,7 +452,7 @@ htrsh_pageimg_forcealign_region () {
             }'
       );
 
-    echo "$align" > "$TMPDIR/var_align.txt";
+    #echo "$align" > "$TMPDIR/var_align.txt";
   fi
 
   ### Prepare command to add alignments to XML ###
@@ -538,6 +486,8 @@ htrsh_pageimg_forcealign_region () {
     local g=1;
 
     word_and_char_align () {
+      if [ "$htrsh_align_words" = "yes" ]; then
+
       if [ "$pS" = "$pE" ]; then
         pts=$(echo "$align" | sed -n "$pS{ s|^[^ ]* ||; s| [^ ]*$||; p; q; }");
       else
@@ -591,6 +541,8 @@ htrsh_pageimg_forcealign_region () {
       cmd="$cmd -i '//TMPNODE/Coords' -t attr -n points -v '$pts'";
       cmd="$cmd -r '//TMPNODE' -v Word";
 
+      fi
+
       ### Character level alignments ###
       if [ "$htrsh_align_chars" = "yes" ]; then
         local c;
@@ -621,9 +573,9 @@ htrsh_pageimg_forcealign_region () {
     ### Check if word spans multiple lines ###
     local L=$(echo "$a" | sort -u | wc -l);
     [ "$L" -gt 2 ] &&
-      echo "$a" >> "$TMPDIR/var_a.txt" &&
       echo "$FN: error: word spans more than $L lines, this possibility not considered yet: $XML" 1>&2 &&
       return 1;
+      #echo "$a" >> "$TMPDIR/var_a.txt" &&
 
     ### Word spans two lines ###
     if [ "$L" = 2 ]; then
@@ -654,7 +606,7 @@ htrsh_pageimg_forcealign_region () {
   done
 
   ### Create new XML including alignments ###
-  echo eval $cmd "$XML" > "$TMPDIR/var_cmd.txt";
+  #echo eval $cmd "$XML" > "$TMPDIR/var_cmd.txt";
   eval $cmd "$XML" > "$XMLOUT";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems creating XML file: $XMLOUT" 1>&2 &&
@@ -664,204 +616,6 @@ htrsh_pageimg_forcealign_region () {
 
   [ "$htrsh_keeptmp" -lt 1 ] &&
     rm -f "$TMPDIR/$XMLBASE.mlf" "$TMPDIR/${XMLBASE}_aligned.mlf";
-
-  return 0;
-}
-
-##
-## Function that does a forced alignment given only a page with baselines or contours and optionally a model
-##
-htrsh_pageimg_forcealign () {
-  local FN="htrsh_pageimg_forcealign";
-  local TS=$(date +%s);
-  local TMPDIR="./_forcealign";
-  local INRES="";
-  local MODEL="";
-  local PBASE="";
-  local DOPCA="yes";
-  local KEEPTMP="no";
-  local KEEPAUX="no";
-  local QBORD="no";
-  if [ $# -lt 2 ]; then
-    { echo "$FN: Error: Not enough input arguments";
-      echo "Description: Does a forced alignment given only a page with baselines or contours and optionally a model";
-      echo "Usage: $FN XMLIN XMLOUT [ Options ]";
-      echo "Options:";
-      echo " -d TMPDIR    Directory for temporary files (def.=$TMPDIR)";
-      echo " -i INRES     Input image resolution in ppc (def.=use image metadata)";
-      echo " -m MODEL     Use model for aligning (def.=train model for page)";
-      echo " -b PBASE     Project features using given base (def.=false)";
-      echo " -p (yes|no)  Whether to compute PCA for image and project features (def.=$DOPCA)";
-      echo " -t (yes|no)  Whether to keep temporary directory and files (def.=$KEEPTMP)";
-      echo " -a (yes|no)  Whether to keep auxiliary attributes in XML (def.=$KEEPAUX)";
-      echo " -q (yes|no)  Whether to clean quadrilateral border of regions (def.=$QBORD)";
-    } 1>&2;
-    return 1;
-  fi
-
-  ### Parse input agruments ###
-  local XML="$1";
-  local XMLOUT="$2";
-  shift 2;
-  while [ $# -gt 0 ]; do
-    if [ "$1" = "-d" ]; then
-      TMPDIR=$(echo "$2" | sed '/^[./]/!s|^|./|');
-    elif [ "$1" = "-i" ]; then
-      INRES="$2";
-    elif [ "$1" = "-m" ]; then
-      MODEL="$2";
-    elif [ "$1" = "-b" ]; then
-      PBASE="$2";
-    elif [ "$1" = "-p" ]; then
-      DOPCA="$2";
-    elif [ "$1" = "-t" ]; then
-      KEEPTMP="$2";
-    elif [ "$1" = "-a" ]; then
-      KEEPAUX="$2";
-    elif [ "$1" = "-q" ]; then
-      QBORD="$2";
-    else
-      echo "$FN: error: unexpected input argument: $1" 1>&2;
-      return 1;
-    fi
-    shift 2;
-  done
-
-  if [ -d "$TMPDIR" ]; then
-    echo -n "$FN: temporary directory ($TMPDIR) already exists, continue? " 1>&2;
-    local RMTMP="";
-    read RMTMP;
-    if [ "${RMTMP:0:1}" = "y" ]; then
-      rm -r "$TMPDIR";
-    else
-      echo "$FN: aborting ..." 1>&2;
-      return 1;
-    fi
-  fi
-
-  ### Check page ###
-  htrsh_pageimg_info "$XML" noinfo;
-  [ "$?" != 0 ] && return 1;
-
-  local RCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextEquiv/_:Unicode)" "$XML");
-  local LCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextLine/_:TextEquiv/_:Unicode)" "$XML");
-  [ "$RCNT" = 0 ] && [ "$LCNT" = 0 ] &&
-    echo "$FN: error: no TextEquiv/Unicode nodes for processing: $XML" 1>&2 &&
-    return 1;
-
-  local WGCNT=$(xmlstarlet sel -t -v 'count(//_:Word)' -o ' ' -v 'count(//_:Glyph)' "$XML");
-  [ "$WGCNT" != "0 0" ] &&
-    echo "$FN: warning: input already contains Word and/or Glyph information: $XML" 1>&2;
-
-  local AREG="no"; [ "$LCNT" = 0 ] && AREG="yes";
-
-  mkdir -p "$TMPDIR";
-
-  local I=$(xmlstarlet sel -t -v //@imageFilename "$XML");
-  local B=$(echo "$XML" | sed 's|.*/||; s|\.[^.]*$||;');
-
-  echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): processing page: $XML";
-
-  ### Clean page image ###
-  echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): enhancing page image ...";
-  [ "$INRES" != "" ] && INRES="-i $INRES";
-  htrsh_pageimg_clean "$XML" "$TMPDIR" $INRES \
-    > "$TMPDIR/${B}_pageclean.log";
-  [ "$?" != 0 ] && return 1;
-
-  ### Clean quadrilateral borders ###
-  if [ "$QBORD" = "yes" ]; then
-    echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): cleaning quadrilateral borders ...";
-    local II=$(echo $I | sed 's|.*/||; s|\.[^.]*$||');
-    htrsh_pageimg_quadborderclean "$TMPDIR/${B}.xml" "$TMPDIR/${II}_nobord.png" -d "$TMPDIR";
-    [ "$?" != 0 ] && return 1;
-    mv "$TMPDIR/${II}_nobord.png" "$TMPDIR/${II}.png";
-  fi
-
-  ### Generate contours from baselines ###
-  if [ $(xmlstarlet sel -t -v 'count(//'"$htrsh_xpath_regions"'/_:TextLine/_:Coords[@points and @points!="0,0 0,0"])' "$TMPDIR/$B.xml") = 0 ] ||
-     [ "$htrsh_align_prefer_baselines" = "yes" ]; then
-    echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating line contours from baselines ...";
-    page_format_generate_contour -a 75 -d 25 -p "$TMPDIR/$B.xml" -o "$TMPDIR/${B}_contours.xml";
-    [ "$?" != 0 ] &&
-      echo "$FN: error: page_format_generate_contour failed" 1>&2 &&
-      return 1;
-  else
-    mv "$TMPDIR/$B.xml" "$TMPDIR/${B}_contours.xml";
-  fi
-
-  ### Extract line features ###
-  echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): extracting line features ...";
-  htrsh_pageimg_extract_linefeats \
-    "$TMPDIR/${B}_contours.xml" "$TMPDIR/${B}_feats.xml" \
-    -d "$TMPDIR" -l "$TMPDIR/${B}_feats.lst" \
-    > "$TMPDIR/${B}_linefeats.log";
-  [ "$?" != 0 ] && return 1;
-
-  ### Compute PCA and project features ###
-  if [ "$DOPCA" = "yes" ]; then
-    echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): computing PCA for page ...";
-    PBASE="$TMPDIR/pcab.mat.gz";
-    htrsh_feats_pca "$TMPDIR/${B}_feats.lst" "$PBASE" -e "1:4" -r 24 -d "$TMPDIR";
-    [ "$?" != 0 ] && return 1;
-  fi
-  if [ "$PBASE" != "" ]; then
-    [ ! -e "$PBASE" ] &&
-      echo "$FN: error: projection base file not found: $PBASE" 1>&2 &&
-      return 1;
-    echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): projecting features ...";
-    htrsh_feats_project "$TMPDIR/${B}_feats.lst" "$PBASE" "$TMPDIR";
-    [ "$?" != 0 ] && return 1;
-  fi
-
-  [ "$AREG" = "yes" ] &&
-    htrsh_feats_catregions "$TMPDIR/${B}_feats.xml" "$TMPDIR" > $TMPDIR/${B}_feats.lst;
-
-  ### Train HMMs model for this single page ###
-  if [ "$MODEL" = "" ]; then
-    echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): training model for page ...";
-    htrsh_page_to_mlf "$TMPDIR/${B}_feats.xml" -r $AREG > "$TMPDIR/${B}_page.mlf";
-    [ "$?" != 0 ] && return 1;
-    htrsh_hmm_train \
-      "$TMPDIR/${B}_feats.lst" "$TMPDIR/${B}_page.mlf" -d "$TMPDIR" \
-      > "$TMPDIR/${B}_hmmtrain.log";
-    [ "$?" != 0 ] && return 1;
-    MODEL="$TMPDIR/Macros_hmm_g$(printf %.3d $htrsh_hmm_nummix).gz";
-  fi
-  [ ! -e "$MODEL" ] &&
-    echo "$FN: error: model file not found: $MODEL" 1>&2 &&
-    return 1;
-
-  ### Do forced alignment using model ###
-  echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): doing forced alignment ...";
-  if [ "$AREG" = "yes" ]; then
-    cp "$TMPDIR/${B}_feats.xml" "$TMPDIR/${B}_align.xml";
-    local id;
-    for id in $(xmlstarlet sel -t -m "$htrsh_xpath_regions" -v @id -n "$XML"); do
-      echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): aligning region $id";
-      htrsh_pageimg_forcealign_region "$TMPDIR/${B}_align.xml" "$id" \
-        "$TMPDIR" "$MODEL" "$TMPDIR/${B}_align-.xml" -d "$TMPDIR" \
-        >> "$TMPDIR/${B}_forcealign.log";
-      [ "$?" != 0 ] && return 1;
-      mv "$TMPDIR/${B}_align-.xml" "$TMPDIR/${B}_align.xml";
-    done
-    cp -p "$TMPDIR/${B}_align.xml" "$XMLOUT";
-  else
-    htrsh_pageimg_forcealign_lines \
-      "$TMPDIR/${B}_feats.xml" "$TMPDIR/${B}_feats.lst" "$MODEL" \
-      "$XMLOUT" -d "$TMPDIR" \
-      > "$TMPDIR/${B}_forcealign.log";
-    [ "$?" != 0 ] && return 1;
-  fi 2>&1;
-
-  [ "$KEEPTMP" != "yes" ] && rm -r "$TMPDIR";
-
-  local ed="-u //@imageFilename -v '$I'";
-  [ "$KEEPAUX" != "yes" ] && ed="$ed -d //@fpgram -d //@fcontour";
-
-  eval xmlstarlet ed --inplace $ed "$XMLOUT";
-
-  echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): finished, $(( $(date +%s)-TS )) seconds";
 
   return 0;
 }
