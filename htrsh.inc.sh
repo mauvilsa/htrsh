@@ -24,7 +24,9 @@ htrsh_keeptmp="0";
 
 htrsh_text_translit="no";
 
-htrsh_xpath_regions='//_:TextRegion'; # XPATH for selecting Page regions to process
+htrsh_xpath_regions='//_:TextRegion';    # XPATH for selecting Page regions to process
+#htrsh_xpath_lines='_:TextLine/_:Coords'; # XPATH for selecting lines (appended to htrsh_xpath_regions)
+htrsh_xpath_lines='_:TextLine[_:Coords and _:TextEquiv/_:Unicode]';
 
 htrsh_imgtxtenh_regmask="no";                # Whether to use a region-based processing mask
 htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.1"; # Options for imgtxtenh tool
@@ -34,7 +36,7 @@ htrsh_feat_deslope="yes"; # Whether to correct slope per line
 htrsh_feat_deslant="yes"; # Whether to correct slant of the text
 htrsh_feat_padding="1.0"; # Left and right white padding in mm for line images
 htrsh_feat_contour="yes"; # Whether to compute connected components contours
-htrsh_feat_dilradi="0.0"; # Dilation radius in mm for contours
+htrsh_feat_dilradi="0.5"; # Dilation radius in mm for contours
 
 htrsh_feat="dotmatrix";    # Type of features to extract
 htrsh_dotmatrix_shift="2"; # Sliding window shift in px, should change this to mm
@@ -43,8 +45,8 @@ htrsh_dotmatrix_W="8";     # Width of normalized frame in px, should change this
 htrsh_dotmatrix_H="32";    # Height of normalized frame in px, should change this to mm
 htrsh_dotmatrix_mom="yes"; # Whether to add moments to features
 
-htrsh_align_chars="no"; # Whether to align at a character level
-htrsh_align_isect="yes"; # Whether to intersect parallelograms with line contour
+htrsh_align_chars="no";             # Whether to align at a character level
+htrsh_align_isect="yes";            # Whether to intersect parallelograms with line contour
 htrsh_align_prefer_baselines="yes"; # Whether to always generate contours from baselines
 
 htrsh_hmm_states="6"; # Number of HMM states (excluding special initial and final)
@@ -56,14 +58,9 @@ htrsh_HTK_HCompV_opts="-f 0.1 -m"; # Options for HCompV tool
 htrsh_HTK_HHEd_opts="";            # Options for HHEd tool
 htrsh_HTK_HVite_opts="";           # Options for HVite tool
 
-#htrsh_HTK_HERest_opts="-A -T 1 -m 3";
-#htrsh_HTK_HCompV_opts="-A -T 1 -f 0.1 -m";
-#htrsh_HTK_HHEd_opts="-A";
 #htrsh_HTK_HVite_opts="-A -T 1";
 
 htrsh_baseHTKcfg='
-#HPARMFILTER    = "gzip -d -c $.gz"
-#HPARMOFILTER   = "gzip -c > $.gz"
 HMMDEFFILTER   = "gzip -d -c $"
 HMMDEFOFILTER  = "gzip -c > $"
 NONUMESCAPES   = T
@@ -378,8 +375,7 @@ htrsh_pageimg_info () {
 htrsh_pageimg_resize () {
   local FN="htrsh_pageimg_resize";
   local INRES="";
-  #local OUTRES="118";
-  local OUTRES="95";
+  local OUTRES="118";
   local SFACT="";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
@@ -1002,12 +998,15 @@ htrsh_pageimg_extract_lines () {
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
-  local NUMLINES=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextLine/_:Coords)" "$XML");
+  #local NUMLINES=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextLine/_:Coords)" "$XML");
+  local NUMLINES=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/$htrsh_xpath_lines/_:Coords)" "$XML");
 
   if [ "$NUMLINES" -gt 0 ]; then
     local base="$OUTDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
+    #local base="$OUTDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||; s|[\[]|_|g; s|]|_|g;');
 
-    xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
+    #xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
+    xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines/_:Coords" \
         -o "$base." -v ../../@id -o "." -v ../@id -o ".png " -v @points -n "$XML" \
       | imgpolycrop "$IMFILE";
 
@@ -1084,28 +1083,16 @@ htrsh_extract_feats () {
 
   ### Extract features ###
   if [ "$htrsh_feat" = "dotmatrix" ]; then
-    #local featcfg="-SwNXg --width $htrsh_dotmatrix_W --height $htrsh_dotmatrix_H --shift=$htrsh_dotmatrix_shift --win-size=$htrsh_dotmatrix_win";
     local featcfg="-S --htk --width $htrsh_dotmatrix_W --height $htrsh_dotmatrix_H --shift=$htrsh_dotmatrix_shift --win-size=$htrsh_dotmatrix_win -i";
     if [ "$htrsh_dotmatrix_mom" = "yes" ]; then
-      #paste -d " " <( dotmatrix $featcfg --aux "$IMGIN" ) <( dotmatrix $featcfg "$IMGIN" );
       dotmatrix -m $featcfg "$IMGIN";
     else
       dotmatrix $featcfg "$IMGIN";
-    #fi > "$FEAOUT.tfea";
     fi > "$FEAOUT";
   else
     echo "$FN: error: unknown features type: $htrsh_feat" 1>&2;
     return 1;
   fi
-
-  ### Convert to HTK format ###
-  #pfl2htk "$FEAOUT.tfea" "$FEAOUT" 2>/dev/null;
-
-  ### gzip features ###
-  #gzip -f "$FEAOUT";
-
-  ### Remove temporal files ###
-  #rm -f "$FEAOUT.tfea";
 
   return 0;
 }
@@ -1149,6 +1136,7 @@ htrsh_feats_catregions () {
     echo "$FN: error: features directory not found: $FEATDIR" 1>&2 &&
     return 1;
 
+  # @todo fix this for special characters "[] "
   local FBASE="$FEATDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
 
   xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
@@ -1160,13 +1148,6 @@ htrsh_feats_catregions () {
 
   local id;
   for id in $(xmlstarlet sel -t -m "$htrsh_xpath_regions[_:TextLine/_:Coords]" -v @id -n "$XML"); do
-    #local f;
-    #for f in $(xmlstarlet sel -t -m "//*[@id=\"$id\"]/_:TextLine[_:Coords]" -o "$FBASE.$id." -v @id -o ".fea" -n "$XML"); do
-    #  HList -r "$f";
-    #done > $FBASE.$id.fea~;
-    #pfl2htk $FBASE.$id.fea~ $FBASE.$id.fea 2>/dev/null;
-    #rm $FBASE.$id.fea~;
-
     local ff="";
     local f;
     for f in $(xmlstarlet sel -t -m "//*[@id=\"$id\"]/_:TextLine[_:Coords]" -o "$FBASE.$id." -v @id -o ".fea" -n "$XML"); do
@@ -1192,7 +1173,6 @@ htrsh_feats_pca () {
   local EXCL="[]";
   local RDIM="";
   local RNDR="no";
-  #local TMPDIR=".";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Computes a PCA base for a given list of HTK features";
@@ -1201,7 +1181,6 @@ htrsh_feats_pca () {
       echo " -e EXCL     Dimensions to exclude in matlab range format (def.=false)";
       echo " -r RDIM     Return base of RDIM dimensions (def.=all)";
       echo " -R (yes|no) Random rotation (def.=$RNDR)";
-      #echo " -d TMPDIR   Directory for temporary files (def.=$TMPDIR)";
     } 1>&2;
     return 1;
   fi
@@ -1217,8 +1196,6 @@ htrsh_feats_pca () {
       RDIM="$2";
     elif [ "$1" = "-R" ]; then
       RNDR="$2";
-    #elif [ "$1" = "-d" ]; then
-    #  TMPDIR="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -1229,7 +1206,6 @@ htrsh_feats_pca () {
   if [ ! -e "$FEATLST" ]; then
     echo "$FN: error: feature list not found: $FEATLST" 1>&2;
     return 1;
-  #elif [ $(wc -l < "$FEATLST") != $(sed 's|$|.gz|' "$FEATLST" | xargs ls | wc -l) ]; then
   elif [ $(wc -l < "$FEATLST") != $(xargs ls < "$FEATLST" | wc -l) ]; then
     echo "$FN: error: some files in list not found: $FEATLST" 1>&2;
     return 1;
@@ -1247,16 +1223,7 @@ htrsh_feats_pca () {
   local xEXCL=""; [ "$EXCL" != "[]" ] && xEXCL="se = se + sum(x(:,$EXCL)); x(:,$EXCL) = [];";
   local nRDIM="D"; [ "$RDIM" != "" ] && nRDIM="min(D,$RDIM)";
 
-  local f;
-  #local FEATS=$(
-  #  for f in $(< "$FEATLST"); do
-  #    local ff="$TMPDIR/"$(echo $f | sed 's|.*/||');
-  #    zcat "$f.gz" > "$ff";
-  #    echo "$ff";
-  #  done
-  #  );
-
-  { f=$(head -n 1 < "$FEATLST");
+  { local f=$(head -n 1 < "$FEATLST");
     echo "
       DE = length($EXCL);
       se = zeros(1,DE);
@@ -1318,8 +1285,6 @@ htrsh_feats_pca () {
     echo "$FN: error: problems computing PCA" 1>&2 &&
     return 1;
 
-  #echo "$FEATS" | xargs rm -f;
-
   return 0;
 }
 
@@ -1352,16 +1317,8 @@ htrsh_feats_project () {
     return 1;
   fi
 
-  local f;
-  #local FEATS=$(
-  #  for f in $(< "$FEATLST"); do
-  #    local ff="$OUTDIR/"$(echo $f | sed 's|.*/||');
-  #    zcat "$f.gz" > "$ff";
-  #    echo "$ff";
-  #  done
-  #  );
-
   { echo "load('$PBASE');"
+    local f;
     for f in $(< "$FEATLST"); do
       echo "
         [x,FP,DT,TC,T] = readhtk('$f');
@@ -1372,16 +1329,9 @@ htrsh_feats_project () {
     done
   } | octave -q;
 
-  #for f in $(echo "$FEATS"); do
-  #  pfl2htk "$f" "$f~" 2>/dev/null;
-  #  mv "$f~" "$f";
-  #done
-
   [ "$?" != 0 ] &&
     echo "$FN: error: problems projecting features" 1>&2 &&
     return 1;
-
-  #gzip -f $FEATS;
 
   return 0;
 }
@@ -1458,7 +1408,8 @@ htrsh_pageimg_extract_linefeats () {
 
   ### Extract lines from line coordinates ###
   ### @todo avoid $OUTDIR/lines.lst temp file or depend on input name
-  htrsh_pageimg_extract_lines "$XML" -d "$OUTDIR" > "$OUTDIR/lines.lst";
+  #htrsh_pageimg_extract_lines "$XML" -d "$OUTDIR" > "$OUTDIR/lines.lst";
+  local LINEIMGS=$(htrsh_pageimg_extract_lines "$XML" -d "$OUTDIR");
   [ "$?" != 0 ] && return 1;
 
   local ed="";
@@ -1466,8 +1417,10 @@ htrsh_pageimg_extract_linefeats () {
 
   ### Process each line ###
   local n;
-  for n in $(seq 1 $(wc -l < "$OUTDIR/lines.lst")); do
-    local ff=$(sed -n ${n}p "$OUTDIR/lines.lst" | sed 's|\.png$||');
+  #for n in $(seq 1 $(wc -l < "$OUTDIR/lines.lst")); do
+  #  local ff=$(sed -n ${n}p "$OUTDIR/lines.lst" | sed 's|\.png$||');
+  for n in $(seq 1 $(echo "$LINEIMGS" | wc -l)); do
+    local ff=$(echo "$LINEIMGS" | sed -n $n'{s|\.png$||;p;}');
     local id=$(echo "$ff" | sed 's|.*\.||');
 
     echo "$FN: processing line image ${ff}.png";
@@ -1524,7 +1477,7 @@ htrsh_pageimg_extract_linefeats () {
     ### Apply affine transformation to image ###
     local mn;
     #if [ "$affine" = "1,0,0,1,0,0" ]; then
-       # @todo This doesn't work since offset of _clean.png and _affine.png differs, is off(3:4) still necessary
+    # @todo This doesn't work since offset of _clean.png and _affine.png differs, is off(3:4) still necessary?
     #  ln -s $(echo "$ff" | sed 's|.*/||')_clean.png ${ff}_affine.png;
     #  mn="0,0";
     #  #mn="-1,-1";
@@ -1542,7 +1495,7 @@ htrsh_pageimg_extract_linefeats () {
       +repage ${ff}_fea.png;
 
     ### Compute features parallelogram ###
-    local fbox=$(echo "
+    local fpgram=$(echo "
       load('${ff}_affine.mat');
 
       off = [ $(identify -format %w,%h,%X,%Y ${ff}_affine.png) ];
@@ -1576,7 +1529,7 @@ htrsh_pageimg_extract_linefeats () {
     #ed="$ed -i '//*[@id=\"$id\"]/_:Coords' -t attr -n slope -v '$slope'";
     #[ "$htrsh_feat_deslant" = "yes" ] &&
     #ed="$ed -i '//*[@id=\"$id\"]/_:Coords' -t attr -n slant -v '$slant'";
-    ed="$ed -i '//*[@id=\"$id\"]/_:Coords' -t attr -n fpgram -v '$fbox'";
+    ed="$ed -i '//*[@id=\"$id\"]/_:Coords' -t attr -n fpgram -v '$fpgram'";
 
     ### Compute detailed contours if requested ###
     if [ "$htrsh_feat_contour" = "yes" ]; then
@@ -1623,7 +1576,7 @@ htrsh_pageimg_extract_linefeats () {
     eval xmlstarlet ed --inplace $ed "$XMLOUT";
   fi
 
-  rm "$OUTDIR/lines.lst";
+  #rm "$OUTDIR/lines.lst";
 
   return 0;
 }
@@ -1824,9 +1777,6 @@ htrsh_hmm_train () {
     return 1;
   fi
 
-  #zcat $(head -n 1 "$FEATLST").gz > "$OUTDIR/tmp.fea";
-  #local DIMS=$(HList -z -h "$OUTDIR/tmp.fea" | sed -n '/Num Comps:/{s|.*Num Comps: *||;s| .*||;p;}');
-  #[ "$CODES" != 0 ] && [ $(HList -z -h "$OUTDIR/tmp.fea" | grep DISCRETE_K | wc -l) = 0 ] &&
   local DIMS=$(HList -z -h "$(head -n 1 "$FEATLST")" | sed -n '/Num Comps:/{s|.*Num Comps: *||;s| .*||;p;}');
   [ "$CODES" != 0 ] && [ $(HList -z -h "$(head -n 1 "$FEATLST")" | grep DISCRETE_K | wc -l) = 0 ] &&
     echo "$FN: error: features are not discrete" 1>&2 &&
@@ -2074,11 +2024,9 @@ htrsh_pageimg_forcealign_lines () {
     echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
     return 1;
 
-  #htrsh_fix_rec_utf8 "$MODEL" "$TMPDIR/${XMLBASE}_aligned.mlf";
-
   ### Prepare command to add alignments to XML ###
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating Page XML with alignments ..." 1>&2;
-  local cmd="xmlstarlet ed -P -d //_:Word -d //_:Glyph";
+  local cmd="xmlstarlet ed -P -d //_:Word";
   #cp "$XML" "$XMLOUT";
 
   [ "$htrsh_align_isect" = "yes" ] &&
@@ -2174,7 +2122,7 @@ htrsh_pageimg_forcealign_lines () {
     local coords=$(echo "$acoords" | sed -n "/^$id /{ s|^$id ||; p; }");
 
     #local cmd="xmlstarlet ed -P --inplace -d '//*[@id=\"${id}\"]/_:TextEquiv'";
-    cmd="$cmd -d '//*[@id=\"$id\"]/_:TextEquiv'";
+    #cmd="$cmd -d '//*[@id=\"$id\"]/_:TextEquiv'";
 
     #TE=$(($(date +%s%N)/1000000)); echo "time 1: $((TE-TS)) ms" 1>&2; TS="$TE";
 
@@ -2270,8 +2218,9 @@ htrsh_pageimg_forcealign_lines () {
 
     local text=$(echo "$align" | sed -n '1d; $d; s|.* ||; s|@| |; p;' | tr -d '\n');
 
-    cmd="$cmd -s '//*[@id=\"$id\"]' -t elem -n TextEquiv";
-    cmd="$cmd -s '//*[@id=\"$id\"]/TextEquiv' -t elem -n Unicode -v '$text'";
+    cmd="$cmd -m '//*[@id=\"$id\"]/_:TextEquiv' '//*[@id=\"$id\"]'";
+    #cmd="$cmd -s '//*[@id=\"$id\"]' -t elem -n TextEquiv";
+    #cmd="$cmd -s '//*[@id=\"$id\"]/TextEquiv' -t elem -n Unicode -v '$text'";
     #eval $cmd "$XMLOUT";
   done
 
