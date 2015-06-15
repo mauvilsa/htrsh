@@ -30,7 +30,7 @@ htrsh_xpath_lines='_:TextLine[_:Coords and _:TextEquiv/_:Unicode]';
 
 htrsh_imgtxtenh_regmask="no";                # Whether to use a region-based processing mask
 htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.1"; # Options for imgtxtenh tool
-htrsh_imglineclean_opts="-m 99%";            # Options for imglineclean tool
+htrsh_imglineclean_opts="-V0 -m 99%";        # Options for imglineclean tool
 
 htrsh_feat_deslope="yes"; # Whether to correct slope per line
 htrsh_feat_deslant="yes"; # Whether to correct slant of the text
@@ -1407,8 +1407,6 @@ htrsh_pageimg_extract_linefeats () {
   [ "$?" != 0 ] && return 1;
 
   ### Extract lines from line coordinates ###
-  ### @todo avoid $OUTDIR/lines.lst temp file or depend on input name
-  #htrsh_pageimg_extract_lines "$XML" -d "$OUTDIR" > "$OUTDIR/lines.lst";
   local LINEIMGS=$(htrsh_pageimg_extract_lines "$XML" -d "$OUTDIR");
   [ "$?" != 0 ] && return 1;
 
@@ -1416,9 +1414,8 @@ htrsh_pageimg_extract_linefeats () {
   local FEATS="";
 
   ### Process each line ###
+  local oklines="0";
   local n;
-  #for n in $(seq 1 $(wc -l < "$OUTDIR/lines.lst")); do
-  #  local ff=$(sed -n ${n}p "$OUTDIR/lines.lst" | sed 's|\.png$||');
   for n in $(seq 1 $(echo "$LINEIMGS" | wc -l)); do
     local ff=$(echo "$LINEIMGS" | sed -n $n'{s|\.png$||;p;}');
     local id=$(echo "$ff" | sed 's|.*\.||');
@@ -1429,7 +1426,7 @@ htrsh_pageimg_extract_linefeats () {
     imglineclean $htrsh_imglineclean_opts ${ff}.png ${ff}_clean.png 2>&1;
     [ "$?" != 0 ] &&
       echo "$FN: error: problems cleaning line image: ${ff}.png" 1>&2 &&
-      return 1;
+      continue;
 
     local bbox=$(identify -format "%wx%h%X%Y" ${ff}_clean.png);
     local bboxsz=$(echo "$bbox" | sed 's|x| |; s|+.*||;');
@@ -1543,6 +1540,8 @@ htrsh_pageimg_extract_linefeats () {
 
     echo "$ff.fea" >> "$FEATLST";
 
+    oklines=$((oklines+1));
+
     [ "$PBASE" != "" ] && FEATS=$( echo "$FEATS"; echo "${ff}.fea"; );
 
     ### Remove temporal files ###
@@ -1553,6 +1552,10 @@ htrsh_pageimg_extract_linefeats () {
     [ "$htrsh_keeptmp" -lt 3 ] &&
       rm -f "${ff}_deslope.png" "${ff}_deslant.png";
   done
+
+  [ "$oklines" = 0 ] &&
+    echo "$FN: error: extracted features for zero lines: $XML" 1>&2 &&
+    return 1;
 
   ### Project features if requested ###
   if [ "$PBASE" != "" ]; then
@@ -1575,8 +1578,6 @@ htrsh_pageimg_extract_linefeats () {
     done
     eval xmlstarlet ed --inplace $ed "$XMLOUT";
   fi
-
-  #rm "$OUTDIR/lines.lst";
 
   return 0;
 }
@@ -2240,7 +2241,7 @@ htrsh_pageimg_forcealign_lines () {
 }
 
 ##
-## Function that does a forced alignment given only a page with baselines or contours and optionally a model
+## Function that does a line by line forced alignment given only a page with baselines or contours and optionally a model
 ##
 htrsh_pageimg_forcealign () {
   local FN="htrsh_pageimg_forcealign";
@@ -2249,19 +2250,21 @@ htrsh_pageimg_forcealign () {
   local INRES="";
   local MODEL="";
   local PBASE="";
+  local ENHIMG="yes";
   local DOPCA="yes";
   local KEEPTMP="no";
   local KEEPAUX="no";
   local QBORD="no";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
-      echo "Description: Does a forced alignment given only a page with baselines or contours and optionally a model";
+      echo "Description: Does a line by line forced alignment given only a page with baselines or contours and optionally a model";
       echo "Usage: $FN XMLIN XMLOUT [ Options ]";
       echo "Options:";
       echo " -d TMPDIR    Directory for temporary files (def.=$TMPDIR)";
       echo " -i INRES     Input image resolution in ppc (def.=use image metadata)";
       echo " -m MODEL     Use model for aligning (def.=train model for page)";
       echo " -b PBASE     Project features using given base (def.=false)";
+      echo " -e (yes|no)  Whether to enhance the image using imgtxtenh (def.=$ENHIMG)";
       echo " -p (yes|no)  Whether to compute PCA for image and project features (def.=$DOPCA)";
       echo " -t (yes|no)  Whether to keep temporary directory and files (def.=$KEEPTMP)";
       echo " -a (yes|no)  Whether to keep auxiliary attributes in XML (def.=$KEEPAUX)";
@@ -2283,6 +2286,8 @@ htrsh_pageimg_forcealign () {
       MODEL="$2";
     elif [ "$1" = "-b" ]; then
       PBASE="$2";
+    elif [ "$1" = "-e" ]; then
+      ENHIMG="$2";
     elif [ "$1" = "-p" ]; then
       DOPCA="$2";
     elif [ "$1" = "-t" ]; then
@@ -2311,7 +2316,9 @@ htrsh_pageimg_forcealign () {
   fi
 
   ### Check page ###
-  htrsh_pageimg_info "$XML" noinfo;
+  local XMLDIR IMFILE IMSIZE IMRES;
+  htrsh_pageimg_info "$XML";
+  #htrsh_pageimg_info "$XML" noinfo;
   [ "$?" != 0 ] && return 1;
 
   #local RCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextEquiv/_:Unicode)" "$XML");
@@ -2335,11 +2342,17 @@ htrsh_pageimg_forcealign () {
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): processing page: $XML";
 
   ### Clean page image ###
-  echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): enhancing page image ...";
-  [ "$INRES" != "" ] && INRES="-i $INRES";
-  htrsh_pageimg_clean "$XML" "$TMPDIR" $INRES \
-    > "$TMPDIR/${B}_pageclean.log";
-  [ "$?" != 0 ] && return 1;
+  if [ "$ENHIMG" = "yes" ]; then
+    echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): enhancing page image ...";
+    [ "$INRES" != "" ] && INRES="-i $INRES";
+    htrsh_pageimg_clean "$XML" "$TMPDIR" $INRES \
+      > "$TMPDIR/${B}_pageclean.log";
+    [ "$?" != 0 ] &&
+      echo "$FN: error: check log file $TMPDIR/${B}_pageclean.log" 1>&2 &&
+      return 1;
+  else
+    cp -p "$XML" "$IMFILE" "$TMPDIR";
+  fi
 
   ### Clean quadrilateral borders ###
   if [ "$QBORD" = "yes" ]; then
@@ -2368,7 +2381,9 @@ htrsh_pageimg_forcealign () {
     "$TMPDIR/${B}_contours.xml" "$TMPDIR/${B}_feats.xml" \
     -d "$TMPDIR" -l "$TMPDIR/${B}_feats.lst" \
     > "$TMPDIR/${B}_linefeats.log";
-  [ "$?" != 0 ] && return 1;
+  [ "$?" != 0 ] &&
+    echo "$FN: error: check log file $TMPDIR/${B}_linefeats.log" 1>&2 &&
+    return 1;
 
   ### Compute PCA and project features ###
   if [ "$DOPCA" = "yes" ]; then
@@ -2397,7 +2412,9 @@ htrsh_pageimg_forcealign () {
     htrsh_hmm_train \
       "$TMPDIR/${B}_feats.lst" "$TMPDIR/${B}_page.mlf" -d "$TMPDIR" \
       > "$TMPDIR/${B}_hmmtrain.log";
-    [ "$?" != 0 ] && return 1;
+    [ "$?" != 0 ] &&
+      echo "$FN: error: check log file $TMPDIR/${B}_hmmtrain.log" 1>&2 &&
+      return 1;
     MODEL="$TMPDIR/Macros_hmm_g$(printf %.3d $htrsh_hmm_nummix).gz";
   fi
   [ ! -e "$MODEL" ] &&
@@ -2414,7 +2431,9 @@ htrsh_pageimg_forcealign () {
       htrsh_pageimg_forcealign_region "$TMPDIR/${B}_align.xml" "$id" \
         "$TMPDIR" "$MODEL" "$TMPDIR/${B}_align-.xml" -d "$TMPDIR" \
         >> "$TMPDIR/${B}_forcealign.log";
-      [ "$?" != 0 ] && return 1;
+      [ "$?" != 0 ] &&
+        echo "$FN: error: check log file $TMPDIR/${B}_forcealign.log" 1>&2 &&
+        return 1;
       mv "$TMPDIR/${B}_align-.xml" "$TMPDIR/${B}_align.xml";
     done
     cp -p "$TMPDIR/${B}_align.xml" "$XMLOUT";
@@ -2423,7 +2442,9 @@ htrsh_pageimg_forcealign () {
       "$TMPDIR/${B}_feats.xml" "$TMPDIR/${B}_feats.lst" "$MODEL" \
       "$XMLOUT" -d "$TMPDIR" \
       > "$TMPDIR/${B}_forcealign.log";
-    [ "$?" != 0 ] && return 1;
+    [ "$?" != 0 ] &&
+      echo "$FN: error: check log file $TMPDIR/${B}_forcealign.log" 1>&2 &&
+      return 1;
   fi 2>&1;
 
   [ "$KEEPTMP" != "yes" ] && rm -r "$TMPDIR";
