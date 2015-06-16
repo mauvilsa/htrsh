@@ -233,7 +233,6 @@ htrsh_pagexml_to_mlf () {
   [ "$?" != 0 ] && return 1;
 
   local TAB=$(printf "\t");
-  #local PG=$(xmlstarlet sel -t -v //@imageFilename "$XML" | sed 's|.*/||; s|\.[^.]*$||;');
   local PG=$(xmlstarlet sel -t -v //@imageFilename "$XML" \
                | sed 's|.*/||; s|\.[^.]*$||; s|\[|_|g; s|]|_|g;');
 
@@ -439,12 +438,8 @@ htrsh_pageimg_resize () {
     OUTRES=$(echo $SFACT $INRES | awk '{printf("%g",0.01*$1*$2)}');
   fi
 
-  #local IMBASE=$(echo "$IMFILE" | sed 's|.*/||');
-  #local XMLBASE=$(echo "$XML" | sed 's|.*/||');
-
   ### Resize image ###
   convert "$IMFILE" -units PixelsPerCentimeter -density $OUTRES -resize $SFACT "$OUTDIR/$IMBASE.$IMEXT"; ### don't know why the density has to be set this way
-  #convert "$IMFILE" -units PixelsPerCentimeter -density $OUTRES -resize $SFACT "$OUTDIR/$IMBASE"; ### don't know why the density has to be set this way
 
   ### Resize XML Page ###
   htrsh_pagexml_resize $SFACT < "$XML" \
@@ -453,7 +448,6 @@ htrsh_pageimg_resize () {
         s| custom="[^:"]*"||;
         ' \
     > "$OUTDIR/$XMLBASE.xml";
-    #> "$OUTDIR/$XMLBASE";
 
   return 0;
 }
@@ -817,8 +811,6 @@ htrsh_pageimg_clean () {
   fi
 
   [ "$INRES" != "" ] && INRES="-d $INRES";
-  #local IMBASE=$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
-  #local XMLBASE=$(echo "$XML" | sed 's|.*/||');
 
   ### Enhance image ###
   if [ "$htrsh_imgtxtenh_regmask" != "yes" ]; then
@@ -854,7 +846,6 @@ htrsh_pageimg_clean () {
   ### Create new XML with image in current directory and PNG extension ###
   xmlstarlet ed -P -u //@imageFilename -v "$IMBASE.png" "$XML" \
     > "$OUTDIR/$XMLBASE.xml";
-    #> "$OUTDIR/$XMLBASE";
 
   return 0;
 }
@@ -899,8 +890,6 @@ htrsh_pageimg_quadborderclean () {
 
   local IMW=$(echo "$IMSIZE" | sed 's|x.*||');
   local IMH=$(echo "$IMSIZE" | sed 's|.*x||');
-  #local IMEXT=$(echo "$IMFILE" | sed 's|.*\.||');
-  #local IMBASE=$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
 
   ### Get quadrilaterals ###
   local QUADs=$(xmlstarlet sel -t -m "$htrsh_xpath_regions/_:Coords" -v @points -n "$XML");
@@ -1009,10 +998,7 @@ htrsh_pageimg_extract_lines () {
   local NUMLINES=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/$htrsh_xpath_lines/_:Coords)" "$XML");
 
   if [ "$NUMLINES" -gt 0 ]; then
-    #local base="$OUTDIR/$IMBASE";
     local base=$(echo "$OUTDIR/$IMBASE" | sed 's|\[|_|g; s|]|_|g;');
-    #local base="$OUTDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
-    #local base="$OUTDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||; s|[\[]|_|g; s|]|_|g;');
 
     xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines/_:Coords" \
         -o "$base." -v ../../@id -o "." -v ../@id -o ".png " -v @points -n "$XML" \
@@ -1144,10 +1130,7 @@ htrsh_feats_catregions () {
     echo "$FN: error: features directory not found: $FEATDIR" 1>&2 &&
     return 1;
 
-  # @todo fix this for special characters "[] "
-  #local FBASE="$FEATDIR/$IMBASE";
   local FBASE=$(echo "$FEATDIR/$IMBASE" | sed 's|\[|_|g; s|]|_|g;');
-  #local FBASE="$FEATDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
 
   xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
       -o "$FBASE." -v ../../@id -o "." -v ../@id -o ".fea" -n "$XML" \
@@ -1792,7 +1775,6 @@ htrsh_hmm_train () {
   [ "$CODES" != 0 ] && [ $(HList -z -h "$(head -n 1 "$FEATLST")" | grep DISCRETE_K | wc -l) = 0 ] &&
     echo "$FN: error: features are not discrete" 1>&2 &&
     return 1;
-  #rm "$OUTDIR/tmp.fea";
 
   local HMMLST=$(cat "$MLF" \
                    | sed '/^#!MLF!#/d; /^"\*\//d; /^\.$/d; s|^"||; s|"$||;' \
@@ -1814,7 +1796,7 @@ htrsh_hmm_train () {
         HInit -C <( echo "$htrsh_baseHTKcfg" ) -i 0 -S "$FEATLST" -M "$OUTDIR" "$OUTDIR/proto.gz";
         mv "$OUTDIR/proto.gz" "$OUTDIR/proto";
 
-        # @todo not tested yet so test it and this code could be much better
+        # @todo not tested yet so test it
         { zcat "$OUTDIR/proto" \
             | head -n 3;
           zcat "$OUTDIR/proto" \
