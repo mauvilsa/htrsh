@@ -17,9 +17,6 @@
 # Default configuration #
 #-----------------------#
 
-htrsh_valschema="yes";
-htrsh_pagexsd="http://mvillegas.info/xsd/2013-07-15/pagecontent.xsd";
-
 htrsh_keeptmp="0";
 
 htrsh_text_translit="no";
@@ -65,6 +62,11 @@ HMMDEFFILTER   = "gzip -d -c $"
 HMMDEFOFILTER  = "gzip -c > $"
 NONUMESCAPES   = T
 ';
+
+htrsh_valschema="yes";
+htrsh_pagexsd="http://mvillegas.info/xsd/2013-07-15/pagecontent.xsd";
+[ "$USER" = "mvillegas" ] &&
+  htrsh_pagexsd="$HOME/work/prog/mvsh/HTR/xsd/pagecontent+.xsd";
 
 htrsh_realpath="readlink -f";
 [ $(realpath --help 2>&1 | grep relative | wc -l) != 0 ] &&
@@ -198,7 +200,6 @@ htrsh_pagexml_to_kalditxt () {
 }
 
 
-
 ##
 ## Function that prints to stdout an MLF created from an XML Page file
 ##
@@ -232,7 +233,9 @@ htrsh_pagexml_to_mlf () {
   [ "$?" != 0 ] && return 1;
 
   local TAB=$(printf "\t");
-  local PG=$(xmlstarlet sel -t -v //@imageFilename "$XML" | sed 's|.*/||; s|\.[^.]*$||;');
+  #local PG=$(xmlstarlet sel -t -v //@imageFilename "$XML" | sed 's|.*/||; s|\.[^.]*$||;');
+  local PG=$(xmlstarlet sel -t -v //@imageFilename "$XML" \
+               | sed 's|.*/||; s|\.[^.]*$||; s|\[|_|g; s|]|_|g;');
 
   local XPATH IDop;
   if [ "$REGSRC" = "yes" ]; then
@@ -299,15 +302,15 @@ htrsh_pagexml_to_mlf () {
 }
 
 ##
-## Function that checks and extracts basic info (XMLDIR, IMFILE, IMSIZE, IMRES) from an XML Page file and respective image
+## Function that checks and extracts basic info (XMLDIR, IMDIR, IMFILE, XMLBASE, IMBASE, IMEXT, IMSIZE, IMRES) from an XML Page file and respective image
 ##
 htrsh_pageimg_info () {
   local FN="htrsh_pageimg_info";
   local XML="$1";
-  local VAL=""; [ "$htrsh_valschema" = "yes" ] && VAL="-e -s '$htrsh_pagexsd'";
+  local VAL="-e"; [ "$htrsh_valschema" = "yes" ] && VAL="-e -s '$htrsh_pagexsd'";
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
-      echo "Description: Checks and extracts basic info (XMLDIR, IMFILE, IMSIZE, IMRES) from an XML Page file and respective image";
+      echo "Description: Checks and extracts basic info (XMLDIR, IMDIR, IMFILE, XMLBASE, IMBASE, IMEXT, IMSIZE, IMRES) from an XML Page file and respective image";
       echo "Usage: $FN XMLFILE";
     } 1>&2;
     return 1;
@@ -325,13 +328,16 @@ htrsh_pageimg_info () {
     local XMLSIZE=$(xmlstarlet sel -t -v //@imageWidth -o x -v //@imageHeight "$XML");
     IMSIZE=$(identify -format %wx%h "$IMFILE" 2>/dev/null);
 
-    if [ ! -f "$IMFILE" ]; then
-      echo "$FN: error: image file not found: $IMFILE" 1>&2;
+    IMDIR=$($htrsh_realpath $(dirname "$IMFILE"));
+    XMLBASE=$(echo "$XML" | sed 's|.*/||; s|\.[xX][mM][lL]$||;');
+    IMBASE=$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
+    IMEXT=$(echo "$IMFILE" | sed 's|.*\.||');
+
+    [ ! -f "$IMFILE" ] &&
+      echo "$FN: error: image file not found: $IMFILE" 1>&2 &&
       return 1;
-    elif [ "$IMSIZE" != "$XMLSIZE" ]; then
-      echo "$FN: error: unexpected image size: image=$IMSIZE page=$XMLSIZE" 1>&2;
-      return 1;
-    fi
+    [ "$IMSIZE" != "$XMLSIZE" ] &&
+      echo "$FN: warning: image size discrepancy: image=$IMSIZE page=$XMLSIZE" 1>&2;
 
     IMRES=$(xmlstarlet sel -t -v //_:Page/@custom "$XML" 2>/dev/null \
               | awk -F'[{}:; ]+' '
@@ -360,9 +366,8 @@ htrsh_pageimg_info () {
             }'
       );
 
-     if [ $(echo "$IMRES" | sed 's|.*x||') != $(echo "$IMRES" | sed 's|x.*||') ]; then
+     [ $(echo "$IMRES" | sed 's|.*x||') != $(echo "$IMRES" | sed 's|x.*||') ] &&
        echo "$FN: warning: image resolution different for vertical and horizontal: $IMFILE" 1>&2;
-     fi
      IMRES=$(echo "$IMRES" | sed 's|x.*||');
   fi
 
@@ -407,7 +412,7 @@ htrsh_pageimg_resize () {
   done
 
   ### Check XML file and image ###
-  local XMLDIR IMFILE IMSIZE IMRES;
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
@@ -434,11 +439,12 @@ htrsh_pageimg_resize () {
     OUTRES=$(echo $SFACT $INRES | awk '{printf("%g",0.01*$1*$2)}');
   fi
 
-  local IMBASE=$(echo "$IMFILE" | sed 's|.*/||');
-  local XMLBASE=$(echo "$XML" | sed 's|.*/||');
+  #local IMBASE=$(echo "$IMFILE" | sed 's|.*/||');
+  #local XMLBASE=$(echo "$XML" | sed 's|.*/||');
 
   ### Resize image ###
-  convert "$IMFILE" -units PixelsPerCentimeter -density $OUTRES -resize $SFACT "$OUTDIR/$IMBASE"; ### don't know why the density has to be set this way
+  convert "$IMFILE" -units PixelsPerCentimeter -density $OUTRES -resize $SFACT "$OUTDIR/$IMBASE.$IMEXT"; ### don't know why the density has to be set this way
+  #convert "$IMFILE" -units PixelsPerCentimeter -density $OUTRES -resize $SFACT "$OUTDIR/$IMBASE"; ### don't know why the density has to be set this way
 
   ### Resize XML Page ###
   htrsh_pagexml_resize $SFACT < "$XML" \
@@ -446,7 +452,8 @@ htrsh_pageimg_resize () {
         s|\( custom="[^"]*\)image-resolution:[^;]*;\([^"]*"\)|\1\2|;
         s| custom="[^:"]*"||;
         ' \
-    > "$OUTDIR/$XMLBASE";
+    > "$OUTDIR/$XMLBASE.xml";
+    #> "$OUTDIR/$XMLBASE";
 
   return 0;
 }
@@ -794,7 +801,7 @@ htrsh_pageimg_clean () {
   done
 
   ### Check XML file and image ###
-  local XMLDIR IMFILE IMSIZE IMRES;
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
@@ -810,8 +817,8 @@ htrsh_pageimg_clean () {
   fi
 
   [ "$INRES" != "" ] && INRES="-d $INRES";
-  local IMBASE=$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
-  local XMLBASE=$(echo "$XML" | sed 's|.*/||');
+  #local IMBASE=$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
+  #local XMLBASE=$(echo "$XML" | sed 's|.*/||');
 
   ### Enhance image ###
   if [ "$htrsh_imgtxtenh_regmask" != "yes" ]; then
@@ -846,7 +853,8 @@ htrsh_pageimg_clean () {
 
   ### Create new XML with image in current directory and PNG extension ###
   xmlstarlet ed -P -u //@imageFilename -v "$IMBASE.png" "$XML" \
-    > "$OUTDIR/$XMLBASE";
+    > "$OUTDIR/$XMLBASE.xml";
+    #> "$OUTDIR/$XMLBASE";
 
   return 0;
 }
@@ -885,14 +893,14 @@ htrsh_pageimg_quadborderclean () {
   done
 
   ### Check XML file and image ###
-  local XMLDIR IMFILE IMSIZE IMRES;
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
   local IMW=$(echo "$IMSIZE" | sed 's|x.*||');
   local IMH=$(echo "$IMSIZE" | sed 's|.*x||');
-  local IMEXT=$(echo "$IMFILE" | sed 's|.*\.||');
-  local IMBASE=$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
+  #local IMEXT=$(echo "$IMFILE" | sed 's|.*\.||');
+  #local IMBASE=$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
 
   ### Get quadrilaterals ###
   local QUADs=$(xmlstarlet sel -t -m "$htrsh_xpath_regions/_:Coords" -v @points -n "$XML");
@@ -994,18 +1002,18 @@ htrsh_pageimg_extract_lines () {
   done
 
   ### Check page and obtain basic info ###
-  local XMLDIR IMFILE IMSIZE IMRES;
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
-  #local NUMLINES=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextLine/_:Coords)" "$XML");
   local NUMLINES=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/$htrsh_xpath_lines/_:Coords)" "$XML");
 
   if [ "$NUMLINES" -gt 0 ]; then
-    local base="$OUTDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
+    #local base="$OUTDIR/$IMBASE";
+    local base=$(echo "$OUTDIR/$IMBASE" | sed 's|\[|_|g; s|]|_|g;');
+    #local base="$OUTDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
     #local base="$OUTDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||; s|[\[]|_|g; s|]|_|g;');
 
-    #xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
     xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines/_:Coords" \
         -o "$base." -v ../../@id -o "." -v ../@id -o ".png " -v @points -n "$XML" \
       | imgpolycrop "$IMFILE";
@@ -1066,7 +1074,7 @@ SAVEASVQ       = T
 ##
 ## Function that extracts features from an image
 ##
-# @todo needs to be improved to handle different types of features
+# @todo handle different types of features
 htrsh_extract_feats () {
   local FN="htrsh_extract_feats";
   if [ $# -lt 2 ]; then
@@ -1128,7 +1136,7 @@ htrsh_feats_catregions () {
   done
 
   ### Check page and obtain basic info ###
-  local XMLDIR IMFILE IMSIZE IMRES;
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
@@ -1137,7 +1145,9 @@ htrsh_feats_catregions () {
     return 1;
 
   # @todo fix this for special characters "[] "
-  local FBASE="$FEATDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
+  #local FBASE="$FEATDIR/$IMBASE";
+  local FBASE=$(echo "$FEATDIR/$IMBASE" | sed 's|\[|_|g; s|]|_|g;');
+  #local FBASE="$FEATDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
 
   xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
       -o "$FBASE." -v ../../@id -o "." -v ../@id -o ".fea" -n "$XML" \
@@ -1402,7 +1412,7 @@ htrsh_pageimg_extract_linefeats () {
   done
 
   ### Check page and obtain basic info ###
-  local XMLDIR IMFILE IMSIZE IMRES;
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
@@ -1817,11 +1827,12 @@ htrsh_hmm_train () {
                    l[NR-4]=$0;
                  }
                  END {
-                  for(i=1;i<=List;i++) {
-                    print "~h \""m[i]"\"";
-                    for(j=1;j<=NR-4;j++)
-                      print l[j];
-                  }
+                  for(i=1;i<=List;i++)
+                    if( m[i] != "" ) {
+                      print "~h \""m[i]"\"";
+                      for(j=1;j<=NR-4;j++)
+                        print l[j];
+                    }
                 }';
         } | gzip \
           > "$OUTDIR/Macros_hmm.gz";
@@ -1872,11 +1883,12 @@ htrsh_hmm_train () {
                  l[NR-4]=$0;
                }
                END {
-                for(i=1;i<=List;i++) {
-                  print "~h \""m[i]"\"";
-                  for(j=1;j<=NR-4;j++)
-                    print l[j];
-                }
+                for(i=1;i<=List;i++)
+                  if( m[i] != "" ) {
+                    print "~h \""m[i]"\"";
+                    for(j=1;j<=NR-4;j++)
+                      print l[j];
+                  }
               }';
       } | gzip \
         > "$OUTDIR/Macros_hmm.gz";
@@ -2007,10 +2019,14 @@ htrsh_pageimg_forcealign_lines () {
     return 1;
   fi
 
-  local XMLBASE=$(echo "$XML" | sed 's|.*/||;s|\.xml$||;');
+  ### Check XML file and image ###
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
+  htrsh_pageimg_info "$XML";
+  [ "$?" != 0 ] && return 1;
+  local B=$(echo "$XMLBASE" | sed 's|\[|_|g; s|]|_|g;');
 
   ### Create MLF from XML ###
-  htrsh_pagexml_to_mlf "$XML" > "$TMPDIR/$XMLBASE.mlf";
+  htrsh_pagexml_to_mlf "$XML" > "$TMPDIR/$B.mlf";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems creating MLF file: $XML" 1>&2 &&
     return 1;
@@ -2020,7 +2036,7 @@ htrsh_pageimg_forcealign_lines () {
   local DIC=$(echo "$HMMLST" | awk '{printf("\"%s\" [%s] 1.0 %s\n",$1,$1,$1)}');
 
   ### Do forced alignment with HVite ###
-  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_baseHTKcfg" ) -H "$MODEL" -S "$FEATLST" -m -I "$TMPDIR/$XMLBASE.mlf" -i "$TMPDIR/${XMLBASE}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
+  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_baseHTKcfg" ) -H "$MODEL" -S "$FEATLST" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
   [ "$?" != 0 ] &&
     echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
     return 1;
@@ -2052,7 +2068,7 @@ htrsh_pageimg_forcealign_lines () {
           }
         }
       }
-      ' "$TMPDIR/${XMLBASE}_aligned.mlf"
+      ' "$TMPDIR/${B}_aligned.mlf"
       );
 
   local acoords=$(
@@ -2220,8 +2236,6 @@ htrsh_pageimg_forcealign_lines () {
     local text=$(echo "$align" | sed -n '1d; $d; s|.* ||; s|@| |; p;' | tr -d '\n');
 
     cmd="$cmd -m '//*[@id=\"$id\"]/_:TextEquiv' '//*[@id=\"$id\"]'";
-    #cmd="$cmd -s '//*[@id=\"$id\"]' -t elem -n TextEquiv";
-    #cmd="$cmd -s '//*[@id=\"$id\"]/TextEquiv' -t elem -n Unicode -v '$text'";
     #eval $cmd "$XMLOUT";
   done
 
@@ -2235,7 +2249,7 @@ htrsh_pageimg_forcealign_lines () {
   htrsh_fix_rec_names "$XMLOUT";
 
   [ "$htrsh_keeptmp" -lt 1 ] &&
-    rm -f "$TMPDIR/$XMLBASE.mlf" "$TMPDIR/${XMLBASE}_aligned.mlf";
+    rm -f "$TMPDIR/$B.mlf" "$TMPDIR/${B}_aligned.mlf";
 
   return 0;
 }
@@ -2316,9 +2330,8 @@ htrsh_pageimg_forcealign () {
   fi
 
   ### Check page ###
-  local XMLDIR IMFILE IMSIZE IMRES;
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
   htrsh_pageimg_info "$XML";
-  #htrsh_pageimg_info "$XML" noinfo;
   [ "$?" != 0 ] && return 1;
 
   #local RCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextEquiv/_:Unicode)" "$XML");
@@ -2336,8 +2349,7 @@ htrsh_pageimg_forcealign () {
 
   mkdir -p "$TMPDIR";
 
-  local I=$(xmlstarlet sel -t -v //@imageFilename "$XML");
-  local B=$(echo "$XML" | sed 's|.*/||; s|\.[^.]*$||;');
+  local B=$(echo "$XMLBASE" | sed 's|\[|_|g; s|]|_|g;');
 
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): processing page: $XML";
 
@@ -2346,9 +2358,9 @@ htrsh_pageimg_forcealign () {
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): enhancing page image ...";
     [ "$INRES" != "" ] && INRES="-i $INRES";
     htrsh_pageimg_clean "$XML" "$TMPDIR" $INRES \
-      > "$TMPDIR/${B}_pageclean.log";
+      > "$TMPDIR/${XMLBASE}_pageclean.log";
     [ "$?" != 0 ] &&
-      echo "$FN: error: check log file $TMPDIR/${B}_pageclean.log" 1>&2 &&
+      echo "$FN: error: more info might be in file $TMPDIR/${XMLBASE}_pageclean.log" 1>&2 &&
       return 1;
   else
     cp -p "$XML" "$IMFILE" "$TMPDIR";
@@ -2357,32 +2369,31 @@ htrsh_pageimg_forcealign () {
   ### Clean quadrilateral borders ###
   if [ "$QBORD" = "yes" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): cleaning quadrilateral borders ...";
-    local II=$(echo $I | sed 's|.*/||; s|\.[^.]*$||');
-    htrsh_pageimg_quadborderclean "$TMPDIR/${B}.xml" "$TMPDIR/${II}_nobord.png" -d "$TMPDIR";
+    htrsh_pageimg_quadborderclean "$TMPDIR/${XMLBASE}.xml" "$TMPDIR/${IMBASE}_nobord.png" -d "$TMPDIR";
     [ "$?" != 0 ] && return 1;
-    mv "$TMPDIR/${II}_nobord.png" "$TMPDIR/${II}.png";
+    mv "$TMPDIR/${IMBASE}_nobord.png" "$TMPDIR/$IMBASE.png";
   fi
 
   ### Generate contours from baselines ###
-  if [ $(xmlstarlet sel -t -v 'count(//'"$htrsh_xpath_regions"'/_:TextLine/_:Coords[@points and @points!="0,0 0,0"])' "$TMPDIR/$B.xml") = 0 ] ||
+  if [ $(xmlstarlet sel -t -v 'count(//'"$htrsh_xpath_regions"'/_:TextLine/_:Coords[@points and @points!="0,0 0,0"])' "$TMPDIR/$XMLBASE.xml") = 0 ] ||
      [ "$htrsh_align_prefer_baselines" = "yes" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating line contours from baselines ...";
-    page_format_generate_contour -a 75 -d 25 -p "$TMPDIR/$B.xml" -o "$TMPDIR/${B}_contours.xml";
+    page_format_generate_contour -a 75 -d 25 -p "$TMPDIR/$XMLBASE.xml" -o "$TMPDIR/${XMLBASE}_contours.xml";
     [ "$?" != 0 ] &&
       echo "$FN: error: page_format_generate_contour failed" 1>&2 &&
       return 1;
   else
-    mv "$TMPDIR/$B.xml" "$TMPDIR/${B}_contours.xml";
+    mv "$TMPDIR/$XMLBASE.xml" "$TMPDIR/${XMLBASE}_contours.xml";
   fi
 
   ### Extract line features ###
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): extracting line features ...";
   htrsh_pageimg_extract_linefeats \
-    "$TMPDIR/${B}_contours.xml" "$TMPDIR/${B}_feats.xml" \
+    "$TMPDIR/${XMLBASE}_contours.xml" "$TMPDIR/${XMLBASE}_feats.xml" \
     -d "$TMPDIR" -l "$TMPDIR/${B}_feats.lst" \
-    > "$TMPDIR/${B}_linefeats.log";
+    > "$TMPDIR/${XMLBASE}_linefeats.log";
   [ "$?" != 0 ] &&
-    echo "$FN: error: check log file $TMPDIR/${B}_linefeats.log" 1>&2 &&
+    echo "$FN: error: more info might be in file $TMPDIR/${XMLBASE}_linefeats.log" 1>&2 &&
     return 1;
 
   ### Compute PCA and project features ###
@@ -2402,18 +2413,18 @@ htrsh_pageimg_forcealign () {
   fi
 
   [ "$AREG" = "yes" ] &&
-    htrsh_feats_catregions "$TMPDIR/${B}_feats.xml" "$TMPDIR" > $TMPDIR/${B}_feats.lst;
+    htrsh_feats_catregions "$TMPDIR/${XMLBASE}_feats.xml" "$TMPDIR" > $TMPDIR/${B}_feats.lst;
 
   ### Train HMMs model for this single page ###
   if [ "$MODEL" = "" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): training model for page ...";
-    htrsh_pagexml_to_mlf "$TMPDIR/${B}_feats.xml" -r $AREG > "$TMPDIR/${B}_page.mlf";
+    htrsh_pagexml_to_mlf "$TMPDIR/${XMLBASE}_feats.xml" -r $AREG > "$TMPDIR/${B}_page.mlf";
     [ "$?" != 0 ] && return 1;
     htrsh_hmm_train \
       "$TMPDIR/${B}_feats.lst" "$TMPDIR/${B}_page.mlf" -d "$TMPDIR" \
-      > "$TMPDIR/${B}_hmmtrain.log";
+      > "$TMPDIR/${XMLBASE}_hmmtrain.log";
     [ "$?" != 0 ] &&
-      echo "$FN: error: check log file $TMPDIR/${B}_hmmtrain.log" 1>&2 &&
+      echo "$FN: error: more info might be in file $TMPDIR/${XMLBASE}_hmmtrain.log" 1>&2 &&
       return 1;
     MODEL="$TMPDIR/Macros_hmm_g$(printf %.3d $htrsh_hmm_nummix).gz";
   fi
@@ -2424,31 +2435,32 @@ htrsh_pageimg_forcealign () {
   ### Do forced alignment using model ###
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): doing forced alignment ...";
   if [ "$AREG" = "yes" ]; then
-    cp "$TMPDIR/${B}_feats.xml" "$TMPDIR/${B}_align.xml";
+    cp "$TMPDIR/${XMLBASE}_feats.xml" "$TMPDIR/${XMLBASE}_align.xml";
     local id;
     for id in $(xmlstarlet sel -t -m "$htrsh_xpath_regions" -v @id -n "$XML"); do
       echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): aligning region $id";
-      htrsh_pageimg_forcealign_region "$TMPDIR/${B}_align.xml" "$id" \
-        "$TMPDIR" "$MODEL" "$TMPDIR/${B}_align-.xml" -d "$TMPDIR" \
-        >> "$TMPDIR/${B}_forcealign.log";
+      htrsh_pageimg_forcealign_region "$TMPDIR/${XMLBASE}_align.xml" "$id" \
+        "$TMPDIR" "$MODEL" "$TMPDIR/${XMLBASE}_align-.xml" -d "$TMPDIR" \
+        >> "$TMPDIR/${XMLBASE}_forcealign.log";
       [ "$?" != 0 ] &&
-        echo "$FN: error: check log file $TMPDIR/${B}_forcealign.log" 1>&2 &&
+        echo "$FN: error: more info might be in file $TMPDIR/${XMLBASE}_forcealign.log" 1>&2 &&
         return 1;
-      mv "$TMPDIR/${B}_align-.xml" "$TMPDIR/${B}_align.xml";
+      mv "$TMPDIR/${XMLBASE}_align-.xml" "$TMPDIR/${XMLBASE}_align.xml";
     done
-    cp -p "$TMPDIR/${B}_align.xml" "$XMLOUT";
+    cp -p "$TMPDIR/${XMLBASE}_align.xml" "$XMLOUT";
   else
     htrsh_pageimg_forcealign_lines \
-      "$TMPDIR/${B}_feats.xml" "$TMPDIR/${B}_feats.lst" "$MODEL" \
+      "$TMPDIR/${XMLBASE}_feats.xml" "$TMPDIR/${B}_feats.lst" "$MODEL" \
       "$XMLOUT" -d "$TMPDIR" \
-      > "$TMPDIR/${B}_forcealign.log";
+      > "$TMPDIR/${XMLBASE}_forcealign.log";
     [ "$?" != 0 ] &&
-      echo "$FN: error: check log file $TMPDIR/${B}_forcealign.log" 1>&2 &&
+      echo "$FN: error: more info might be in file $TMPDIR/${XMLBASE}_forcealign.log" 1>&2 &&
       return 1;
   fi 2>&1;
 
   [ "$KEEPTMP" != "yes" ] && rm -r "$TMPDIR";
 
+  local I=$(xmlstarlet sel -t -v //@imageFilename "$XML");
   local ed="-u //@imageFilename -v '$I'";
   [ "$KEEPAUX" != "yes" ] && ed="$ed -d //@fpgram -d //@fcontour";
 
