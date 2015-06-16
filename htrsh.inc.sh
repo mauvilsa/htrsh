@@ -23,7 +23,7 @@ htrsh_text_translit="no";
 
 htrsh_xpath_regions='//_:TextRegion';    # XPATH for selecting Page regions to process
 #htrsh_xpath_lines='_:TextLine/_:Coords'; # XPATH for selecting lines (appended to htrsh_xpath_regions)
-htrsh_xpath_lines='_:TextLine[_:Coords and _:TextEquiv/_:Unicode]';
+htrsh_xpath_lines='_:TextLine[_:Coords and _:TextEquiv/_:Unicode and _:TextEquiv/_:Unicode != ""]';
 
 htrsh_imgtxtenh_regmask="no";                # Whether to use a region-based processing mask
 htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.1"; # Options for imgtxtenh tool
@@ -168,10 +168,10 @@ htrsh_pagexml_to_kalditxt () {
 
   local XPATH IDop;
   if [ "$REGSRC" = "yes" ]; then
-    XPATH="$htrsh_xpath_regions/_:TextEquiv/_:Unicode";
+    XPATH="$htrsh_xpath_regions/_:TextEquiv/_:Unicode[. != '']";
     IDop="-o $PG. -v ../../@id";
   else
-    XPATH="$htrsh_xpath_regions/_:TextLine/_:TextEquiv/_:Unicode";
+    XPATH="$htrsh_xpath_regions/_:TextLine/_:TextEquiv/_:Unicode[. != '']";
     IDop="-o $PG. -v ../../../@id -o . -v ../../@id";
   fi
 
@@ -234,14 +234,14 @@ htrsh_pagexml_to_mlf () {
 
   local TAB=$(printf "\t");
   local PG=$(xmlstarlet sel -t -v //@imageFilename "$XML" \
-               | sed 's|.*/||; s|\.[^.]*$||; s|\[|_|g; s|]|_|g;');
+               | sed 's|.*/||; s|\.[^.]*$||; s|[\[ ()]|_|g; s|]|_|g;');
 
   local XPATH IDop;
   if [ "$REGSRC" = "yes" ]; then
-    XPATH="$htrsh_xpath_regions/_:TextEquiv/_:Unicode";
+    XPATH="$htrsh_xpath_regions/_:TextEquiv/_:Unicode[. != '']";
     IDop="-o $PG. -v ../../@id";
   else
-    XPATH="$htrsh_xpath_regions/_:TextLine/_:TextEquiv/_:Unicode";
+    XPATH="$htrsh_xpath_regions/_:TextLine/_:TextEquiv/_:Unicode[. != '']";
     IDop="-o $PG. -v ../../../@id -o . -v ../../@id";
   fi
 
@@ -316,7 +316,7 @@ htrsh_pageimg_info () {
   elif [ ! -f "$XML" ]; then
     echo "$FN: error: page file not found: $XML" 1>&2;
     return 1;
-  elif [ $(eval xmlstarlet val $VAL "$XML" | grep ' invalid$' | wc -l) != 0 ]; then
+  elif [ $(eval xmlstarlet val $VAL "'$XML'" | grep ' invalid$' | wc -l) != 0 ]; then
     echo "$FN: error: invalid page file: $XML" 1>&2;
     return 1;
   fi
@@ -755,7 +755,7 @@ htrsh_pagexml_fpgram2points () {
     cmd="$cmd -r '//_:TextLine[@id=\"$id\"]/_:Coords/@fpgram' -v points";
   done
 
-  eval $cmd "$XML";
+  eval $cmd "'$XML'";
 
   return 0;
 }
@@ -998,7 +998,7 @@ htrsh_pageimg_extract_lines () {
   local NUMLINES=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/$htrsh_xpath_lines/_:Coords)" "$XML");
 
   if [ "$NUMLINES" -gt 0 ]; then
-    local base=$(echo "$OUTDIR/$IMBASE" | sed 's|\[|_|g; s|]|_|g;');
+    local base=$(echo "$OUTDIR/$IMBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
 
     xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines/_:Coords" \
         -o "$base." -v ../../@id -o "." -v ../@id -o ".png " -v @points -n "$XML" \
@@ -1130,7 +1130,7 @@ htrsh_feats_catregions () {
     echo "$FN: error: features directory not found: $FEATDIR" 1>&2 &&
     return 1;
 
-  local FBASE=$(echo "$FEATDIR/$IMBASE" | sed 's|\[|_|g; s|]|_|g;');
+  local FBASE=$(echo "$FEATDIR/$IMBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
 
   xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
       -o "$FBASE." -v ../../@id -o "." -v ../@id -o ".fea" -n "$XML" \
@@ -1150,7 +1150,7 @@ htrsh_feats_catregions () {
         ff="$ff + '$f'";
       fi
     done
-    eval HCopy $ff "$FBASE.$id.fea";
+    eval HCopy $ff "'$FBASE.$id.fea'";
 
     echo "$FBASE.$id.fea" >> "$FEATLST";
   done
@@ -1557,7 +1557,7 @@ htrsh_pageimg_extract_linefeats () {
   fi
 
   ### Generate new XML Page file ###
-  eval xmlstarlet ed -P $ed "$XML" > "$XMLOUT";
+  eval xmlstarlet ed -P $ed "'$XML'" > "$XMLOUT";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems generating XML file: $XMLOUT" 1>&2 &&
     return 1;
@@ -1569,7 +1569,7 @@ htrsh_pageimg_extract_linefeats () {
       ed="$ed -d '//*[@id=\"${id}\"]/_:Coords/@points'";
       ed="$ed -r '//*[@id=\"${id}\"]/_:Coords/@fcontour' -v points";
     done
-    eval xmlstarlet ed --inplace $ed "$XMLOUT";
+    eval xmlstarlet ed --inplace $ed "'$XMLOUT'";
   fi
 
   return 0;
@@ -2005,7 +2005,7 @@ htrsh_pageimg_forcealign_lines () {
   local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
-  local B=$(echo "$XMLBASE" | sed 's|\[|_|g; s|]|_|g;');
+  local B=$(echo "$XMLBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
 
   ### Create MLF from XML ###
   htrsh_pagexml_to_mlf "$XML" > "$TMPDIR/$B.mlf";
@@ -2223,7 +2223,7 @@ htrsh_pageimg_forcealign_lines () {
 
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): edit XML ..." 1>&2;
   ### Create new XML including alignments ###
-  eval $cmd "$XML" > "$XMLOUT";
+  eval $cmd "'$XML'" > "$XMLOUT";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems creating XML file: $XMLOUT" 1>&2 &&
     return 1;
@@ -2318,7 +2318,8 @@ htrsh_pageimg_forcealign () {
 
   #local RCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextEquiv/_:Unicode)" "$XML");
   local RCNT="0";
-  local LCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextLine/_:TextEquiv/_:Unicode)" "$XML");
+  #local LCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextLine/_:TextEquiv/_:Unicode)" "$XML");
+  local LCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/$htrsh_xpath_lines/_:TextEquiv/_:Unicode)" "$XML");
   [ "$RCNT" = 0 ] && [ "$LCNT" = 0 ] &&
     echo "$FN: error: no TextEquiv/Unicode nodes for processing: $XML" 1>&2 &&
     return 1;
@@ -2331,7 +2332,7 @@ htrsh_pageimg_forcealign () {
 
   mkdir -p "$TMPDIR";
 
-  local B=$(echo "$XMLBASE" | sed 's|\[|_|g; s|]|_|g;');
+  local B=$(echo "$XMLBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
 
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): processing page: $XML";
 
@@ -2446,7 +2447,7 @@ htrsh_pageimg_forcealign () {
   local ed="-u //@imageFilename -v '$I'";
   [ "$KEEPAUX" != "yes" ] && ed="$ed -d //@fpgram -d //@fcontour";
 
-  eval xmlstarlet ed --inplace $ed "$XMLOUT";
+  eval xmlstarlet ed --inplace $ed "'$XMLOUT'";
 
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): finished, $(( $(date +%s)-TS )) seconds";
 
