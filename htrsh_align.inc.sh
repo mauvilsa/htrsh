@@ -38,7 +38,7 @@ htrsh_pageimg_forcealign_region () {
     return 1;
   fi
 
-  ### Parse input agruments ###
+  ### Parse input arguments ###
   local XML="$1";
   local REGID="$2";
   local FEATDIR="$3";
@@ -106,7 +106,7 @@ htrsh_pageimg_forcealign_region () {
 
   ### Do forced alignment with HVite ###
   echo "$FBASE.$REGID.fea" > "$TMPDIR/fea.lst";
-  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_baseHTKcfg" ) -H "$MODEL" -S "$TMPDIR/fea.lst" -m -I "$TMPDIR/$XMLBASE.mlf" -i "$TMPDIR/${XMLBASE}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
+  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$TMPDIR/fea.lst" -m -I "$TMPDIR/$XMLBASE.mlf" -i "$TMPDIR/${XMLBASE}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
   [ "$?" != 0 ] &&
     echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
     return 1;

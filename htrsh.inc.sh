@@ -19,8 +19,6 @@
 
 htrsh_keeptmp="0";
 
-htrsh_text_translit="no";
-
 htrsh_xpath_regions='//_:TextRegion';    # XPATH for selecting Page regions to process
 #htrsh_xpath_lines='_:TextLine/_:Coords'; # XPATH for selecting lines (appended to htrsh_xpath_regions)
 htrsh_xpath_lines='_:TextLine[_:Coords and _:TextEquiv/_:Unicode and _:TextEquiv/_:Unicode != ""]';
@@ -57,11 +55,31 @@ htrsh_HTK_HVite_opts="";           # Options for HVite tool
 
 #htrsh_HTK_HVite_opts="-A -T 1";
 
-htrsh_baseHTKcfg='
-HMMDEFFILTER   = "gzip -d -c $"
-HMMDEFOFILTER  = "gzip -c > $"
+htrsh_HTK_config='
+HMMDEFFILTER   = "zcat $"
+HMMDEFOFILTER  = "gzip > $"
+HNETFILTER     = "zcat $"
+HNETOFILTER    = "gzip > $"
 NONUMESCAPES   = T
 ';
+
+htrsh_sed_tokenize_simplest='
+  s|$\.|$*|g;
+  s|\([.,:;!¡?¿\x27´`"“”„(){}]\)| \1 |g;
+  s|$\*|$.|g;
+  s|^  *||;
+  s|  *$||;
+  s|   *| |g;
+  s|\. \. \.|...|g;
+  ';
+
+htrsh_sed_translit_vowels='
+  s|á|a|g; s|Á|A|g;
+  s|é|e|g; s|É|E|g;
+  s|í|i|g; s|Í|I|g;
+  s|ó|o|g; s|Ó|O|g;
+  s|ú|u|g; s|Ú|U|g;
+  ';
 
 htrsh_valschema="yes";
 htrsh_pagexsd="http://mvillegas.info/xsd/2013-07-15/pagecontent.xsd";
@@ -127,31 +145,40 @@ htrsh_check_req () {
 }
 
 
-#--------------------------------#
-# XML Page manipulation fuctions #
-#--------------------------------#
+#---------------------------------#
+# XML Page manipulation functions #
+#---------------------------------#
 
 ##
-## Function that prints to stdout in kaldi format the text from an XML Page file
+## Function that prints to stdout the TextEquiv from an XML Page file supporting several formats
 ##
-htrsh_pagexml_to_kalditxt () {
-  local FN="htrsh_pagexml_to_kalditxt";
+htrsh_pagexml_textequiv () {
+  local FN="htrsh_pagexml_textequiv";
   local REGSRC="no";
+  local FORMAT="mlf-chars";
+  local FILTER="cat";
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
-      echo "Description: Prints to stdout in kaldi format the text from an XML Page file";
+      echo "Description: Prints to stdout the TextEquiv from an XML Page file supporting several formats";
       echo "Usage: $FN XMLFILE [ Options ]";
       echo "Options:";
       echo " -r (yes|no)  Whether to get TextEquiv from regions instead of lines (def.=$REGSRC)";
+      echo " -f FORMAT    Output format among 'raw', 'mlf-chars', 'mlf-words' and 'kaldi-table' (def.=$FORMAT)";
+      echo " -F FILTER    Filtering pipe command, e.g. tokenizer, transliteration, etc. (def.=none)";
     } 1>&2;
     return 1;
   fi
 
+  ### Parse input arguments ###
   local XML="$1";
   shift;
   while [ $# -gt 0 ]; do
     if [ "$1" = "-r" ]; then
       REGSRC="$2";
+    elif [ "$1" = "-f" ]; then
+      FORMAT="$2";
+    elif [ "$1" = "-F" ]; then
+      FILTER="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -163,76 +190,6 @@ htrsh_pagexml_to_kalditxt () {
   htrsh_pageimg_info "$XML" noinfo;
   [ "$?" != 0 ] && return 1;
 
-  local TAB=$(printf "\t");
-  local PG=$(xmlstarlet sel -t -v //@imageFilename "$XML" | sed 's|.*/||; s|\.[^.]*$||;');
-
-  local XPATH IDop;
-  if [ "$REGSRC" = "yes" ]; then
-    XPATH="$htrsh_xpath_regions/_:TextEquiv/_:Unicode[. != '']";
-    IDop="-o $PG. -v ../../@id";
-  else
-    XPATH="$htrsh_xpath_regions/_:TextLine/_:TextEquiv/_:Unicode[. != '']";
-    IDop="-o $PG. -v ../../../@id -o . -v ../../@id";
-  fi
-
-  [ $(xmlstarlet sel -t -v "count($XPATH)" "$XML") = 0 ] &&
-    echo "$FN: error: zero nodes match xpath $XPATH on file: $XML" 1>&2 &&
-    return 1;
-
-  if [ "$htrsh_text_translit" != "yes" ]; then
-    tr '\t\n' '  ' < "$XML" \
-      | xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" \
-          $IDop -o "$TAB" -v . -n;
-  else
-    tr '\t\n' '  ' < "$XML" \
-      | xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" \
-          $IDop -o "$TAB" -v . -n \
-      | iconv -f utf8 -t ascii//TRANSLIT;
-  fi \
-    | sed '
-        s|\t  *|\t|;
-        s|  *$||;
-        s|   *| |g;
-        s|\t| |;
-        ';
-
-  return 0;
-}
-
-
-##
-## Function that prints to stdout an MLF created from an XML Page file
-##
-htrsh_pagexml_to_mlf () {
-  local FN="htrsh_pagexml_to_mlf";
-  local REGSRC="no";
-  if [ $# -lt 1 ]; then
-    { echo "$FN: Error: Not enough input arguments";
-      echo "Description: Prints to stdout an MLF created from an XML Page file";
-      echo "Usage: $FN XMLFILE [ Options ]";
-      echo "Options:";
-      echo " -r (yes|no)  Whether to get TextEquiv from regions instead of lines (def.=$REGSRC)";
-    } 1>&2;
-    return 1;
-  fi
-
-  local XML="$1";
-  shift;
-  while [ $# -gt 0 ]; do
-    if [ "$1" = "-r" ]; then
-      REGSRC="$2";
-    else
-      echo "$FN: error: unexpected input argument: $1" 1>&2;
-      return 1;
-    fi
-    shift 2;
-  done
-
-  ### Check page ###
-  htrsh_pageimg_info "$XML" noinfo;
-  [ "$?" != 0 ] && return 1;
-
-  local TAB=$(printf "\t");
   local PG=$(xmlstarlet sel -t -v //@imageFilename "$XML" \
                | sed 's|.*/||; s|\.[^.]*$||; s|[\[ ()]|_|g; s|]|_|g;');
 
@@ -249,53 +206,154 @@ htrsh_pagexml_to_mlf () {
     echo "$FN: error: zero nodes match xpath $XPATH on file: $XML" 1>&2 &&
     return 1;
 
-  echo '#!MLF!#';
-  if [ "$htrsh_text_translit" != "yes" ]; then
-    tr '\t\n' '  ' < "$XML" \
-      | xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" \
-          $IDop -o "$TAB" -v . -n;
-  else
-    tr '\t\n' '  ' < "$XML" \
-      | xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" \
-          $IDop -o "$TAB" -v . -n \
-      | iconv -f utf8 -t ascii//TRANSLIT;
-  fi \
+  paste \
+      <( xmlstarlet sel -t -m "$XPATH" $IDop -n "$XML" ) \
+      <( cat "$XML" \
+           | tr '\t\n' '  ' \
+           | xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" -v . -n \
+           | eval $FILTER ) \
     | sed '
         s|\t  *|\t|;
         s|  *$||;
         s|   *| |g;
         ' \
-    | awk -F'\t' '
-        { printf("\"*/%s.lab\"\n",$1);
-          printf("@\n");
-          N = split($2,txt,"");
-          for( n=1; n<=N; n++ ) {
-            if( txt[n] == " " )
-              printf("@\n");
-            else if( txt[n] == "@" )
-              printf("{at}\n");
-            else if( txt[n] == "\"" )
-              printf("{dquote}\n");
-            else if( txt[n] == "\x27" )
-              printf("{quote}\n");
-            else if( txt[n] == "&" )
-              printf("{amp}\n");
-            else if( txt[n] == "<" )
-              printf("{lt}\n");
-            else if( txt[n] == ">" )
-              printf("{gt}\n");
-            else if( txt[n] == "{" )
-              printf("{lbrace}\n");
-            else if( txt[n] == "}" )
-              printf("{rbrace}\n");
-            else if( match(txt[n],"[.0-9]") )
-              printf("\"%s\"\n",txt[n]);
-            else
-              printf("%s\n",txt[n]);
+    | awk -F'\t' -v FORMAT=$FORMAT '
+        BEGIN {
+          if( FORMAT == "kaldi-table" )
+            OFS=" ";
+        }
+        { if( FORMAT == "raw" )
+            print $2;
+          else if( FORMAT == "kaldi-table" )
+            print $1,$2;
+          else if( FORMAT == "mlf-words" ) {
+            printf("\"*/%s.lab\"\n",$1);
+            gsub("\x22","\\\x22",$2);
+            N = split($2,txt," ");
+            for( n=1; n<=N; n++ )
+              printf( "\"%s\"\n", txt[n] );
+            printf(".\n");
           }
-          printf("@\n");
-          printf(".\n");
+          else if( FORMAT == "mlf-chars" ) {
+            printf("\"*/%s.lab\"\n",$1);
+            printf("@\n");
+            N = split($2,txt,"");
+            for( n=1; n<=N; n++ ) {
+              if( txt[n] == " " )
+                printf( "@\n" );
+              else if( txt[n] == "@" )
+                printf( "{at}\n" );
+              else if( txt[n] == "\"" )
+                printf( "{dquote}\n" );
+              else if( txt[n] == "\x27" )
+                printf( "{quote}\n" );
+              else if( txt[n] == "&" )
+                printf( "{amp}\n" );
+              else if( txt[n] == "<" )
+                printf( "{lt}\n" );
+              else if( txt[n] == ">" )
+                printf( "{gt}\n" );
+              else if( txt[n] == "{" )
+                printf( "{lbrace}\n" );
+              else if( txt[n] == "}" )
+                printf( "{rbrace}\n" );
+              else if( match(txt[n],"[.0-9]") )
+                printf( "\"%s\"\n", txt[n] );
+              else
+                printf("%s\n",txt[n]);
+            }
+            printf("@\n");
+            printf(".\n");
+          }
         }';
+
+  return 0;
+}
+
+##
+## Function that transforms two MLF files to the format used by tasas
+##
+htrsh_mlf_to_tasas () {
+  local FN="htrsh_mlf_to_tasas";
+  local SEPCHARS="no";
+  if [ $# -lt 2 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Transforms two MLF files to the format used by tasas";
+      echo "Usage: $FN MLF_LAB MLF_REC [ Options ]";
+      echo "Options:";
+      echo " -c (yes|no)  Whether to separate characters for CER computation (def.=$SEPCHARS)";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local MLF_LAB="$1";
+  local MLF_REC="$2";
+  shift 2;
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "-c" ]; then
+      SEPCHARS="$2";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
+    shift 2;
+  done
+
+  if ! [ -e "$MLF_LAB" ]; then
+    echo "$FN: error: MLF file not found: $MLF_LAB" 1>&2;
+    return 1;
+  elif ! [ -e "$MLF_REC" ]; then
+    echo "$FN: error: MLF file not found: $MLF_REC" 1>&2;
+    return 1;
+  fi
+
+  local GAWK_FORMAT_MLF='
+    BEGIN {
+      NMLF = 0;
+      SEPCHARS = SEPCHARS == "yes" ? 1 : 0 ;
+    }
+    { if( match( $1, /^"\*\// ) ) {
+        $1 = gensub( /^"\*\/(.+)\.[^.]+"$/, "\\1", "", $1 );
+        printf( NMLF == 0 ? "%s\t" : "\n%s\t", $1 );
+        NMLF ++;
+        NTOKENS = 0;
+      }
+      else if( $0 != "#!MLF!#" && $0 != "." ) {
+        if( NF == 4 )
+          $1 = $3;
+        $1 = gensub( /^"(.+)"$/, "\\1", "", $1 );
+        if( ! SEPCHARS ) {
+          printf( NTOKENS == 0 ? "%s" : " %s", $1 );
+          NTOKENS ++;
+        }
+        else {
+          if( NTOKENS > 0 )
+            printf( " @" );
+          N = split( $1, chars, "" );
+          for( n=1; n<=N; n++ ) {
+            printf( NTOKENS == 0 ? "%s" : " %s", chars[n] );
+            NTOKENS ++;
+          }
+        }
+      }
+    }
+    END {
+      if( NMLF > 0 )
+        printf( "\n" );
+    }';
+
+  awk -v SEPCHARS=$SEPCHARS "$GAWK_FORMAT_MLF" "$MLF_LAB" \
+    | awk -F'\t' '
+        { if( FILENAME == "-" )
+            LAB[$1] = $2;
+          else {
+            if( !( $1 in LAB ) )
+              printf( "warning: no lab for %s\n", $1 ) > "/dev/stderr";
+            else
+              printf( "%s|%s\n", LAB[$1], $2 );
+          }
+        }' - <( awk -v SEPCHARS=$SEPCHARS "$GAWK_FORMAT_MLF" "$MLF_REC" );
 
   return 0;
 }
@@ -393,6 +451,7 @@ htrsh_pageimg_resize () {
     return 1;
   fi
 
+  ### Parse input arguments ###
   local XML="$1";
   local OUTDIR="$2";
   shift 2;
@@ -563,7 +622,6 @@ htrsh_pagexml_resize () {
 
   return $?;
 }
-
 
 ##
 ## Function that sorts TextLines within each TextRegion in an XML Page file
@@ -745,7 +803,7 @@ htrsh_pagexml_fpgram2points () {
     return 1;
   fi
 
-  ### Parse input agruments ###
+  ### Parse input arguments ###
   local XML="$1";
 
   local cmd="xmlstarlet ed";
@@ -761,9 +819,9 @@ htrsh_pagexml_fpgram2points () {
 }
 
 
-#-------------------------------------#
-# Feature extraction related fuctions #
-#-------------------------------------#
+#--------------------------------------#
+# Feature extraction related functions #
+#--------------------------------------#
 
 ##
 ## Function that cleans and enhances a text image based on regions defined in an XML Page file
@@ -781,6 +839,7 @@ htrsh_pageimg_clean () {
     return 1;
   fi
 
+  ### Parse input arguments ###
   local XML="$1";
   local OUTDIR="$2";
   shift 2;
@@ -868,6 +927,7 @@ htrsh_pageimg_quadborderclean () {
     return 1;
   fi
 
+  ### Parse input arguments ###
   local XML="$1";
   local OUTIMG="$2";
   shift 2;
@@ -976,6 +1036,7 @@ htrsh_pageimg_extract_lines () {
     return 1;
   fi
 
+  ### Parse input arguments ###
   local XML="$1";
   shift;
   while [ $# -gt 0 ]; do
@@ -1025,7 +1086,7 @@ htrsh_feats_discretize () {
     return 1;
   fi
 
-  ### Parse input agruments ###
+  ### Parse input arguments ###
   local FEATLST="$1";
   local CBOOK="$2";
   local OUTDIR="$3";
@@ -1041,7 +1102,7 @@ htrsh_feats_discretize () {
     return 1;
   fi
 
-  local CFG="$htrsh_baseHTKcfg"'
+  local CFG="$htrsh_HTK_config"'
 TARGETKIND     = USER_V
 VQTABLE        = '"$CBOOK"'
 SAVEASVQ       = T
@@ -1071,7 +1132,7 @@ htrsh_extract_feats () {
     return 1;
   fi
 
-  ### Parse input agruments ###
+  ### Parse input arguments ###
   local IMGIN="$1";
   local FEAOUT="$2";
 
@@ -1107,7 +1168,7 @@ htrsh_feats_catregions () {
     return 1;
   fi
 
-  ### Parse input agruments ###
+  ### Parse input arguments ###
   local XML="$1";
   local FEATDIR="$2";
   shift 2;
@@ -1178,7 +1239,7 @@ htrsh_feats_pca () {
     return 1;
   fi
 
-  ### Parse input agruments ###
+  ### Parse input arguments ###
   local FEATLST="$1";
   local OUTMAT="$2";
   shift 2;
@@ -1294,7 +1355,7 @@ htrsh_feats_project () {
     return 1;
   fi
 
-  ### Parse input agruments ###
+  ### Parse input arguments ###
   local FEATLST="$1";
   local PBASE="$2";
   local OUTDIR="$3";
@@ -1311,14 +1372,14 @@ htrsh_feats_project () {
   fi
 
   { echo "load('$PBASE');"
-    local f;
+    local f ff;
     for f in $(< "$FEATLST"); do
+      ff=$(echo "$f" | sed "s|.*/|$OUTDIR/|");
       echo "
         [x,FP,DT,TC,T] = readhtk('$f');
         x = (x-repmat(mu,size(x,1),1))*B;
-        writehtk('$f',x,FP,TC);
-        %save('-ascii','$f','x');
-      ";
+        writehtk('$ff',x,FP,TC);
+        ";
     done
   } | octave -q;
 
@@ -1374,7 +1435,7 @@ htrsh_pageimg_extract_linefeats () {
     return 1;
   fi
 
-  ### Parse input agruments ###
+  ### Parse input arguments ###
   local XML="$1";
   local XMLOUT="$2";
   shift 2;
@@ -1576,9 +1637,142 @@ htrsh_pageimg_extract_linefeats () {
 }
 
 
-#--------------------------------------#
-# HMM model training related functions #
-#--------------------------------------#
+#----------------------------------#
+# Model training related functions #
+#----------------------------------#
+
+##
+## Function that trains a language model and creates related files
+##
+htrsh_langmodel_train () {
+  local FN="htrsh_langmodel_train";
+  local OUTDIR=".";
+  local ORDER="2";
+  local TOKENIZER="cat";
+  local CANONIZER="cat";
+  local DIPLOMATIZER="cat";
+  if [ $# -lt 1 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Trains a language model and creates related files";
+      echo "Usage: $FN TEXTFILE [ Options ]";
+      echo "Options:";
+      echo " -o ORDER        Order of the language model (def.=$ORDER)";
+      echo " -d OUTDIR       Directory for output models and temporary files (def.=$OUTDIR)";
+      echo " -T TOKENIZER    Tokenizer pipe command (def.=none)";
+      echo " -C CANONIZER    Word canonization pipe command, e.g. convert to upper (def.=none)";
+      echo " -D DIPLOMATIZER Word diplomatizer pipe command, e.g. remove expansions (def.=none)";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local TXT="$1"; [ "$TXT" = "-" ] && TXT="/dev/stdin";
+  shift;
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "-o" ]; then
+      ORDER="$2";
+    elif [ "$1" = "-d" ]; then
+      OUTDIR="$2";
+    elif [ "$1" = "-T" ]; then
+      TOKENIZER="$2";
+    elif [ "$1" = "-C" ]; then
+      CANONIZER="$2";
+    elif [ "$1" = "-D" ]; then
+      DIPLOMATIZER="$2";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
+    shift 2;
+  done
+
+  local ORDEROPTS="-order $ORDER";
+  local n;
+  for n in $(seq 1 $ORDER); do
+    ORDEROPTS="$ORDEROPTS -ukndiscount$n";
+  done
+
+  local GAWK_CREATE_DIC='
+    BEGIN {
+      FS="\t";
+    }
+    { canonic_count[$1] ++;
+      variant_count[$1][$2] ++;
+      variant_models[$1][$2] = $3;
+    }
+    END {
+      printf( "\"<s>\"\t[]\t1\t@\n" );
+      printf( "\"</s>\"\t[]\n" );
+      for( canonic in canonic_count ) {
+        wcanonic = canonic;
+        gsub( "\x22", "\\\x22", wcanonic );
+        gsub( "\x27", "\\\x27", wcanonic );
+        for( variant in variant_count[canonic] ) {
+          vprob = sprintf("%g",variant_count[canonic][variant]/canonic_count[canonic]);
+          if( ! match(vprob,/\./) )
+            vprob = ( vprob ".0" );
+          printf( "\"%s\"\t[%s]\t%s\t", wcanonic, variant, vprob );
+          N = split( variant_models[canonic][variant], txt, "" );
+          for( n=1; n<=N; n++ ) {
+            printf( n==1 ? "" : " " );
+            switch( txt[n] ) {
+            case "@":    printf( "{at}" );       break;
+            case "&":    printf( "{amp}" );      break;
+            case "<":    printf( "{lt}" );       break;
+            case ">":    printf( "{gt}" );       break;
+            case "{":    printf( "{lbrace}" );   break;
+            case "}":    printf( "{rbrace}" );   break;
+            case "\x22": printf( "{dquote}" );   break;
+            case "\x27": printf( "{quote}" );    break;
+            default:     printf( "%s", txt[n] ); break;
+            }
+          }
+          printf( " @\n" );
+        }
+      }
+    }';
+
+  ### Tokenize training text ###
+  cat "$TXT" \
+    | eval $TOKENIZER \
+    > "$OUTDIR/text_tokenized.txt";
+
+  ### Create dictionary ###
+  paste \
+      <( cat "$OUTDIR/text_tokenized.txt" \
+           | eval $CANONIZER \
+           | tee "$OUTDIR/text_canonized.txt" \
+           | tr ' ' '\n' ) \
+      <( cat "$OUTDIR/text_tokenized.txt" \
+           | tr ' ' '\n' ) \
+      <( cat "$OUTDIR/text_tokenized.txt" \
+           | eval $DIPLOMATIZER \
+           | tr ' ' '\n' ) \
+    | gawk "$GAWK_CREATE_DIC" \
+    | LC_ALL=C.UTF-8 sort \
+    > "$OUTDIR/dictionary.txt";
+
+  ### Create vocabulary ###
+  awk '
+    { if( $1 != "\"<s>\"" && $1 != "\"</s>\"" )
+        print $1;
+    }' "$OUTDIR/dictionary.txt" \
+    | sed 's|^"||; s|"$||;' \
+    > "$OUTDIR/vocabulary.txt";
+
+  ### Create n-gram ###
+  ngram-count -text "$OUTDIR/text_canonized.txt" -vocab "$OUTDIR/vocabulary.txt" \
+      -lm - $ORDEROPTS \
+    | sed 's|\(["\x27]\)|\\\1|g' \
+    > "$OUTDIR/langmodel_${ORDER}-gram.arpa";
+
+  HBuild -n "$OUTDIR/langmodel_${ORDER}-gram.arpa" -s "<s>" "</s>" \
+    "$OUTDIR/dictionary.txt" "$OUTDIR/langmodel_${ORDER}-gram.lat";
+
+  rm "$OUTDIR/vocabulary.txt";
+
+  return 0;
+}
 
 ##
 ## Function that prints to stdout HMM prototype(s) in HTK format
@@ -1600,7 +1794,7 @@ htrsh_hmm_proto () {
     return 1;
   fi
 
-  ### Parse input agruments ###
+  ### Parse input arguments ###
   local DIMS="$1";
   local STATES="$2";
   shift 2;
@@ -1718,9 +1912,10 @@ htrsh_hmm_train () {
   local OUTDIR=".";
   local CODES="0";
   local PROTO="";
-  local KEEPROTO="no";
-  local KEEPIT="no";
+  local KEEPITERS="yes";
+  local RESUME="yes";
   local RAND="no";
+  local THREADS="1";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Trains HMMs for a given feature list and mlf";
@@ -1729,14 +1924,15 @@ htrsh_hmm_train () {
       echo " -d OUTDIR    Directory for output models and temporary files (def.=$OUTDIR)";
       echo " -c CODES     Train discrete model with given codebook size (def.=false)";
       echo " -P PROTO     Use PROTO as initialization prototype (def.=false)";
-      echo " -p (yes|no)  Keep initialization prototype (def.=$KEEPROTO)";
-      echo " -i (yes|no)  Keep models per iteration (def.=$KEEPIT)";
+      echo " -k (yes|no)  Whether to keep models per iteration, including initialization (def.=$KEEPITERS)";
+      echo " -r (yes|no)  Whether to resume previous training, looks for models per iteration (def.=$RESUME)";
       echo " -R (yes|no)  Whether to randomize initialization prototype (def.=$RAND)";
+      echo " -T THREADS   Threads for parallel processing, max. 99 (def.=$THREADS)";
     } 1>&2;
     return 1;
   fi
 
-  ### Parse input agruments ###
+  ### Parse input arguments ###
   local FEATLST="$1";
   local MLF="$2";
   shift 2;
@@ -1747,12 +1943,14 @@ htrsh_hmm_train () {
       CODES="$2";
     elif [ "$1" = "-P" ]; then
       PROTO="$2";
-    elif [ "$1" = "-p" ]; then
-      KEEPROTO="$2";
-    elif [ "$1" = "-i" ]; then
-      KEEPIT="$2";
+    elif [ "$1" = "-k" ]; then
+      KEEPITERS="$2";
+    elif [ "$1" = "-r" ]; then
+      RESUME="$2";
     elif [ "$1" = "-R" ]; then
       RAND="$2";
+    elif [ "$1" = "-T" ]; then
+      THREADS=$(echo $2 | awk '{ v=0.0+$1; printf( "%d", v>99 ? 99 : (v<1?1:v) ) }');
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -1771,7 +1969,7 @@ htrsh_hmm_train () {
     return 1;
   fi
 
-  local DIMS=$(HList -z -h "$(head -n 1 "$FEATLST")" | sed -n '/Num Comps:/{s|.*Num Comps: *||;s| .*||;p;}');
+  local DIMS=$(HList -z -h $(head -n 1 "$FEATLST") | sed -n '/Num Comps:/{s|.*Num Comps: *||;s| .*||;p;}');
   [ "$CODES" != 0 ] && [ $(HList -z -h "$(head -n 1 "$FEATLST")" | grep DISCRETE_K | wc -l) = 0 ] &&
     echo "$FN: error: features are not discrete" 1>&2 &&
     return 1;
@@ -1780,11 +1978,25 @@ htrsh_hmm_train () {
                    | sed '/^#!MLF!#/d; /^"\*\//d; /^\.$/d; s|^"||; s|"$||;' \
                    | sort -u);
 
+  if [ "$THREADS" -gt 1 ]; then
+    local FEATNUM=$(( ( $(wc -l < "$FEATLST") + THREADS - 1 ) / THREADS ));
+    [ $FEATNUM -le 1 ] && FEATNUM="2";
+    rm -f "$OUTDIR/train_feats_part_"*;
+    awk '{printf("%s %s\n",rand(),$0)}' "$FEATLST" \
+      | sort \
+      | sed 's|^[^ ]* ||' \
+      | split --numeric-suffixes=1 -l $FEATNUM - "$OUTDIR/train_feats_part_";
+    THREADS=$(ls "$OUTDIR/train_feats_part_"* | wc -l);
+  fi
+
   ### Discrete training ###
   if [ "$CODES" -gt 0 ]; then
     ### Initialization ###
     if [ "$PROTO" != "" ]; then
       cp -p "$PROTO" "$OUTDIR/Macros_hmm.gz";
+
+      [ "$KEEPITERS" = "yes" ] &&
+        cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_i00.gz";
 
     else
       if [ "$RAND" = "yes" ]; then
@@ -1793,7 +2005,7 @@ htrsh_hmm_train () {
       else
         htrsh_hmm_proto "$CODES" "$htrsh_hmm_states" -D yes \
           | gzip > "$OUTDIR/proto.gz";
-        HInit -C <( echo "$htrsh_baseHTKcfg" ) -i 0 -S "$FEATLST" -M "$OUTDIR" "$OUTDIR/proto.gz";
+        HInit -C <( echo "$htrsh_HTK_config" ) -i 0 -S "$FEATLST" -M "$OUTDIR" "$OUTDIR/proto.gz" 1>&2;
         mv "$OUTDIR/proto.gz" "$OUTDIR/proto";
 
         # @todo not tested yet so test it
@@ -1820,24 +2032,25 @@ htrsh_hmm_train () {
           > "$OUTDIR/Macros_hmm.gz";
       fi
 
-      [ "$KEEPROTO" = "yes" ] && cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/proto.gz";
+      [ "$KEEPITERS" = "yes" ] &&
+        cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_i00.gz";
     fi
 
     ### Iterate ###
     local i;
     for i in $(seq -f %02.0f 1 $htrsh_hmm_iter); do
-      echo "$FN: info: HERest iteration $i";
-      HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_baseHTKcfg" ) \
-        -S "$FEATLST" -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" <( echo "$HMMLST" );
+      echo "$FN: info: HERest iteration $i" 1>&2;
+      HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_HTK_config" ) \
+        -S "$FEATLST" -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" <( echo "$HMMLST" ) 1>&2;
       if [ "$?" != 0 ]; then
         echo "$FN: error: problem with HERest" 1>&2;
         mv "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_i${i}_err.gz"
         return 1;
       fi
-      [ "$KEEPIT" = "yes" ] &&
+      [ "$KEEPITERS" = "yes" ] &&
         cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_i$i.gz";
     done
-    [ "$KEEPIT" = "yes" ] &&
+    [ "$KEEPITERS" = "yes" ] &&
       cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_i$i.gz";
 
   ### Continuous training ###
@@ -1846,25 +2059,34 @@ htrsh_hmm_train () {
     if [ "$PROTO" != "" ]; then
       cp -p "$PROTO" "$OUTDIR/Macros_hmm.gz";
 
+      [ "$KEEPITERS" = "yes" ] &&
+        cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g001_i00.gz";
+
+    elif [ "$RESUME" != "no" ] && [ -e "$OUTDIR/Macros_hmm_g001_i00.gz" ]; then
+      RESUME="Macros_hmm_g001_i00.gz";
+      cp -p "$OUTDIR/Macros_hmm_g001_i00.gz" "$OUTDIR/Macros_hmm.gz";
+
     else
+      RESUME="no";
+
       # @todo implement random ?
       htrsh_hmm_proto "$DIMS" "$htrsh_hmm_states" \
         | gzip > "$OUTDIR/proto";
-      HCompV $htrsh_HTK_HCompV_opts -C <( echo "$htrsh_baseHTKcfg" ) -S "$FEATLST" -M "$OUTDIR" "$OUTDIR/proto";
+      HCompV $htrsh_HTK_HCompV_opts -C <( echo "$htrsh_HTK_config" ) -S "$FEATLST" -M "$OUTDIR" "$OUTDIR/proto" 1>&2;
 
       { zcat "$OUTDIR/proto" \
           | head -n 3;
         cat "$OUTDIR/vFloors";
         zcat "$OUTDIR/proto" \
-          | awk -v file=<( echo "$HMMLST" ) \
-              'BEGIN {
-                 List=0;
-                 while(getline m[++List] < file > 0);
-               }
-               NR>4 {
-                 l[NR-4]=$0;
-               }
-               END {
+          | awk -v file=<( echo "$HMMLST" ) '
+              BEGIN {
+                List=0;
+                while(getline m[++List] < file > 0);
+              }
+              NR>4 {
+                l[NR-4]=$0;
+              }
+              END {
                 for(i=1;i<=List;i++)
                   if( m[i] != "" ) {
                     print "~h \""m[i]"\"";
@@ -1875,55 +2097,89 @@ htrsh_hmm_train () {
       } | gzip \
         > "$OUTDIR/Macros_hmm.gz";
 
-      [ "$KEEPROTO" = "yes" ] && cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/proto.gz";
+      [ "$KEEPITERS" = "yes" ] &&
+        cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g001_i00.gz";
     fi
 
-    ### Iterate for single Gaussian ###
-    local i;
-    for i in $(seq -f %02.0f 1 $htrsh_hmm_iter); do
-      echo "$FN: info: 1 Gaussians HERest iteration $i";
-      HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_baseHTKcfg" ) \
-        -S "$FEATLST" -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" <( echo "$HMMLST" );
-      [ "$?" != 0 ] &&
-        echo "$FN: error: problem with HERest" 1>&2 &&
-        return 1;
-      [ "$KEEPIT" = "yes" ] &&
-        cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g001_i$i.gz";
-    done
-    [ "$KEEPIT" = "yes" ] &&
-      cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g001_i$i.gz";
-    [ "$KEEPIT" != "yes" ] &&
-      cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g001.gz";
-
-    ### Iterate duplicating Gaussians ###
+    ### Training loop ###
     local g="1";
-    local gg=$((g+g));
-    while [ "$gg" -le "$htrsh_hmm_nummix" ]; do
-      ggg=$(printf %.3d $gg);
-      echo "$FN: info: duplicating Gaussians to $gg";
-      HHEd $htrsh_HTK_HHEd_opts -C <( echo "$htrsh_baseHTKcfg" ) -H "$OUTDIR/Macros_hmm.gz" \
-        -M "$OUTDIR" <( echo "MU $gg {*.state[2-$((htrsh_hmm_states-1))].mix}" ) \
-        <( echo "$HMMLST" );
+    local gg i;
+    while [ "$g" -le "$htrsh_hmm_nummix" ]; do
+      ### Duplicate Gaussians ###
+      if [ "$g" -gt 1 ] && ! ( [ "$RESUME" != "no" ] && [ -e "$OUTDIR/Macros_hmm_g${gg}_i$i.gz" ] ); then
+        echo "$FN: info: duplicating Gaussians to $g" 1>&2;
+        HHEd $htrsh_HTK_HHEd_opts -C <( echo "$htrsh_HTK_config" ) -H "$OUTDIR/Macros_hmm.gz" \
+          -M "$OUTDIR" <( echo "MU $g {*.state[2-$((htrsh_hmm_states-1))].mix}" ) \
+          <( echo "$HMMLST" ) 1>&2;
+      fi
+
+      ### Re-estimation iterations ###
+      local gg=$(printf %.3d $g);
       for i in $(seq -f %02.0f 1 $htrsh_hmm_iter); do
-        echo "$FN: info: $gg Gaussians HERest iteration $i";
-        HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_baseHTKcfg" ) \
-          -S "$FEATLST" -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" <( echo "$HMMLST" );
-        [ "$?" != 0 ] &&
-          echo "$FN: error: problem with HERest" 1>&2 &&
-          return 1;
-        [ "$KEEPIT" = "yes" ] &&
-          cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g${ggg}_i$i.gz";
+        if [ "$RESUME" != "no" ] && [ -e "$OUTDIR/Macros_hmm_g${gg}_i$i.gz" ]; then
+          RESUME="Macros_hmm_g${gg}_i$i.gz";
+          cp -p "$OUTDIR/Macros_hmm_g${gg}_i$i.gz" "$OUTDIR/Macros_hmm.gz";
+          continue;
+        fi
+
+        [ "$RESUME" != "no" ] && [ "$RESUME" != "yes" ] &&
+          echo "$FN: info: resuming from $RESUME" 1>&2;
+        RESUME="no";
+
+        echo "$FN: info: $g Gaussians HERest iteration $i" 1>&2;
+
+        ### Multi-thread ###
+        if [ "$THREADS" -gt 1 ]; then
+          > "$OUTDIR/train_thread_done";
+          > "$OUTDIR/train_thread_errs";
+          local t;
+          for t in $(seq 1 $THREADS); do
+            { HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_HTK_config" ) \
+                -S "$OUTDIR/train_feats_part_$(printf %.2d $t)" -p $t \
+                -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" -M "$OUTDIR" <( echo "$HMMLST" ) 1>&2;
+              [ "$?" != 0 ] &&
+                echo $t >> "$OUTDIR/train_thread_errs";
+              echo $t >> "$OUTDIR/train_thread_done";
+            } &
+          done
+          while [ $(wc -l < "$OUTDIR/train_thread_done") != $THREADS ]; do
+            sleep 1;
+          done
+          [ $(wc -l < "$OUTDIR/train_thread_errs") != 0 ] &&
+            echo "$FN: error: problem with HERest" 1>&2 &&
+            return 1;
+          HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_HTK_config" ) \
+            -p 0 -H "$OUTDIR/Macros_hmm.gz" <( echo "$HMMLST" ) "$OUTDIR/"*.acc 1>&2;
+          [ "$?" != 0 ] &&
+            echo "$FN: error: problem with HERest" 1>&2 &&
+            return 1;
+          rm "$OUTDIR/train_thread_done" "$OUTDIR/train_thread_errs" "$OUTDIR/"*.acc;
+
+        ### Single thread ###
+        else
+          HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_HTK_config" ) \
+            -S "$FEATLST" -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" <( echo "$HMMLST" ) 1>&2;
+          [ "$?" != 0 ] &&
+            echo "$FN: error: problem with HERest" 1>&2 &&
+            return 1;
+        fi
+
+        [ "$KEEPITERS" = "yes" ] &&
+          cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g${gg}_i$i.gz";
       done
-      [ "$KEEPIT" = "yes" ] &&
-        cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g${ggg}_i$i.gz";
-      [ "$KEEPIT" != "yes" ] &&
-        cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g$ggg.gz";
-      g=$gg;
-      gg=$((g+g));
+
+      cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g${gg}_i$i.gz";
+      g=$((g+g));
     done
+
+    [ "$RESUME" != "no" ] && [ "$RESUME" != "yes" ] &&
+      echo "$FN: warning: model already trained $RESUME" 1>&2;
+
+    echo "$OUTDIR/Macros_hmm_g${gg}_i$i.gz";
   fi
 
   rm -f "$OUTDIR/proto" "$OUTDIR/vFloors" "$OUTDIR/Macros_hmm.gz";
+  rm -f "$OUTDIR/train_feats_part_"*;
 
   return 0;
 }
@@ -1949,6 +2205,7 @@ htrsh_fix_rec_names () {
     s|{amp}|\&amp;|g;
     s|{lt}|\&lt;|g;
     s|{gt}|\&gt;|g;
+    s|{dash}|--|g;
     s|{lbrace}|{|g;
     s|{rbrace}|}|g;
     ' "$1";
@@ -1977,7 +2234,7 @@ htrsh_pageimg_forcealign_lines () {
     return 1;
   fi
 
-  ### Parse input agruments ###
+  ### Parse input arguments ###
   local XML="$1";
   local FEATLST="$2";
   local MODEL="$3";
@@ -2008,7 +2265,7 @@ htrsh_pageimg_forcealign_lines () {
   local B=$(echo "$XMLBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
 
   ### Create MLF from XML ###
-  htrsh_pagexml_to_mlf "$XML" > "$TMPDIR/$B.mlf";
+  { echo '#!MLF!#'; htrsh_pagexml_textequiv "$XML" -f mlf-chars; } > "$TMPDIR/$B.mlf";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems creating MLF file: $XML" 1>&2 &&
     return 1;
@@ -2018,7 +2275,7 @@ htrsh_pageimg_forcealign_lines () {
   local DIC=$(echo "$HMMLST" | awk '{printf("\"%s\" [%s] 1.0 %s\n",$1,$1,$1)}');
 
   ### Do forced alignment with HVite ###
-  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_baseHTKcfg" ) -H "$MODEL" -S "$FEATLST" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
+  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$FEATLST" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
   [ "$?" != 0 ] &&
     echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
     return 1;
@@ -2258,7 +2515,7 @@ htrsh_pageimg_forcealign () {
       echo "Options:";
       echo " -d TMPDIR    Directory for temporary files (def.=$TMPDIR)";
       echo " -i INRES     Input image resolution in ppc (def.=use image metadata)";
-      echo " -m MODEL     Use model for aligning (def.=train model for page)";
+      echo " -m MODEL     Use given model for aligning (def.=train model for page)";
       echo " -b PBASE     Project features using given base (def.=false)";
       echo " -e (yes|no)  Whether to enhance the image using imgtxtenh (def.=$ENHIMG)";
       echo " -p (yes|no)  Whether to compute PCA for image and project features (def.=$DOPCA)";
@@ -2269,7 +2526,7 @@ htrsh_pageimg_forcealign () {
     return 1;
   fi
 
-  ### Parse input agruments ###
+  ### Parse input arguments ###
   local XML="$1";
   local XMLOUT="$2";
   shift 2;
@@ -2300,7 +2557,7 @@ htrsh_pageimg_forcealign () {
   done
 
   if [ -d "$TMPDIR" ]; then
-    echo -n "$FN: temporary directory ($TMPDIR) already exists, continue? " 1>&2;
+    echo -n "$FN: temporary directory ($TMPDIR) already exists, current contents will be deleted, continue? " 1>&2;
     local RMTMP="";
     read RMTMP;
     if [ "${RMTMP:0:1}" = "y" ]; then
@@ -2318,7 +2575,6 @@ htrsh_pageimg_forcealign () {
 
   #local RCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextEquiv/_:Unicode)" "$XML");
   local RCNT="0";
-  #local LCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextLine/_:TextEquiv/_:Unicode)" "$XML");
   local LCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/$htrsh_xpath_lines/_:TextEquiv/_:Unicode)" "$XML");
   [ "$RCNT" = 0 ] && [ "$LCNT" = 0 ] &&
     echo "$FN: error: no TextEquiv/Unicode nodes for processing: $XML" 1>&2 &&
@@ -2401,15 +2657,18 @@ htrsh_pageimg_forcealign () {
   ### Train HMMs model for this single page ###
   if [ "$MODEL" = "" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): training model for page ...";
-    htrsh_pagexml_to_mlf "$TMPDIR/${XMLBASE}_feats.xml" -r $AREG > "$TMPDIR/${B}_page.mlf";
+    { echo '#!MLF!#';
+      htrsh_pagexml_textequiv "$TMPDIR/${XMLBASE}_feats.xml" -f mlf-chars -r $AREG;
+    } > "$TMPDIR/${B}_page.mlf";
     [ "$?" != 0 ] && return 1;
-    htrsh_hmm_train \
-      "$TMPDIR/${B}_feats.lst" "$TMPDIR/${B}_page.mlf" -d "$TMPDIR" \
-      > "$TMPDIR/${XMLBASE}_hmmtrain.log";
+    MODEL=$(
+      htrsh_hmm_train "$TMPDIR/${B}_feats.lst" "$TMPDIR/${B}_page.mlf" -d "$TMPDIR" \
+        2> "$TMPDIR/${XMLBASE}_hmmtrain.log"
+      );
     [ "$?" != 0 ] &&
-      echo "$FN: error: more info might be in file $TMPDIR/${XMLBASE}_hmmtrain.log" 1>&2 &&
+      echo "$FN: error: problems training model, more info might be in file $TMPDIR/${XMLBASE}_hmmtrain.log" 1>&2 &&
       return 1;
-    MODEL="$TMPDIR/Macros_hmm_g$(printf %.3d $htrsh_hmm_nummix).gz";
+    #MODEL="$TMPDIR/Macros_hmm_g$(printf %.3d $htrsh_hmm_nummix).gz";
   fi
   [ ! -e "$MODEL" ] &&
     echo "$FN: error: model file not found: $MODEL" 1>&2 &&
