@@ -43,6 +43,7 @@ htrsh_dotmatrix_mom="yes"; # Whether to add moments to features
 htrsh_align_chars="no";             # Whether to align at a character level
 htrsh_align_isect="yes";            # Whether to intersect parallelograms with line contour
 htrsh_align_prefer_baselines="yes"; # Whether to always generate contours from baselines
+htrsh_align_addtext="yes";          # Whether to add TextEquiv to word and glyph nodes
 
 htrsh_hmm_states="6"; # Number of HMM states (excluding special initial and final)
 htrsh_hmm_nummix="4"; # Number of Gaussian mixture components
@@ -155,7 +156,7 @@ htrsh_check_req () {
 htrsh_pagexml_textequiv () {
   local FN="htrsh_pagexml_textequiv";
   local REGSRC="no";
-  local FORMAT="mlf-chars";
+  local FORMAT="raw";
   local FILTER="cat";
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
@@ -320,9 +321,10 @@ htrsh_mlf_to_tasas () {
         NTOKENS = 0;
       }
       else if( $0 != "#!MLF!#" && $0 != "." ) {
-        if( NF == 4 )
+        if( NF >= 3 )
           $1 = $3;
-        $1 = gensub( /^"(.+)"$/, "\\1", "", $1 );
+        if( match( $1, /^".+"$/ ) )
+          $1 = gensub( /\\"/, "\"", "g", gensub( /^"(.+)"$/, "\\1", "", $1 ) );
         if( ! SEPCHARS ) {
           printf( NTOKENS == 0 ? "%s" : " %s", $1 );
           NTOKENS ++;
@@ -382,50 +384,53 @@ htrsh_pageimg_info () {
   if [ $# -eq 1 ] || [ "$2" != "noinfo" ]; then
     XMLDIR=$($htrsh_realpath $(dirname "$XML"));
     IMFILE="$XMLDIR/"$(xmlstarlet sel -t -v //@imageFilename "$XML");
-    local XMLSIZE=$(xmlstarlet sel -t -v //@imageWidth -o x -v //@imageHeight "$XML");
-    IMSIZE=$(identify -format %wx%h "$IMFILE" 2>/dev/null);
 
     IMDIR=$($htrsh_realpath $(dirname "$IMFILE"));
     XMLBASE=$(echo "$XML" | sed 's|.*/||; s|\.[xX][mM][lL]$||;');
     IMBASE=$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
     IMEXT=$(echo "$IMFILE" | sed 's|.*\.||');
 
-    [ ! -f "$IMFILE" ] &&
-      echo "$FN: error: image file not found: $IMFILE" 1>&2 &&
-      return 1;
-    [ "$IMSIZE" != "$XMLSIZE" ] &&
-      echo "$FN: warning: image size discrepancy: image=$IMSIZE page=$XMLSIZE" 1>&2;
+    if [ $# -eq 1 ] || [ "$2" != "noimg" ]; then
+      local XMLSIZE=$(xmlstarlet sel -t -v //@imageWidth -o x -v //@imageHeight "$XML");
+      IMSIZE=$(identify -format %wx%h "$IMFILE" 2>/dev/null);
 
-    IMRES=$(xmlstarlet sel -t -v //_:Page/@custom "$XML" 2>/dev/null \
-              | awk -F'[{}:; ]+' '
-                  { for( n=1; n<=NF; n++ )
-                      if( $n == "image-resolution" ) {
-                        n++;
-                        if( match($n,"dpcm") )
-                          printf("%g",$n);
-                        else if( match($n,"dpi") )
-                          printf("%g",$n/2.54);
-                      }
-                  }');
+      [ ! -f "$IMFILE" ] &&
+        echo "$FN: error: image file not found: $IMFILE" 1>&2 &&
+        return 1;
+      [ "$IMSIZE" != "$XMLSIZE" ] &&
+        echo "$FN: warning: image size discrepancy: image=$IMSIZE page=$XMLSIZE" 1>&2;
 
-    [ "$IMRES" = "" ] &&
-    IMRES=$(
-      identify -format "%x %y %U" "$IMFILE" \
-        | awk '
-            { if( NF == 4 ) {
-                $2 = $3;
-                $3 = $4;
-              }
-              if( $3 == "PixelsPerCentimeter" )
-                printf("%sx%s",$1,$2);
-              else if( $3 == "PixelsPerInch" )
-                printf("%gx%g",$1/2.54,$2/2.54);
-            }'
-      );
+      IMRES=$(xmlstarlet sel -t -v //_:Page/@custom "$XML" 2>/dev/null \
+                | awk -F'[{}:; ]+' '
+                    { for( n=1; n<=NF; n++ )
+                        if( $n == "image-resolution" ) {
+                          n++;
+                          if( match($n,"dpcm") )
+                            printf("%g",$n);
+                          else if( match($n,"dpi") )
+                            printf("%g",$n/2.54);
+                        }
+                    }');
 
-     [ $(echo "$IMRES" | sed 's|.*x||') != $(echo "$IMRES" | sed 's|x.*||') ] &&
-       echo "$FN: warning: image resolution different for vertical and horizontal: $IMFILE" 1>&2;
-     IMRES=$(echo "$IMRES" | sed 's|x.*||');
+      [ "$IMRES" = "" ] &&
+      IMRES=$(
+        identify -format "%x %y %U" "$IMFILE" \
+          | awk '
+              { if( NF == 4 ) {
+                  $2 = $3;
+                  $3 = $4;
+                }
+                if( $3 == "PixelsPerCentimeter" )
+                  printf("%sx%s",$1,$2);
+                else if( $3 == "PixelsPerInch" )
+                  printf("%gx%g",$1/2.54,$2/2.54);
+              }'
+        );
+
+       [ $(echo "$IMRES" | sed 's|.*x||') != $(echo "$IMRES" | sed 's|x.*||') ] &&
+         echo "$FN: warning: image resolution different for vertical and horizontal: $IMFILE" 1>&2;
+       IMRES=$(echo "$IMRES" | sed 's|x.*||');
+    fi
   fi
 
   return 0;
@@ -1780,6 +1785,9 @@ htrsh_langmodel_train () {
 htrsh_hmm_proto () {
   local FN="htrsh_hmm_proto";
   local PNAME="proto";
+  local GLOBAL="";
+  local MEAN="";
+  local VARIANCE="";
   local DISCR="no";
   local RAND="no";
   if [ $# -lt 2 ]; then
@@ -1788,6 +1796,9 @@ htrsh_hmm_proto () {
       echo "Usage: $FN (DIMS|CODES) STATES [ Options ]";
       echo "Options:";
       echo " -n PNAME     Proto name(s), if several separated by '\n' (def.=$PNAME)";
+      echo " -g GLOBAL    Include given global options string (def.=no)";
+      echo " -m MEAN      Use given mean vector (def.=zeros)";
+      echo " -v VARIANCE  Use given variance vector (def.=ones)";
       echo " -D (yes|no)  Whether proto should be discrete (def.=$DISCR)";
       echo " -R (yes|no)  Whether to randomize (def.=$RAND)";
     } 1>&2;
@@ -1801,6 +1812,12 @@ htrsh_hmm_proto () {
   while [ $# -gt 0 ]; do
     if [ "$1" = "-n" ]; then
       PNAME="$2";
+    elif [ "$1" = "-g" ]; then
+      GLOBAL="$2";
+    elif [ "$1" = "-m" ]; then
+      MEAN="$2";
+    elif [ "$1" = "-v" ]; then
+      VARIANCE="$2";
     elif [ "$1" = "-D" ]; then
       DISCR="$2";
     elif [ "$1" = "-R" ]; then
@@ -1812,24 +1829,39 @@ htrsh_hmm_proto () {
     shift 2;
   done
 
-  ### Print prototype(s) ###
-  local P="";
+  ### Print global options ###
   if [ "$DISCR" = "yes" ]; then
-    echo '~o <DISCRETE> <StreamInfo> 1 1';
+    echo '~o <DISCRETE> <STREAMINFO> 1 1';
   else
-    echo "~o <VECSIZE> $DIMS <USER>";
+    echo "~o";
+    echo "<STREAMINFO> 1 $DIMS";
+    echo "<VECSIZE> $DIMS<NULLD><USER><DIAGC>";
+
+    [ "$MEAN" = "" ] &&
+      MEAN=$(echo $DIMS | awk '{for(d=$1;d>0;d--)printf(" 0.0")}');
+
+    [ "$VARIANCE" = "" ] &&
+      VARIANCE=$(echo $DIMS | awk '{for(d=$1;d>0;d--)printf(" 1.0")}');
   fi
+
+  [ "$GLOBAL" != "" ] &&
+    echo "$GLOBAL";
+
+  ### Print prototype(s) ###
   echo "$PNAME" \
-    | awk -v D=$DIMS -v S=$STATES -v DISCR=$DISCR -v RAND=$RAND '
+    | awk -v D=$DIMS -v SS=$STATES \
+          -v MEAN="$MEAN" -v VARIANCE="$VARIANCE" \
+          -v DISCR=$DISCR -v RAND=$RAND '
         BEGIN { srand('$RANDOM'); }
-        { printf("~h \"%s\"\n",$1);
-          printf("<BeginHMM>\n");
-          printf("<NumStates> %d\n",S+2);
+        { S = NF > 1 ? $2 : SS;
+          printf("~h \"%s\"\n",$1);
+          printf("<BEGINHMM>\n");
+          printf("<NUMSTATES> %d\n",S+2);
           for(s=1;s<=S;s++) {
-            printf("<State> %d\n",s+1);
+            printf("<STATE> %d\n",s+1);
             if(DISCR=="yes") {
-              printf("<NumMixes> %d\n",D);
-              printf("<DProb>");
+              printf("<NUMMIXES> %d\n",D);
+              printf("<DPROB>");
               if(RAND=="yes") {
                 tot=0;
                 for(d=1;d<=D;d++)
@@ -1846,28 +1878,24 @@ htrsh_hmm_proto () {
               printf("\n");
             }
             else {
-              printf("<Mean> %d\n",D);
+              printf("<MEAN> %d\n",D);
               if(RAND=="yes") {
                 for(d=1;d<=D;d++)
                   printf(d==1?"%g":" %g",(rand()-0.5)/10);
                 printf("\n");
-                printf("<Variance> %d\n",D);
+                printf("<VARIANCE> %d\n",D);
                 for(d=1;d<=D;d++)
                   printf(d==1?"%g":" %g",1+(rand()-0.5)/10);
                 printf("\n");
               }
               else {
-                for(d=1;d<=D;d++)
-                  printf(d==1?"0.0":" 0.0");
-                printf("\n");
-                printf("<Variance> %d\n",D);
-                for(d=1;d<=D;d++)
-                  printf(d==1?"1.0":" 1.0");
-                printf("\n");
+                printf("%s\n",MEAN);
+                printf("<VARIANCE> %d\n",D);
+                printf("%s\n",VARIANCE);
               }
             }
           }
-          printf("<TransP> %d\n",S+2);
+          printf("<TRANSP> %d\n",S+2);
           printf(" 0.0 1.0");
           for(a=2;a<=S+1;a++)
             printf(" 0.0");
@@ -1898,7 +1926,7 @@ htrsh_hmm_proto () {
           for(a=0;a<=S+1;a++)
             printf(" 0.0");
           printf("\n");
-          printf("<EndHMM>\n");
+          printf("<ENDHMM>\n");
         }';
 
   return 0;
@@ -1975,7 +2003,7 @@ htrsh_hmm_train () {
     return 1;
 
   local HMMLST=$(cat "$MLF" \
-                   | sed '/^#!MLF!#/d; /^"\*\//d; /^\.$/d; s|^"||; s|"$||;' \
+                   | sed '/^#!MLF!#/d; /^"\*\//d; /^\.$/d; s|^"\(.*\)"$|\1|;' \
                    | sort -u);
 
   if [ "$THREADS" -gt 1 ]; then
@@ -1994,47 +2022,20 @@ htrsh_hmm_train () {
     ### Initialization ###
     if [ "$PROTO" != "" ]; then
       cp -p "$PROTO" "$OUTDIR/Macros_hmm.gz";
-
-      [ "$KEEPITERS" = "yes" ] &&
-        cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_i00.gz";
-
     else
-      if [ "$RAND" = "yes" ]; then
-        htrsh_hmm_proto "$CODES" "$htrsh_hmm_states" -D yes -n "$HMMLST" -R $RAND \
-          | gzip > "$OUTDIR/Macros_hmm.gz";
-      else
-        htrsh_hmm_proto "$CODES" "$htrsh_hmm_states" -D yes \
-          | gzip > "$OUTDIR/proto.gz";
-        HInit -C <( echo "$htrsh_HTK_config" ) -i 0 -S "$FEATLST" -M "$OUTDIR" "$OUTDIR/proto.gz" 1>&2;
-        mv "$OUTDIR/proto.gz" "$OUTDIR/proto";
-
-        # @todo not tested yet so test it
-        { zcat "$OUTDIR/proto" \
-            | head -n 3;
-          zcat "$OUTDIR/proto" \
-            | awk -v file=<( echo "$HMMLST" ) \
-                'BEGIN {
-                   List=0;
-                   while(getline m[++List] < file > 0);
-                 }
-                 NR>4 {
-                   l[NR-4]=$0;
-                 }
-                 END {
-                  for(i=1;i<=List;i++)
-                    if( m[i] != "" ) {
-                      print "~h \""m[i]"\"";
-                      for(j=1;j<=NR-4;j++)
-                        print l[j];
-                    }
-                }';
-        } | gzip \
-          > "$OUTDIR/Macros_hmm.gz";
-      fi
-
-      [ "$KEEPITERS" = "yes" ] &&
-        cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_i00.gz";
+      htrsh_hmm_proto "$CODES" "$htrsh_hmm_states" -D yes -n "$HMMLST" -R $RAND \
+        | gzip > "$OUTDIR/Macros_hmm.gz";
     fi
+
+    [ "$KEEPITERS" = "yes" ] &&
+      cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_i00.gz";
+
+
+    # @todo train with viterbi
+    #htrsh_hmm_proto "$CODES" "$htrsh_hmm_states" -D yes -n "$HMMLST" -R $RAND | gzip > "$OUTDIR/Macros_hmm.gz";
+    #htrsh_hmm_proto "$CODES" "$htrsh_hmm_states" -D yes -R $RAND | gzip > proto.gz;
+    #HInit -T 1 -C <( echo "$htrsh_HTK_config" ) -i $htrsh_hmm_iter -S "$FEATLST" -I "$MLF" -H "Macros_hmm.gz" proto.gz
+
 
     ### Iterate ###
     local i;
@@ -2044,7 +2045,7 @@ htrsh_hmm_train () {
         -S "$FEATLST" -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" <( echo "$HMMLST" ) 1>&2;
       if [ "$?" != 0 ]; then
         echo "$FN: error: problem with HERest" 1>&2;
-        mv "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_i${i}_err.gz"
+        mv "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_i${i}_err.gz";
         return 1;
       fi
       [ "$KEEPITERS" = "yes" ] &&
@@ -2070,31 +2071,18 @@ htrsh_hmm_train () {
       RESUME="no";
 
       # @todo implement random ?
-      htrsh_hmm_proto "$DIMS" "$htrsh_hmm_states" \
-        | gzip > "$OUTDIR/proto";
-      HCompV $htrsh_HTK_HCompV_opts -C <( echo "$htrsh_HTK_config" ) -S "$FEATLST" -M "$OUTDIR" "$OUTDIR/proto" 1>&2;
 
-      { zcat "$OUTDIR/proto" \
-          | head -n 3;
-        cat "$OUTDIR/vFloors";
-        zcat "$OUTDIR/proto" \
-          | awk -v file=<( echo "$HMMLST" ) '
-              BEGIN {
-                List=0;
-                while(getline m[++List] < file > 0);
-              }
-              NR>4 {
-                l[NR-4]=$0;
-              }
-              END {
-                for(i=1;i<=List;i++)
-                  if( m[i] != "" ) {
-                    print "~h \""m[i]"\"";
-                    for(j=1;j<=NR-4;j++)
-                      print l[j];
-                  }
-              }';
-      } | gzip \
+      htrsh_hmm_proto "$DIMS" 1 | gzip > "$OUTDIR/proto";
+      HCompV $htrsh_HTK_HCompV_opts -C <( echo "$htrsh_HTK_config" ) \
+        -S "$FEATLST" -M "$OUTDIR" "$OUTDIR/proto" 1>&2;
+
+      local GLOBAL=$(< "$OUTDIR/vFloors");
+      local MEAN=$(zcat "$OUTDIR/proto" | sed -n '/<MEAN>/{N;s|.*\n||;p;q;}');
+      local VARIANCE=$(zcat "$OUTDIR/proto" | sed -n '/<VARIANCE>/{N;s|.*\n||;N;p;q;}');
+
+      htrsh_hmm_proto "$DIMS" "$htrsh_hmm_states" -n "$HMMLST" \
+          -g "$GLOBAL" -m "$MEAN" -v "$VARIANCE" \
+        | gzip \
         > "$OUTDIR/Macros_hmm.gz";
 
       [ "$KEEPITERS" = "yes" ] &&
@@ -2214,109 +2202,105 @@ htrsh_fix_rec_names () {
 }
 
 
-#-------------------------------------#
-# Viterbi alignment related functions #
-#-------------------------------------#
+#-----------------------------#
+# Alignment related functions #
+#-----------------------------#
 
 ##
-## Function that does a forced alignment at a line level for a given XML Page, feature list and model
+## Function that prepares a rec MLF for inserting alignment information in a Page XML
 ##
-htrsh_pageimg_forcealign_lines () {
-  local FN="htrsh_pageimg_forcealign_lines";
-  local TMPDIR=".";
-  if [ $# -lt 4 ]; then
+htrsh_mlf_prepalign () {
+  local FN="htrsh_mlf_prepalign";
+  if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
-      echo "Description: Does a forced alignment at a line level for a given XML Page, feature list and model";
-      echo "Usage: $FN XMLIN FEATLST MODEL XMLOUT [ Options ]";
-      echo "Options:";
-      echo " -d TMPDIR    Directory for temporary files (def.=$TMPDIR)";
+      echo "Description: Prepares a rec MLF for inserting alignment information in a Page XML";
+      echo "Usage: $FN MLF";
+    } 1>&2;
+    return 1;
+  fi
+
+  gawk '
+    { if( $0 != "#!MLF!#" && ! match( $0, /\.rec"$/ ) ) {
+        if( $0 != "." ) {
+          printf( "%s %s @\n", $1, $1 );
+          PE = $2;
+        }
+        else
+          printf( "%s %s @\n", PE, PE );
+        if( match( $3, /^".*"$/ ) )
+          $3 = gensub( /\\"/, "\"", "g", gensub( /^"(.+)"$/, "\\1", "", $3 ) );
+     }
+     print;
+   }' "$1";
+
+  return $?;
+}
+
+##
+## Function that inserts alignment information in an XML Page given a rec MLF
+##
+htrsh_pagexml_insertalign_lines () {
+  local FN="htrsh_pagexml_insertalign_lines";
+  if [ $# -lt 2 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Inserts alignment information in an XML Page given a rec MLF";
+      echo "Usage: $FN XML MLF";
     } 1>&2;
     return 1;
   fi
 
   ### Parse input arguments ###
   local XML="$1";
-  local FEATLST="$2";
-  local MODEL="$3";
-  local XMLOUT="$4";
-  shift 4;
-  while [ $# -gt 0 ]; do
-    if [ "$1" = "-d" ]; then
-      TMPDIR="$2";
-    else
-      echo "$FN: error: unexpected input argument: $1" 1>&2;
-      return 1;
-    fi
-    shift 2;
-  done
+  local MLF="$2";
 
-  if ! [ -e "$FEATLST" ]; then
-    echo "$FN: error: feature list not found: $FEATLST" 1>&2;
+  if ! [ -e "$XML" ]; then
+    echo "$FN: error: XML Page file not found: $XML" 1>&2;
     return 1;
-  elif ! [ -e "$MODEL" ]; then
-    echo "$FN: error: model file not found: $MODEL" 1>&2;
+  elif ! [ -e "$MLF" ]; then
+    echo "$FN: error: MLF file not found: $MLF" 1>&2;
     return 1;
   fi
 
   ### Check XML file and image ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
-  htrsh_pageimg_info "$XML";
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT;
+  htrsh_pageimg_info "$XML" noimg;
   [ "$?" != 0 ] && return 1;
-  local B=$(echo "$XMLBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
-
-  ### Create MLF from XML ###
-  { echo '#!MLF!#'; htrsh_pagexml_textequiv "$XML" -f mlf-chars; } > "$TMPDIR/$B.mlf";
-  [ "$?" != 0 ] &&
-    echo "$FN: error: problems creating MLF file: $XML" 1>&2 &&
-    return 1;
-
-  ### Create auxiliary files: HMM list and dictionary ###
-  local HMMLST=$(zcat "$MODEL" | sed -n '/^~h "/{ s|^~h "||; s|"$||; p; }');
-  local DIC=$(echo "$HMMLST" | awk '{printf("\"%s\" [%s] 1.0 %s\n",$1,$1,$1)}');
-
-  ### Do forced alignment with HVite ###
-  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$FEATLST" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
-  [ "$?" != 0 ] &&
-    echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
-    return 1;
 
   ### Prepare command to add alignments to XML ###
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating Page XML with alignments ..." 1>&2;
-  local cmd="xmlstarlet ed -P -d //_:Word";
-  #cp "$XML" "$XMLOUT";
 
-  [ "$htrsh_align_isect" = "yes" ] &&
-    local size=$(xmlstarlet sel -t -v //@imageWidth -o x -v //@imageHeight "$XML");
-
-  local ids=$(xmlstarlet sel -t -m //_:TextLine/_:Coords/@fpgram \
-                -v ../../@id -n "$XML");
+  local ids=$( sed -n '/\/'"$IMBASE"'\.[^.]\+\.[^.]\+\.rec"$/{ s|.*\.\([^.]\+\)\.rec"$|\1|; p; }' "$MLF" );
 
   #local TS=$(($(date +%s%N)/1000000));
 
   local aligns=$(
-    awk '
-      { if( NR > 1 ) {
-          if( match( $0, /\.rec"$/ ) )
-            LID = gensub(/.*\.([^.]+)\.rec"$/, "\\1", "", $0 );
-          else if( $0 != "." ) {
-            NF = 3;
-            $2 = $2/100000-1 ;
-            $1 = $1==0 ? 0 : $1/100000-1 ;
-            $1 = ( LID " " $1 );
-            print;
-          }
-        }
-      }
-      ' "$TMPDIR/${B}_aligned.mlf"
+    sed -n '/\/'"$IMBASE"'\.[^.]\+\.[^.]\+\.rec"$/,/^\.$/p' "$MLF" \
+      | awk '
+          { if( FILENAME != "-" )
+              ids[$0] = "";
+            else {
+              if( match( $0, /\.rec"$/ ) )
+                id = gensub(/.*\.([^.]+)\.rec"$/, "\\1", "", $0 );
+              else if( $0 != "." && id in ids ) {
+                NF = 3;
+                $2 = sprintf( "%.0f", $2/100000-1 );
+                $1 = sprintf( "%.0f", $1==0 ? 0 : $1/100000-1 );
+                $1 = ( id " " $1 );
+                print;
+              }
+            }
+          }' <( echo "$ids" ) -
       );
+
+  local cmd="xmlstarlet sel -t";
+  local id;
+  for id in $ids; do
+    cmd="$cmd -o ' ' -v '//*[@id=\"$id\"]/_:Coords/@fpgram' -o ' ;'";
+  done
 
   local acoords=$(
     echo "
-      fpgram = [ "$(
-        xmlstarlet sel -t -m //@fpgram -v . -n "$XML" \
-          | sed 's| |,|g; $!s|$|;|;' \
-          | tr -d '\n'
-          )" ];
+      fpgram = [ "$( eval $cmd "'$XML'" )" ];
       aligns = [ "$(
         echo "$aligns" \
           | awk '
@@ -2364,11 +2348,17 @@ htrsh_pageimg_forcealign_lines () {
 
   #local TE=$(($(date +%s%N)/1000000)); echo "time 0: $((TE-TS)) ms" 1>&2; TS="$TE";
 
-  local n;
-  for n in $(seq 1 $(wc -l < "$FEATLST")); do
-    local id=$(sed -n "$n"'{ s|.*\.\([^.]*\)\.fea$|\1|; p; }' "$FEATLST");
+  [ "$htrsh_align_isect" = "yes" ] &&
+    local size=$(xmlstarlet sel -t -v //@imageWidth -o x -v //@imageHeight "$XML");
 
+  cmd="xmlstarlet ed -P";
+
+  local n=0;
+  for id in $ids; do
+    n=$((n+1));
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): alignments for line $n (id=$id) ..." 1>&2;
+
+    cmd="$cmd -d '//*[@id=\"$id\"]/_:Word'";
 
     [ "$htrsh_align_isect" = "yes" ] &&
       local contour=$(xmlstarlet sel -t -v '//*[@id="'$id'"]/_:Coords/@points' "$XML");
@@ -2376,9 +2366,6 @@ htrsh_pageimg_forcealign_lines () {
     local align=$(echo "$aligns" | sed -n "/^$id /{ s|^$id ||; p; }");
     [ "$align" = "" ] && continue;
     local coords=$(echo "$acoords" | sed -n "/^$id /{ s|^$id ||; p; }");
-
-    #local cmd="xmlstarlet ed -P --inplace -d '//*[@id=\"${id}\"]/_:TextEquiv'";
-    #cmd="$cmd -d '//*[@id=\"$id\"]/_:TextEquiv'";
 
     #TE=$(($(date +%s%N)/1000000)); echo "time 1: $((TE-TS)) ms" 1>&2; TS="$TE";
 
@@ -2448,14 +2435,16 @@ htrsh_pageimg_forcealign_lines () {
         for c in $(seq $pS $pE); do
           local gg=$(printf %.2d $g);
           local pts=$(echo "$coords" | sed -n "${c}p");
-          local text=$(echo "$align" | sed -n "$c{s|.* ||;p;}" | tr -d '\n');
 
           cmd="$cmd -s '//*[@id=\"${id}_w${ww}\"]' -t elem -n TMPNODE";
           cmd="$cmd -i '//TMPNODE' -t attr -n id -v '${id}_w${ww}_g${gg}'";
           cmd="$cmd -s '//TMPNODE' -t elem -n Coords";
           cmd="$cmd -i '//TMPNODE/Coords' -t attr -n points -v '$pts'";
-          cmd="$cmd -s '//TMPNODE' -t elem -n TextEquiv";
-          cmd="$cmd -s '//TMPNODE/TextEquiv' -t elem -n Unicode -v '$text'";
+          if [ "$htrsh_align_addtext" = "yes" ]; then
+            local text=$(echo "$align" | sed -n "$c{s|.* ||;p;}" | tr -d '\n');
+            cmd="$cmd -s '//TMPNODE' -t elem -n TextEquiv";
+            cmd="$cmd -s '//TMPNODE/TextEquiv' -t elem -n Unicode -v '$text'";
+          fi
           cmd="$cmd -r '//TMPNODE' -v Glyph";
 
           g=$((g+1));
@@ -2464,25 +2453,96 @@ htrsh_pageimg_forcealign_lines () {
 
       #TE=$(($(date +%s%N)/1000000)); echo "time 5: $((TE-TS)) ms" 1>&2; TS="$TE";
 
-      local text=$(echo "$align" | sed -n "$pS,$pE{s|.* ||;p;}" | tr -d '\n');
-
-      cmd="$cmd -s '//*[@id=\"${id}_w${ww}\"]' -t elem -n TextEquiv";
-      cmd="$cmd -s '//*[@id=\"${id}_w${ww}\"]/TextEquiv' -t elem -n Unicode -v '$text'";
-
-      #TE=$(($(date +%s%N)/1000000)); echo "time 6: $((TE-TS)) ms" 1>&2; TS="$TE";
+      if [ "$htrsh_align_addtext" = "yes" ]; then
+        local text=$(echo "$align" | sed -n "$pS,$pE{s|.* ||;p;}" | tr -d '\n');
+        cmd="$cmd -s '//*[@id=\"${id}_w${ww}\"]' -t elem -n TextEquiv";
+        cmd="$cmd -s '//*[@id=\"${id}_w${ww}\"]/TextEquiv' -t elem -n Unicode -v '$text'";
+        #TE=$(($(date +%s%N)/1000000)); echo "time 6: $((TE-TS)) ms" 1>&2; TS="$TE";
+      fi
     done
 
-    local text=$(echo "$align" | sed -n '1d; $d; s|.* ||; s|@| |; p;' | tr -d '\n');
-
     cmd="$cmd -m '//*[@id=\"$id\"]/_:TextEquiv' '//*[@id=\"$id\"]'";
-    #eval $cmd "$XMLOUT";
   done
 
-  echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): edit XML ..." 1>&2;
   ### Create new XML including alignments ###
-  eval $cmd "'$XML'" > "$XMLOUT";
+  echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): edit XML ..." 1>&2;
+  eval $cmd "'$XML'";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems creating XML file: $XMLOUT" 1>&2 &&
+    return 1;
+
+  return 0;
+}
+
+##
+## Function that does a forced alignment at a line level for a given XML Page, feature list and model
+##
+htrsh_pageimg_forcealign_lines () {
+  local FN="htrsh_pageimg_forcealign_lines";
+  local TMPDIR=".";
+  if [ $# -lt 4 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Does a forced alignment at a line level for a given XML Page, feature list and model";
+      echo "Usage: $FN XMLIN FEATLST MODEL XMLOUT [ Options ]";
+      echo "Options:";
+      echo " -d TMPDIR    Directory for temporary files (def.=$TMPDIR)";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local XML="$1";
+  local FEATLST="$2";
+  local MODEL="$3";
+  local XMLOUT="$4";
+  shift 4;
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "-d" ]; then
+      TMPDIR="$2";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
+    shift 2;
+  done
+
+  if ! [ -e "$XML" ]; then
+    echo "$FN: error: Page XML file not found: $XML" 1>&2;
+    return 1;
+  elif ! [ -e "$FEATLST" ]; then
+    echo "$FN: error: feature list not found: $FEATLST" 1>&2;
+    return 1;
+  elif ! [ -e "$MODEL" ]; then
+    echo "$FN: error: model file not found: $MODEL" 1>&2;
+    return 1;
+  fi
+
+  ### Check XML file and image ###
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
+  htrsh_pageimg_info "$XML";
+  [ "$?" != 0 ] && return 1;
+  local B=$(echo "$XMLBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
+
+  ### Create MLF from XML ###
+  { echo '#!MLF!#'; htrsh_pagexml_textequiv "$XML" -f mlf-chars; } > "$TMPDIR/$B.mlf";
+  [ "$?" != 0 ] &&
+    echo "$FN: error: problems creating MLF file: $XML" 1>&2 &&
+    return 1;
+
+  ### Create auxiliary files: HMM list and dictionary ###
+  local HMMLST=$(zcat "$MODEL" | sed -n '/^~h "/{ s|^~h "||; s|"$||; p; }');
+  local DIC=$(echo "$HMMLST" | awk '{printf("\"%s\" [%s] 1.0 %s\n",$1,$1,$1)}');
+
+  ### Do forced alignment with HVite ###
+  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$FEATLST" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
+  [ "$?" != 0 ] &&
+    echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
+    return 1;
+
+  ### Insert alignment information in XML ###
+  htrsh_pagexml_insertalign_lines "$XML" "$TMPDIR/${B}_aligned.mlf" \
+    > "$XMLOUT";
+  [ "$?" != 0 ] &&
     return 1;
 
   htrsh_fix_rec_names "$XMLOUT";
