@@ -66,8 +66,9 @@ NONUMESCAPES   = T
 
 htrsh_sed_tokenize_simplest='
   s|$\.|$*|g;
-  s|\([.,:;!¡?¿\x27´`"“”„(){}]\)| \1 |g;
+  s|\([.,:;!¡?¿\x27´`"“”„(){}—–]\)| \1 |g;
   s|$\*|$.|g;
+  s|\([0-9]\)| \1 |g;
   s|^  *||;
   s|  *$||;
   s|   *| |g;
@@ -443,6 +444,7 @@ htrsh_pageimg_resize () {
   local FN="htrsh_pageimg_resize";
   local INRES="";
   local OUTRES="118";
+  local INRESCHECK="yes";
   local SFACT="";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
@@ -467,6 +469,8 @@ htrsh_pageimg_resize () {
       OUTRES="$2";
     elif [ "$1" = "-s" ]; then
       SFACT="$2";
+    elif [ "$1" = "-c" ]; then
+      INRESCHECK="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -482,7 +486,7 @@ htrsh_pageimg_resize () {
   if [ "$INRES" = "" ] && [ "$IMRES" = "" ]; then
     echo "$FN: error: resolution not given (-i option) and image does not specify resolution: $IMFILE" 1>&2;
     return 1;
-  elif [ "$INRES" = "" ] && [ $(echo $IMRES | awk '{printf("%.0f",$1)}') -lt 50 ]; then
+  elif [ "$INRESCHECK" = "yes" ] && [ "$INRES" = "" ] && [ $(echo $IMRES | awk '{printf("%.0f",$1)}') -lt 50 ]; then
     echo "$FN: error: image resolution ($IMRES ppc) apparently incorrect since it is unusually low to be a text document image: $IMFILE" 1>&2;
     return 1;
   elif [ ! -d "$OUTDIR" ]; then
@@ -506,10 +510,11 @@ htrsh_pageimg_resize () {
   convert "$IMFILE" -units PixelsPerCentimeter -density $OUTRES -resize $SFACT "$OUTDIR/$IMBASE.$IMEXT"; ### don't know why the density has to be set this way
 
   ### Resize XML Page ###
+  # @todo change the sed to XSLT
   htrsh_pagexml_resize $SFACT < "$XML" \
     | sed '
         s|\( custom="[^"]*\)image-resolution:[^;]*;\([^"]*"\)|\1\2|;
-        s| custom="[^:"]*"||;
+        s| custom=" *"||;
         ' \
     > "$OUTDIR/$XMLBASE.xml";
 
