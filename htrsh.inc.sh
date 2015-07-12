@@ -62,6 +62,8 @@ HMMDEFOFILTER  = "gzip > $"
 HNETFILTER     = "zcat $"
 HNETOFILTER    = "gzip > $"
 NONUMESCAPES   = T
+STARTWORD      = "<s>"
+ENDWORD        = "</s>"
 ';
 
 htrsh_sed_tokenize_simplest='
@@ -1767,7 +1769,7 @@ htrsh_langmodel_train () {
     { if( $1 != "\"<s>\"" && $1 != "\"</s>\"" )
         print $1;
     }' "$OUTDIR/dictionary.txt" \
-    | sed 's|^"||; s|"$||;' \
+    | sed 's|^"\(.*\)"$|\1|; s|\\\(["\x27]\)|\1|g;' \
     > "$OUTDIR/vocabulary.txt";
 
   ### Create n-gram ###
@@ -2173,6 +2175,112 @@ htrsh_hmm_train () {
 
   rm -f "$OUTDIR/proto" "$OUTDIR/vFloors" "$OUTDIR/Macros_hmm.gz";
   rm -f "$OUTDIR/train_feats_part_"*;
+
+  return 0;
+}
+
+
+#----------------------------#
+# Decoding related functions #
+#----------------------------#
+
+##
+## Function that executes N parallel threads of HVite or HLRescore for a given feature list
+##
+htrsh_hvite_parallel () {
+  local FN="htrsh_htk_parallel";
+  if [ $# -lt 2 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Executes N parallel threads of HVite or HLRescore for a given feature list";
+      echo "Usage: $FN (HVite|HLRescore) THREADS OPTIONS";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local CMD="$1";
+  local THREADS=$(printf %d $2);
+  [ "$?" != "0" ] && return 1;
+  shift 2;
+  local FEATLST="";
+  local MLF="";
+  local OPTS="";
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "-S" ]; then
+      FEATLST="$2";
+      shift 2;
+    elif [ "$1" = "-i" ]; then
+      MLF="$2";
+      shift 2;
+    else
+      OPTS="$OPTS $1";
+      shift 1;
+    fi
+  done
+
+  if [ "$CMD" != "HVite" ] && [ "$CMD" != "HLRescore" ]; then
+    echo "$FN: error: command has to be either HVite or HLRescore" 1>&2;
+    return 1;
+  elif [ "$THREADS" -lt 1 ]; then
+    echo "$FN: error: number of threads must be at least one" 1>&2;
+    return 1;
+  elif [ "$MLF" = "" ]; then
+    echo "$FN: error: an output MLF file using option -i must be given" 1>&2;
+    return 1;
+  elif [ "$FEATLST" = "" ]; then
+    echo "$FN: error: a feature list using option -S must be given" 1>&2;
+    return 1;
+  elif [ ! -e "$FEATLST" ]; then
+    echo "$FN: error: feature list file not found: $FEATLST" 1>&2;
+    return 1;
+  fi
+
+  local OUTDIR=".";
+  [ $(echo "$MLF" | grep / | wc -l) != 0 ] &&
+    OUTDIR=$(echo "$MLF" | sed 's|/[^/]*$||');
+
+  if [ "$THREADS" = 1 ]; then
+    $CMD -S "$FEATLST" -i "$MLF" $OPTS 1>&2;
+    [ "$?" != 0 ] &&
+      echo "$FN: error: problems executing HVite" 1>&2 &&
+      return 1;
+
+  else
+    local TMP=$(mktemp --tmpdir="$OUTDIR" hvite_thread_XXXXX | sed 's|.*\_||');
+    > "$OUTDIR/hvite_thread_$TMP";
+    > "$OUTDIR/hvite_thread_${TMP}_errs";
+
+    local FEATNUM=$(( ( $(wc -l < "$FEATLST") + THREADS - 1 ) / THREADS ));
+    [ "$FEATNUM" -le 1 ] && FEATNUM="2";
+    rm -f "$OUTDIR/hvite_thread_${TMP}_feats_"*;
+    awk '{printf("%s %s\n",rand(),$0)}' "$FEATLST" \
+      | sort \
+      | sed 's|^[^ ]* ||' \
+      | split --numeric-suffixes=1 -l $FEATNUM - "$OUTDIR/hvite_thread_${TMP}_feats_";
+    THREADS=$(ls "$OUTDIR/hvite_thread_${TMP}_feats_"* | wc -l);
+
+    local t;
+    for t in $(seq -f %02.0f 1 $THREADS); do
+      { $CMD -S "$OUTDIR/hvite_thread_${TMP}_feats_$t" -i "$OUTDIR/hvite_thread_${TMP}_mlf_$t" $OPTS 1>&2;
+        [ "$?" != 0 ] &&
+          echo $t >> "$OUTDIR/hvite_thread_${TMP}_errs";
+        echo $t >> "$OUTDIR/hvite_thread_$TMP";
+      } &
+    done
+    while [ $(wc -l < "$OUTDIR/hvite_thread_$TMP") != $THREADS ]; do
+      sleep 1;
+    done
+    [ $(wc -l < "$OUTDIR/hvite_thread_${TMP}_errs") != 0 ] &&
+      echo "$FN: error: problems executing HVite" 1>&2 &&
+      return 1;
+
+    { echo "#!MLF!#";
+      sed '/^#!MLF!#/d' "$OUTDIR/hvite_thread_${TMP}_mlf_"*;
+    } > "$MLF";
+
+    rm "$OUTDIR/hvite_thread_$TMP" "$OUTDIR/hvite_thread_${TMP}_errs";
+    rm "$OUTDIR/hvite_thread_${TMP}_feats_"* "$OUTDIR/hvite_thread_${TMP}_mlf_"*;
+  fi
 
   return 0;
 }
