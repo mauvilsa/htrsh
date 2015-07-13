@@ -2286,6 +2286,32 @@ htrsh_hvite_parallel () {
 }
 
 ##
+## Function that fixes the quotes of rec MLFs
+##
+htrsh_fix_rec_mlf_quotes () {
+  local FN="htrsh_fix_rec_mlf_quotes";
+  if [ $# -lt 1 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Fixes the quotes of rec MLFs";
+      echo "Usage: $FN MLF";
+    } 1>&2;
+    return 1;
+  fi
+
+  gawk '
+    { if( NF == 4 ) {
+        if( match($3,/^\x27.*\x27$/) )
+          $3 = gensub( /^\x27(.*)\x27$/, "\\1", "", $3 );
+        if( ! match($3,/^".+"$/) )
+          $3 = ("\"" gensub( /"/, "\\\"", "g", $3 ) "\"");
+      }
+      print;
+    }' "$1";
+
+  return 0;
+}
+
+##
 ## Function that replaces special HMM model names with corresponding characters
 ##
 htrsh_fix_rec_names () {
