@@ -2020,7 +2020,7 @@ htrsh_hmm_train () {
     awk '{printf("%s %s\n",rand(),$0)}' "$FEATLST" \
       | sort \
       | sed 's|^[^ ]* ||' \
-      | split --numeric-suffixes=1 -l $FEATNUM - "$OUTDIR/train_feats_part_";
+      | split --numeric-suffixes -l $FEATNUM - "$OUTDIR/train_feats_part_";
     THREADS=$(ls "$OUTDIR/train_feats_part_"* | wc -l);
   fi
 
@@ -2128,9 +2128,9 @@ htrsh_hmm_train () {
           > "$OUTDIR/train_thread_done";
           > "$OUTDIR/train_thread_errs";
           local t;
-          for t in $(seq 1 $THREADS); do
+          for t in $(seq -f %02.0f 0 $((THREADS-1))); do
             { HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_HTK_config" ) \
-                -S "$OUTDIR/train_feats_part_$(printf %.2d $t)" -p $t \
+                -S "$OUTDIR/train_feats_part_$t" -p $((t+1)) \
                 -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" -M "$OUTDIR" <( echo "$HMMLST" ) 1>&2;
               [ "$?" != 0 ] &&
                 echo $t >> "$OUTDIR/train_thread_errs";
@@ -2256,11 +2256,11 @@ htrsh_hvite_parallel () {
     awk '{printf("%s %s\n",rand(),$0)}' "$FEATLST" \
       | sort \
       | sed 's|^[^ ]* ||' \
-      | split --numeric-suffixes=1 -l $FEATNUM - "$OUTDIR/hvite_thread_${TMP}_feats_";
+      | split --numeric-suffixes -l $FEATNUM - "$OUTDIR/hvite_thread_${TMP}_feats_";
     THREADS=$(ls "$OUTDIR/hvite_thread_${TMP}_feats_"* | wc -l);
 
     local t;
-    for t in $(seq -f %02.0f 1 $THREADS); do
+    for t in $(seq -f %02.0f 0 $((THREADS-1))); do
       { $CMD -S "$OUTDIR/hvite_thread_${TMP}_feats_$t" -i "$OUTDIR/hvite_thread_${TMP}_mlf_$t" $OPTS 1>&2;
         [ "$?" != 0 ] &&
           echo $t >> "$OUTDIR/hvite_thread_${TMP}_errs";
