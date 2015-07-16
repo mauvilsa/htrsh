@@ -2204,6 +2204,8 @@ htrsh_hvite_parallel () {
   shift 2;
   local FEATLST="";
   local MLF="";
+  local CFG="";
+  local HMMLST="";
   local OPTS="";
   while [ $# -gt 0 ]; do
     if [ "$1" = "-S" ]; then
@@ -2212,6 +2214,12 @@ htrsh_hvite_parallel () {
     elif [ "$1" = "-i" ]; then
       MLF="$2";
       shift 2;
+    elif [ "$1" = "-C" ]; then
+      CFG="$2";
+      shift 2;
+    elif [ "$#" = 1 ] && [ "$CMD" = "HVite" ]; then
+      HMMLST="$1";
+      shift 1;
     else
       OPTS="$OPTS $1";
       shift 1;
@@ -2240,7 +2248,8 @@ htrsh_hvite_parallel () {
     OUTDIR=$(echo "$MLF" | sed 's|/[^/]*$||');
 
   if [ "$THREADS" = 1 ]; then
-    $CMD -S "$FEATLST" -i "$MLF" $OPTS 1>&2;
+    [ "$CFG" != "" ] && CFG="-C $CFG";
+    $CMD $CFG -S "$FEATLST" -i "$MLF" $OPTS $HMMLST 1>&2;
     [ "$?" != 0 ] &&
       echo "$FN: error: problems executing HVite" 1>&2 &&
       return 1;
@@ -2258,10 +2267,16 @@ htrsh_hvite_parallel () {
       | sed 's|^[^ ]* ||' \
       | split --numeric-suffixes -l $FEATNUM - "$OUTDIR/hvite_thread_${TMP}_feats_";
     THREADS=$(ls "$OUTDIR/hvite_thread_${TMP}_feats_"* | wc -l);
+    [ "$CFG" != "" ] && CFG=$(< "$CFG");
+    [ "$CMD" = "HVite" ] && HMMLST=$(< "$HMMLST");
 
     local t;
     for t in $(seq -f %02.0f 0 $((THREADS-1))); do
-      { $CMD -S "$OUTDIR/hvite_thread_${TMP}_feats_$t" -i "$OUTDIR/hvite_thread_${TMP}_mlf_$t" $OPTS 1>&2;
+      { if [ "$CMD" = "HVite" ]; then
+          $CMD -C <( echo "$CFG" ) -S "$OUTDIR/hvite_thread_${TMP}_feats_$t" -i "$OUTDIR/hvite_thread_${TMP}_mlf_$t" $OPTS <( echo "$HMMLST" ) 1>&2;
+        else
+          $CMD -C <( echo "$CFG" ) -S "$OUTDIR/hvite_thread_${TMP}_feats_$t" -i "$OUTDIR/hvite_thread_${TMP}_mlf_$t" $OPTS 1>&2;
+        fi
         [ "$?" != 0 ] &&
           echo $t >> "$OUTDIR/hvite_thread_${TMP}_errs";
         echo $t >> "$OUTDIR/hvite_thread_$TMP";
