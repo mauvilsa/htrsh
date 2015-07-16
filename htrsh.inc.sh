@@ -2313,15 +2313,17 @@ htrsh_fix_rec_mlf_quotes () {
     return 1;
   fi
 
+  local MLF="$1"; [ "$MLF" = "-" ] && MLF="/dev/stdin";
+
   gawk '
-    { if( NF == 4 ) {
+    { if( NF >= 3 ) {
         if( match($3,/^\x27.*\x27$/) )
           $3 = gensub( /^\x27(.*)\x27$/, "\\1", "", $3 );
         if( ! match($3,/^".+"$/) )
-          $3 = ("\"" gensub( /"/, "\\\"", "g", $3 ) "\"");
+          $3 = ("\"" gensub( /\x22/, "\\\\\x22", "g", $3 ) "\"");
       }
       print;
-    }' "$1";
+    }' < "$MLF";
 
   return 0;
 }
