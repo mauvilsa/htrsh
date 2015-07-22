@@ -1343,7 +1343,7 @@ htrsh_feats_pca () {
     fi
     echo "save('-z','$OUTMAT','B','V','mu');";
     #echo "save('$OUTMAT','B','V','mu');";
-  } | octave -q;
+  } | octave -q -H;
 
   fi
 
@@ -1393,7 +1393,7 @@ htrsh_feats_project () {
         writehtk('$ff',x,FP,TC);
         ";
     done
-  } | octave -q;
+  } | octave -q -H;
 
   [ "$?" != 0 ] &&
     echo "$FN: error: problems projecting features" 1>&2 &&
@@ -1535,7 +1535,7 @@ htrsh_pageimg_extract_linefeats () {
 
       printf('%.12g,%.12g,%.12g,%.12g,%.12g,%.12g\n',
         A0(1,1), A0(1,2), A0(2,1), A0(2,2), A0(3,1), A0(3,2) );
-      " | octave -q);
+      " | octave -q -H);
 
     ### Apply affine transformation to image ###
     local mn;
@@ -1585,7 +1585,7 @@ htrsh_pageimg_extract_linefeats () {
         pt1(1), pt1(2),
         pt2(1), pt2(2),
         pt3(1), pt3(2) );
-      " | octave -q);
+      " | octave -q -H);
 
     ### Prepare information to add to XML ###
     #ed="$ed -i '//*[@id=\"$id\"]/_:Coords' -t attr -n bbox -v '$bbox'";
@@ -2491,7 +2491,7 @@ htrsh_pagexml_insertalign_lines () {
             xdown(n,2), ydown(n,2) );
         end
       end" \
-    | octave -q \
+    | octave -q -H \
     | awk '
         { if( FILENAME != "-" )
             rid[FNR] = $1;
