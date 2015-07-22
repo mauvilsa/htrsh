@@ -2011,7 +2011,7 @@ htrsh_hmm_train () {
 
   local HMMLST=$(cat "$MLF" \
                    | sed '/^#!MLF!#/d; /^"\*\//d; /^\.$/d; s|^"\(.*\)"$|\1|;' \
-                   | sort -u);
+                   | LC_ALL=C.UTF-8 sort -u);
 
   if [ "$THREADS" -gt 1 ]; then
     local FEATNUM=$(( ( $(wc -l < "$FEATLST") + THREADS - 1 ) / THREADS ));
