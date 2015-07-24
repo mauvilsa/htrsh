@@ -122,7 +122,7 @@ htrsh_check_req () {
   local FN="htrsh_check_req";
   local cmd;
   for cmd in xmlstarlet convert octave HVite dotmatrix imgtxtenh imglineclean imgccomp imgpolycrop imageSlant imageSlope page_format_generate_contour; do
-    local c=$(which $cmd);
+    local c=$(which $cmd 2>/dev/null);
     [ ! -e "$c" ] &&
       echo "$FN: WARNING: unable to find command: $cmd" 1>&2;
   done
@@ -141,7 +141,7 @@ htrsh_check_req () {
   done
   { printf "xmlstarlet "; xmlstarlet --version | head -n 1;
     convert --version | sed -n '1{ s|^Version: ||; p; }';
-    octave --version | head -n 1;
+    octave -q --version | head -n 1;
     HVite -V | grep HVite | cat;
   } 1>&2;
 
@@ -881,6 +881,7 @@ htrsh_pageimg_clean () {
     return 1;
   fi
 
+  [ "$INRES" = "" ] && [ "$IMRES" != "" ] && INRES=$IMRES;
   [ "$INRES" != "" ] && INRES="-d $INRES";
 
   ### Enhance image ###
@@ -1076,6 +1077,7 @@ htrsh_pageimg_extract_lines () {
     xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines/_:Coords" \
         -o "$base." -v ../../@id -o "." -v ../@id -o ".png " -v @points -n "$XML" \
       | imgpolycrop "$IMFILE";
+    # @todo If image density only set in XML then set it for output images: modify imgpolycrop and provide it the density.
 
     [ "$?" != 0 ] &&
       echo "$FN: error: line image extraction failed" 1>&2 &&
