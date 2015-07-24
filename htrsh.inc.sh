@@ -364,7 +364,7 @@ htrsh_mlf_to_tasas () {
 }
 
 ##
-## Function that checks and extracts basic info (XMLDIR, IMDIR, IMFILE, XMLBASE, IMBASE, IMEXT, IMSIZE, IMRES) from an XML Page file and respective image
+## Function that checks and extracts basic info (XMLDIR, IMDIR, IMFILE, XMLBASE, IMBASE, IMEXT, IMSIZE, IMRES, RESSRC) from an XML Page file and respective image
 ##
 htrsh_pageimg_info () {
   local FN="htrsh_pageimg_info";
@@ -372,7 +372,7 @@ htrsh_pageimg_info () {
   local VAL="-e"; [ "$htrsh_valschema" = "yes" ] && VAL="-e -s '$htrsh_pagexsd'";
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
-      echo "Description: Checks and extracts basic info (XMLDIR, IMDIR, IMFILE, XMLBASE, IMBASE, IMEXT, IMSIZE, IMRES) from an XML Page file and respective image";
+      echo "Description: Checks and extracts basic info (XMLDIR, IMDIR, IMFILE, XMLBASE, IMBASE, IMEXT, IMSIZE, IMRES, RESSRC) from an XML Page file and respective image";
       echo "Usage: $FN XMLFILE";
     } 1>&2;
     return 1;
@@ -403,6 +403,7 @@ htrsh_pageimg_info () {
       [ "$IMSIZE" != "$XMLSIZE" ] &&
         echo "$FN: warning: image size discrepancy: image=$IMSIZE page=$XMLSIZE" 1>&2;
 
+      RESSRC="xml";
       IMRES=$(xmlstarlet sel -t -v //_:Page/@custom "$XML" 2>/dev/null \
                 | awk -F'[{}:; ]+' '
                     { for( n=1; n<=NF; n++ )
@@ -416,6 +417,7 @@ htrsh_pageimg_info () {
                     }');
 
       [ "$IMRES" = "" ] &&
+      RESSRC="img" &&
       IMRES=$(
         identify -format "%x %y %U" "$IMFILE" \
           | awk '
@@ -481,7 +483,7 @@ htrsh_pageimg_resize () {
   done
 
   ### Check XML file and image ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
@@ -866,7 +868,7 @@ htrsh_pageimg_clean () {
   done
 
   ### Check XML file and image ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
@@ -957,7 +959,7 @@ htrsh_pageimg_quadborderclean () {
   done
 
   ### Check XML file and image ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
@@ -1065,7 +1067,7 @@ htrsh_pageimg_extract_lines () {
   done
 
   ### Check page and obtain basic info ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
@@ -1074,10 +1076,15 @@ htrsh_pageimg_extract_lines () {
   if [ "$NUMLINES" -gt 0 ]; then
     local base=$(echo "$OUTDIR/$IMBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
 
+    if [ "$RESSRC" = "xml" ]; then
+      IMRES="-d $IMRES";
+    else
+      IMRES="";
+    fi
+
     xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines/_:Coords" \
         -o "$base." -v ../../@id -o "." -v ../@id -o ".png " -v @points -n "$XML" \
-      | imgpolycrop "$IMFILE";
-    # @todo If image density only set in XML then set it for output images: modify imgpolycrop and provide it the density.
+      | imgpolycrop $IMRES "$IMFILE";
 
     [ "$?" != 0 ] &&
       echo "$FN: error: line image extraction failed" 1>&2 &&
@@ -1197,7 +1204,7 @@ htrsh_feats_catregions () {
   done
 
   ### Check page and obtain basic info ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
@@ -1470,7 +1477,7 @@ htrsh_pageimg_extract_linefeats () {
   done
 
   ### Check page and obtain basic info ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
@@ -2676,7 +2683,7 @@ htrsh_pageimg_forcealign_lines () {
   fi
 
   ### Check XML file and image ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
   local B=$(echo "$XMLBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
@@ -2787,7 +2794,7 @@ htrsh_pageimg_forcealign () {
   fi
 
   ### Check page ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES;
+  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
