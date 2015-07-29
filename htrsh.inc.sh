@@ -167,7 +167,7 @@ htrsh_pagexml_textequiv () {
       echo "Usage: $FN XMLFILE [ Options ]";
       echo "Options:";
       echo " -r (yes|no)  Whether to get TextEquiv from regions instead of lines (def.=$REGSRC)";
-      echo " -f FORMAT    Output format among 'raw', 'mlf-chars', 'mlf-words' and 'kaldi-table' (def.=$FORMAT)";
+      echo " -f FORMAT    Output format among 'raw', 'mlf-chars', 'mlf-words' and 'tab' (def.=$FORMAT)";
       echo " -F FILTER    Filtering pipe command, e.g. tokenizer, transliteration, etc. (def.=none)";
     } 1>&2;
     return 1;
@@ -223,12 +223,12 @@ htrsh_pagexml_textequiv () {
         ' \
     | awk -F'\t' -v FORMAT=$FORMAT '
         BEGIN {
-          if( FORMAT == "kaldi-table" )
+          if( FORMAT == "tab" )
             OFS=" ";
         }
         { if( FORMAT == "raw" )
             print $2;
-          else if( FORMAT == "kaldi-table" )
+          else if( FORMAT == "tab" )
             print $1,$2;
           else if( FORMAT == "mlf-words" ) {
             printf("\"*/%s.lab\"\n",$1);
