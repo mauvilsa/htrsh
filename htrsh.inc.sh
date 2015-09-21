@@ -22,6 +22,7 @@ htrsh_keeptmp="0";
 htrsh_xpath_regions='//_:TextRegion';    # XPATH for selecting Page regions to process
 #htrsh_xpath_lines='_:TextLine/_:Coords'; # XPATH for selecting lines (appended to htrsh_xpath_regions)
 htrsh_xpath_lines='_:TextLine[_:Coords and _:TextEquiv/_:Unicode and _:TextEquiv/_:Unicode != ""]';
+htrsh_xpath_quads='_:Coords[../_:TextLine/_:TextEquiv/_:Unicode and ../_:TextLine/_:TextEquiv/_:Unicode != ""]';
 
 htrsh_imgtxtenh_regmask="no";                # Whether to use a region-based processing mask
 htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.1"; # Options for imgtxtenh tool
@@ -272,6 +273,36 @@ htrsh_pagexml_textequiv () {
         }';
 
   return 0;
+}
+
+##
+## Function that transforms a lab/rec MLF to kaldi table format
+##
+htrsh_mlf_to_tab () {
+  local FN="htrsh_mlf_to_tab";
+  if [ $# -lt 1 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Transforms a lab/rec MLF to kaldi table format";
+      echo "Usage: $FN MLF";
+    } 1>&2;
+    return 1;
+  fi
+
+  gawk '
+    { if( $0 == "." )
+        printf("\n");
+      else if( $0 != "#!MLF!#" ) {
+        if( NF==1 && ( match($1,/\.lab"$/) || match($1,/\.rec"$/) ) )
+          printf( "%s", gensub( /^".*\/(.+)\.[lr][ae][bc]"$/, "\\1", "", $1 ) );
+        else {
+          if( NF > 1 )
+            $1 = $3;
+          if( match($1,/^".+"$/) )
+            $1 = gensub( /\\"/, "\"", "g", substr($1,2,length($1)-2) );
+          printf(" %s",$1);
+        }
+      }
+    }' $1;
 }
 
 ##
@@ -905,6 +936,11 @@ htrsh_pageimg_clean () {
                      | awk '{printf(" -draw \"polygon %s\"",$0)}');
 
     ### Create mask and enhance selected text regions ###
+    echo convert -size $IMSIZE xc:black \
+        -fill white -stroke white $textreg \
+        -fill black -stroke black $othreg \
+        -alpha copy "'$IMFILE'" +swap \
+        -compose copy-opacity -composite miff:-;
     eval convert -size $IMSIZE xc:black \
         -fill white -stroke white $textreg \
         -fill black -stroke black $othreg \
@@ -967,7 +1003,7 @@ htrsh_pageimg_quadborderclean () {
   local IMH=$(echo "$IMSIZE" | sed 's|.*x||');
 
   ### Get quadrilaterals ###
-  local QUADs=$(xmlstarlet sel -t -m "$htrsh_xpath_regions/_:Coords" -v @points -n "$XML");
+  local QUADs=$(xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_quads" -v @points -n "$XML");
   local N=$(echo "$QUADs" | wc -l);
 
   local comps="";
@@ -2553,37 +2589,39 @@ htrsh_pagexml_insertalign_lines () {
       fi
       #TE=$(($(date +%s%N)/1000000)); echo "time 3: $((TE-TS)) ms" 1>&2; TS="$TE";
 
-      [ "$htrsh_align_isect" = "yes" ] &&
+      if [ "$htrsh_align_isect" = "yes" ]; then
+        local AWK_ISECT='
+          BEGIN {
+            printf( "convert -fill white -stroke white" );
+          }
+          { if( NR == 1 ) {
+              mn_x=$1; mx_x=$1;
+              mn_y=$2; mx_y=$2;
+              for( n=3; n<=NF; n+=2 ) {
+                if( mn_x > $n ) mn_x = $n;
+                if( mx_x < $n ) mx_x = $n;
+                if( mn_y > $(n+1) ) mn_y = $(n+1);
+                if( mx_y < $(n+1) ) mx_y = $(n+1);
+              }
+              w = mx_x-mn_x+1;
+              h = mx_y-mn_y+1;
+            }
+            printf( " \\( -size %dx%d xc:black -draw \"polyline", w, h );
+            for( n=1; n<=NF; n+=2 )
+              printf( " %d,%d", $n-mn_x, $(n+1)-mn_y );
+            printf( "\" \\)" );
+          }
+          END {
+            printf( " -compose darken -composite -page %s+%d+%d miff:-\n", sz, mn_x, mn_y );
+          }';
         pts=$(
           eval $(
             { echo "$pts";
               echo "$contour";
-            } | awk -F'[ ,]' -v sz=$size '
-              BEGIN {
-                printf( "convert -fill white -stroke white" );
-              }
-              { if( NR == 1 ) {
-                  mn_x=$1; mx_x=$1;
-                  mn_y=$2; mx_y=$2;
-                  for( n=3; n<=NF; n+=2 ) {
-                    if( mn_x > $n ) mn_x = $n;
-                    if( mx_x < $n ) mx_x = $n;
-                    if( mn_y > $(n+1) ) mn_y = $(n+1);
-                    if( mx_y < $(n+1) ) mx_y = $(n+1);
-                  }
-                  w = mx_x-mn_x+1;
-                  h = mx_y-mn_y+1;
-                }
-                printf( " \\( -size %dx%d xc:black -draw \"polyline", w, h );
-                for( n=1; n<=NF; n+=2 )
-                  printf( " %d,%d", $n-mn_x, $(n+1)-mn_y );
-                printf( "\" \\)" );
-              }
-              END {
-                printf( " -compose darken -composite -page %s+%d+%d miff:-\n", sz, mn_x, mn_y );
-              }
-              ' ) \
+            } | awk -F'[ ,]' -v sz=$size "$AWK_ISECT" ) \
             | imgccomp -V0 -JS - );
+        local wpts="$pts";
+      fi
 
       #TE=$(($(date +%s%N)/1000000)); echo "time 4: $((TE-TS)) ms" 1>&2; TS="$TE";
 
@@ -2600,6 +2638,14 @@ htrsh_pagexml_insertalign_lines () {
         for c in $(seq $pS $pE); do
           local gg=$(printf %.2d $g);
           local pts=$(echo "$coords" | sed -n "${c}p");
+          [ "$htrsh_align_isect" = "yes" ] &&
+            pts=$(
+              eval $(
+                { echo "$pts";
+                  echo "$wpts";
+                } | awk -F'[ ,]' -v sz=$size "$AWK_ISECT" ) \
+                | imgccomp -V0 -JS - );
+            # @todo character polygons overlap slightly, possible solution: reduce width of parallelograms by 1 pixel in each side
 
           cmd="$cmd -s '//*[@id=\"${id}_w${ww}\"]' -t elem -n TMPNODE";
           cmd="$cmd -i '//TMPNODE' -t attr -n id -v '${id}_w${ww}_g${gg}'";
@@ -2733,6 +2779,7 @@ htrsh_pageimg_forcealign () {
   local KEEPTMP="no";
   local KEEPAUX="no";
   local QBORD="no";
+  local FILTER="";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Does a line by line forced alignment given only a page with baselines or contours and optionally a model";
@@ -2747,6 +2794,7 @@ htrsh_pageimg_forcealign () {
       echo " -t (yes|no)  Whether to keep temporary directory and files (def.=$KEEPTMP)";
       echo " -a (yes|no)  Whether to keep auxiliary attributes in XML (def.=$KEEPAUX)";
       #echo " -q (yes|no)  Whether to clean quadrilateral border of regions (def.=$QBORD)";
+      echo " -F FILTER    Filtering pipe command, e.g. tokenizer, transliteration, etc. (def.=none)";
     } 1>&2;
     return 1;
   fi
@@ -2774,6 +2822,8 @@ htrsh_pageimg_forcealign () {
       KEEPAUX="$2";
     elif [ "$1" = "-q" ]; then
       QBORD="$2";
+    elif [ "$1" = "-F" ]; then
+      FILTER="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -2861,7 +2911,7 @@ htrsh_pageimg_forcealign () {
     return 1;
 
   ### Compute PCA and project features ###
-  if [ "$DOPCA" = "yes" ]; then
+  if [ "$PBASE" = "" ] && [ "$DOPCA" = "yes" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): computing PCA for page ...";
     PBASE="$TMPDIR/pcab.mat.gz";
     htrsh_feats_pca "$TMPDIR/${B}_feats.lst" "$PBASE" -e 1:4 -r 24;
@@ -2883,7 +2933,11 @@ htrsh_pageimg_forcealign () {
   if [ "$MODEL" = "" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): training model for page ...";
     { echo '#!MLF!#';
-      htrsh_pagexml_textequiv "$TMPDIR/${XMLBASE}_feats.xml" -f mlf-chars -r $AREG;
+      if [ "$FILTER" != "" ]; then
+        htrsh_pagexml_textequiv "$TMPDIR/${XMLBASE}_feats.xml" -f mlf-chars -r $AREG -F "$FILTER";
+      else
+        htrsh_pagexml_textequiv "$TMPDIR/${XMLBASE}_feats.xml" -f mlf-chars -r $AREG;
+      fi
     } > "$TMPDIR/${B}_page.mlf";
     [ "$?" != 0 ] && return 1;
     MODEL=$(
