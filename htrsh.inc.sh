@@ -936,11 +936,6 @@ htrsh_pageimg_clean () {
                      | awk '{printf(" -draw \"polygon %s\"",$0)}');
 
     ### Create mask and enhance selected text regions ###
-    echo convert -size $IMSIZE xc:black \
-        -fill white -stroke white $textreg \
-        -fill black -stroke black $othreg \
-        -alpha copy "'$IMFILE'" +swap \
-        -compose copy-opacity -composite miff:-;
     eval convert -size $IMSIZE xc:black \
         -fill white -stroke white $textreg \
         -fill black -stroke black $othreg \
