@@ -43,7 +43,7 @@ htrsh_dotmatrix_mom="yes"; # Whether to add moments to features
 
 htrsh_align_chars="no";             # Whether to align at a character level
 htrsh_align_isect="yes";            # Whether to intersect parallelograms with line contour
-htrsh_align_prefer_baselines="yes"; # Whether to always generate contours from baselines
+htrsh_align_prefer_baselines="no";  # Whether to always generate contours from baselines
 htrsh_align_addtext="yes";          # Whether to add TextEquiv to word and glyph nodes
 
 htrsh_hmm_states="6"; # Number of HMM states (excluding special initial and final)
@@ -2144,7 +2144,7 @@ htrsh_hmm_train () {
       if [ "$g" -gt 1 ] && ! ( [ "$RESUME" != "no" ] && [ -e "$OUTDIR/Macros_hmm_g${gg}_i$i.gz" ] ); then
         echo "$FN: info: duplicating Gaussians to $g" 1>&2;
         HHEd $htrsh_HTK_HHEd_opts -C <( echo "$htrsh_HTK_config" ) -H "$OUTDIR/Macros_hmm.gz" \
-          -M "$OUTDIR" <( echo "MU $g {*.state[2-$((htrsh_hmm_states-1))].mix}" ) \
+          -M "$OUTDIR" <( echo "MU $g {*.state[2-$((10#$htrsh_hmm_states-1))].mix}" ) \
           <( echo "$HMMLST" ) 1>&2;
       fi
 
@@ -2170,7 +2170,7 @@ htrsh_hmm_train () {
           local t;
           for t in $(seq -f %02.0f 0 $((THREADS-1))); do
             { HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_HTK_config" ) \
-                -S "$OUTDIR/train_feats_part_$t" -p $((t+1)) \
+                -S "$OUTDIR/train_feats_part_$t" -p $((10#$t+1)) \
                 -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" -M "$OUTDIR" <( echo "$HMMLST" ) 1>&2;
               [ "$?" != 0 ] &&
                 echo $t >> "$OUTDIR/train_thread_errs";
