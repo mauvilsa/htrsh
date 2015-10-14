@@ -8,7 +8,9 @@
 ## @copyright Copyright(c) 2014 to the present, Mauricio Villegas (UPV)
 ##
 
-
+[ "${BASH_SOURCE[0]}" = "$0" ] && 
+  echo "htrsh.inc.sh: error: not intended for direct execution, use htrsh_load" 1>&2 &&
+  exit 1;
 [ "$(type -t htrsh_version)" = "function" ] &&
   echo "htrsh.inc.sh: warning: library already loaded, to reload first use htrsh_unload" 1>&2 &&
   return 0;
@@ -20,9 +22,9 @@
 htrsh_keeptmp="0";
 
 htrsh_xpath_regions='//_:TextRegion';    # XPATH for selecting Page regions to process
-#htrsh_xpath_lines='_:TextLine/_:Coords'; # XPATH for selecting lines (appended to htrsh_xpath_regions)
 htrsh_xpath_lines='_:TextLine[_:Coords and _:TextEquiv/_:Unicode and _:TextEquiv/_:Unicode != ""]';
 htrsh_xpath_quads='_:Coords[../_:TextLine/_:TextEquiv/_:Unicode and ../_:TextLine/_:TextEquiv/_:Unicode != ""]';
+htrsh_xpath_coords='_:Coords[@points and @points!="0,0 0,0"]';
 
 htrsh_imgtxtenh_regmask="no";                # Whether to use a region-based processing mask
 htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.1"; # Options for imgtxtenh tool
@@ -43,19 +45,17 @@ htrsh_dotmatrix_mom="yes"; # Whether to add moments to features
 
 htrsh_align_chars="no";             # Whether to align at a character level
 htrsh_align_isect="yes";            # Whether to intersect parallelograms with line contour
-htrsh_align_prefer_baselines="no";  # Whether to always generate contours from baselines
+htrsh_align_prefer_baselines="yes"; # Whether to always generate contours from baselines
 htrsh_align_addtext="yes";          # Whether to add TextEquiv to word and glyph nodes
 
 htrsh_hmm_states="6"; # Number of HMM states (excluding special initial and final)
-htrsh_hmm_nummix="4"; # Number of Gaussian mixture components
+htrsh_hmm_nummix="4"; # Number of Gaussian mixture components per state
 htrsh_hmm_iter="4";   # Number of training iterations
 
 htrsh_HTK_HERest_opts="-m 2";      # Options for HERest tool
 htrsh_HTK_HCompV_opts="-f 0.1 -m"; # Options for HCompV tool
 htrsh_HTK_HHEd_opts="";            # Options for HHEd tool
 htrsh_HTK_HVite_opts="";           # Options for HVite tool
-
-#htrsh_HTK_HVite_opts="-A -T 1";
 
 htrsh_HTK_config='
 HMMDEFFILTER   = "zcat $"
@@ -149,6 +149,143 @@ htrsh_check_req () {
   return 0;
 }
 
+##
+## Function that randomly and evenly splits a list
+##
+htrsh_randsplit () {
+  local FN="htrsh_randsplit";
+  local START="0";
+  if [ $# -lt 3 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Randomly and evenly splits a list";
+      echo "Usage: $FN PARTS LIST OUTFORMAT [ #start (def.=$START) ]";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local PARTS="$1";
+  local LIST="$2";
+  local OUTFORMAT="$3";
+  [ $# -gt 3 ] && START="$4";
+
+  if [ ! -e "$LIST" ]; then
+    echo "$FN: error: list not found: $LIST" 1>&2;
+    return 1;
+  fi
+
+  local NLIST=$(wc -l < "$LIST");
+
+  cat "$LIST" \
+    | awk '{ printf( "%s %s\n", rand(), $0 ); }' \
+    | sort \
+    | sed 's|^[^ ]* ||' \
+    | awk '
+        BEGIN {
+          fact = '$NLIST'/'$PARTS';
+          part = -1;
+          accu = 1;
+        }
+        { if( NR == 1 || nxt == NR ) {
+            part += 1;
+            accu += fact;
+            nxt = sprintf("%.0f",accu);
+            outfile = sprintf( "'"$OUTFORMAT"'", part+'"$START"' );
+          }
+          print > outfile;
+        }
+        END { printf( "%s\n", part >= 0 ? part+1 : "" ); }';
+}
+
+##
+## Function that executes several instances of a command in parallel
+##
+htrsh_run_parallel () {
+  local FN="htrsh_run_parallel";
+  if [ $# -lt 2 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Executes several instances of a command in parallel,";
+      echo "  prepending to stderr/stdout the job identifier.";
+      echo "Usage: $FN ( {id1},{id2},... | {#ini}:[{#inc}:]{#end} ) COMMAND ARG1 ARG2 ...";
+      echo "Example: $ $FN A,K echo This is job JOBID";
+      echo "  A:This is job A";
+      echo "  K:This is job K";
+    } 1>&2;
+    return 1;
+  fi
+
+  local RND=$(echo "$1" | sed -n '/|/{ s/|.*//; p; }');
+  local JOBS=$(echo "$1" | sed 's/^.*|//; s/,/ /g;');
+  [[ "$JOBS" == *:* ]] && JOBS=$(seq ${JOBS//:/ });
+  local NJOBS=$(echo $JOBS | wc -w);
+  shift;
+
+  if [ "$NJOBS" = 0 ]; then
+    echo "$FN: error: unexpected job IDs" 1>&2;
+    return 1;
+  elif [ "$NJOBS" = 1 ]; then
+    local CMD=("${@/JOBID/$JOBS}");
+    "${CMD[@]}";
+    return $?;
+  fi
+
+  #local TMP="${TMPDIR:-/tmp}";
+  local TMP="${TMPDIR:-.}";
+  if [ "$RND" = "" ]; then
+    TMP=$(mktemp --tmpdir="$TMP" ${FN}_XXXXX);
+  else
+    TMP="$TMP/${FN}_$RND";
+  fi
+
+  local CMD=("$@");
+  local n;
+  for n in $(seq 0 $(($#-1))); do
+    if [ -p "${CMD[n]}" ]; then
+      local p=$(ls "$TMP.pipe"* 2>/dev/null | wc -l);
+      cat "${CMD[n]}" > "$TMP.pipe$p";
+      CMD[n]="$TMP.pipe$p";
+    fi
+  done
+  set -- "${CMD[@]}";
+  echo "$@" > "$TMP";
+
+  ( local JOBID;
+    for JOBID in ${JOBS//:/ }; do
+      { local CMD=("${@/JOBID/$JOBID}");
+        "${CMD[@]}";
+        [ "$?" != 0 ] &&
+          echo "JOBID:$JOBID failed" >> "$TMP";
+        echo "JOBID:$JOBID ended" >> "$TMP";
+      } > "$TMP.out_$JOBID" 2> "$TMP.err_$JOBID" &
+    done
+
+    local GAWK_LOGS='
+      { if( $1=="==>" && $NF=="<==" )
+          J = gensub( /.*\.[oe][ur][tr]_([^ ]*) <==$/, "\\1", "" );
+        else
+          printf( "%s:%s\n", J, $0 );
+      }';
+    { tail --pid=$$ -fn +1 "$TMP".out_* &
+      echo "outPID $!" >> "$TMP";
+    } | sed '/^$/{ :loop; N; /\n==> .* <==$/D; /^$/b loop; }' \
+      | gawk "$GAWK_LOGS" &
+    { tail --pid=$$ -fn +1 "$TMP".err_* &
+      echo "errPID $!" >> "$TMP";
+    } | sed '/^$/{ :loop; N; /\n==> .* <==$/D; /^$/b loop; }' \
+      | gawk "$GAWK_LOGS" 1>&2 &
+
+    while [ $(sed -n '/^JOBID:[^ ]* ended$/p' "$TMP" | wc -l) != $NJOBS ]; do
+      sleep 1;
+    done
+    kill $(sed -n '/^[oe][ur][tr]PID /{ s|^...PID ||; p; }' "$TMP");
+  )
+
+  NJOBS=$(sed -n '/^JOBID:[^ ]* failed$/p' "$TMP" | wc -l);
+  [ "$NJOBS" != 0 ] && return "$NJOBS";
+  rm "$TMP"*;
+
+  return 0;
+}
 
 #---------------------------------#
 # XML Page manipulation functions #
@@ -248,10 +385,12 @@ htrsh_pagexml_textequiv () {
                 printf( "@\n" );
               else if( txt[n] == "@" )
                 printf( "{at}\n" );
+              else if( txt[n] == "_" )
+                printf( "{_}\n" );
               else if( txt[n] == "\"" )
                 printf( "{dquote}\n" );
               else if( txt[n] == "\x27" )
-                printf( "{quote}\n" );
+                printf( "{squote}\n" );
               else if( txt[n] == "&" )
                 printf( "{amp}\n" );
               else if( txt[n] == "<" )
@@ -557,6 +696,53 @@ htrsh_pageimg_resize () {
 }
 
 ##
+## Function that reorders lines of an XML Page file based ONLY on the baseline's first x,y coordinates
+##
+htrsh_pagexml_orderlines () {
+  local FN="htrsh_pagexml_orderlines";
+  if [ $# != 0 ]; then
+    { echo "$FN: Error: Incorrect input arguments";
+      echo "Description: Reorders the lines of an XML Page file based ONLY on the baseline's first x,y coordinates";
+      echo "Usage: $FN < XML_PAGE_FILE";
+    } 1>&2;
+    return 1;
+  fi
+
+  local XSLT='<?xml version="1.0"?>
+<xsl:stylesheet
+  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  xmlns:_="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  version="1.0">
+
+  <xsl:output method="xml" indent="yes" encoding="utf-8" omit-xml-declaration="no"/>
+
+  <xsl:variable name="Width" select="//_:Page/@imageWidth"/>
+
+  <xsl:template match="@* | node()">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()"/>
+    </xsl:copy>
+  </xsl:template>
+
+  <xsl:template match="//_:TextRegion[count(_:TextLine)=count(_:TextLine/_:Baseline)]">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()[not(self::_:TextLine)]" />
+      <xsl:apply-templates select="_:TextLine">
+        <!--<xsl:sort select="number(substring-before(substring-after(_:Baseline/@points,&quot;,&quot;),&quot; &quot;))" data-type="number" order="ascending"/>-->
+        <xsl:sort select="number(substring-before(substring-after(_:Baseline/@points,&quot;,&quot;),&quot; &quot;))+(number(substring-before(_:Baseline/@points,&quot;,&quot;)) div number($Width))" data-type="number" order="ascending"/>
+      </xsl:apply-templates>
+    </xsl:copy>
+  </xsl:template>
+</xsl:stylesheet>';
+
+  xmlstarlet tr <( echo "$XSLT" ) < /dev/stdin;
+
+  return $?;
+}
+
+##
 ## Function that resizes an XML Page file
 ##
 htrsh_pagexml_resize () {
@@ -625,38 +811,85 @@ htrsh_pagexml_resize () {
 
   <xsl:template match="//*[@points]">
     <xsl:copy>
-      <xsl:attribute name="points">
-        <xsl:for-each select="str:tokenize(@points,'"', '"')">
+      <xsl:for-each select="@*[local-name() = '"'points'"' or local-name() = '"'fpgram'"']">
+      <xsl:attribute name="{local-name()}">
+        <xsl:for-each select="str:tokenize(.,'"', '"')">
           <xsl:choose>
             <xsl:when test="position() = 1">
-              <xsl:value-of select="round(number($scaleWidth)*number(.))"/>
+              <xsl:value-of select="number($scaleWidth)*number(.)"/>
+              <!--<xsl:value-of select="round(number($scaleWidth)*number(.))"/>-->
             </xsl:when>
             <xsl:when test="position() mod 2 = 0">
-              <xsl:text>,</xsl:text><xsl:value-of select="round(number($scaleHeight)*number(.))"/>
+              <xsl:text>,</xsl:text><xsl:value-of select="number($scaleHeight)*number(.)"/>
+              <!--<xsl:text>,</xsl:text><xsl:value-of select="round(number($scaleHeight)*number(.))"/>-->
             </xsl:when>
             <xsl:otherwise>
-              <xsl:text> </xsl:text><xsl:value-of select="round(number($scaleWidth)*number(.))"/>
+              <xsl:text> </xsl:text><xsl:value-of select="number($scaleWidth)*number(.)"/>
+              <!--<xsl:text> </xsl:text><xsl:value-of select="round(number($scaleWidth)*number(.))"/>-->
             </xsl:otherwise>
-          </xsl:choose> 
+          </xsl:choose>
         </xsl:for-each>
       </xsl:attribute>
-      <xsl:if test="@fpgram">
-      <xsl:attribute name="fpgram">
-        <xsl:for-each select="str:tokenize(@fpgram,'"', '"')">
+      </xsl:for-each>
+      <xsl:apply-templates select="@*[local-name() != '"'points'"' and local-name() != '"'fpgram'"'] | node()" />
+    </xsl:copy>
+  </xsl:template>
+
+</xsl:stylesheet>';
+
+  xmlstarlet tr <( echo "$XSLT" ) < /dev/stdin;
+
+  return $?;
+}
+
+##
+## Function that rounds coordinate values in an XML Page file
+##
+htrsh_pagexml_round () {
+  local FN="htrsh_pagexml_round";
+  if [ $# != 0 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Resizes an XML Page file";
+      echo "Usage: $FN < XML_PAGE_FILE";
+    } 1>&2;
+    return 1;
+  fi
+
+  local XSLT='<?xml version="1.0"?>
+<xsl:stylesheet
+  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:str="http://exslt.org/strings"
+  xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  xmlns:_="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  extension-element-prefixes="str"
+  version="1.0">
+
+  <xsl:output method="xml" indent="yes" encoding="utf-8" omit-xml-declaration="no"/>
+
+  <xsl:template match="@* | node()">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()"/>
+    </xsl:copy>
+  </xsl:template>
+
+  <xsl:template match="//*[@points]">
+    <xsl:copy>
+      <xsl:for-each select="@*[local-name() = '"'points'"' or local-name() = '"'fpgram'"']">
+        <xsl:attribute name="{local-name()}">
+        <xsl:for-each select="str:tokenize(.,'"', '"')">
           <xsl:choose>
-            <xsl:when test="position() = 1">
-              <xsl:value-of select="round(number($scaleWidth)*number(.))"/>
-            </xsl:when>
             <xsl:when test="position() mod 2 = 0">
-              <xsl:text>,</xsl:text><xsl:value-of select="round(number($scaleHeight)*number(.))"/>
+              <xsl:text>,</xsl:text>
             </xsl:when>
-            <xsl:otherwise>
-              <xsl:text> </xsl:text><xsl:value-of select="round(number($scaleWidth)*number(.))"/>
-            </xsl:otherwise>
-          </xsl:choose> 
+            <xsl:when test="position() != 1">
+              <xsl:text> </xsl:text>
+            </xsl:when>
+          </xsl:choose>
+          <xsl:value-of select="round(number(.))"/>
         </xsl:for-each>
-      </xsl:attribute>
-      </xsl:if>
+        </xsl:attribute>
+      </xsl:for-each>
       <xsl:apply-templates select="@*[local-name() != '"'points'"' and local-name() != '"'fpgram'"'] | node()" />
     </xsl:copy>
   </xsl:template>
@@ -1102,9 +1335,13 @@ htrsh_pageimg_extract_lines () {
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
-  local NUMLINES=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/$htrsh_xpath_lines/_:Coords)" "$XML");
+  local NUMLINES=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_coords)" "$XML");
 
-  if [ "$NUMLINES" -gt 0 ]; then
+  if [ "$NUMLINES" = 0 ]; then
+    echo "$FN: error: zero lines have coordinates for extraction: $XML" 1>&2;
+    return 1;
+
+  else
     local base=$(echo "$OUTDIR/$IMBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
 
     if [ "$RESSRC" = "xml" ]; then
@@ -1382,7 +1619,6 @@ htrsh_feats_pca () {
       ";
     fi
     echo "save('-z','$OUTMAT','B','V','mu');";
-    #echo "save('$OUTMAT','B','V','mu');";
   } | octave -q -H;
 
   fi
@@ -1514,7 +1750,7 @@ htrsh_pageimg_extract_linefeats () {
 
   ### Extract lines from line coordinates ###
   local LINEIMGS=$(htrsh_pageimg_extract_lines "$XML" -d "$OUTDIR");
-  [ "$?" != 0 ] && return 1;
+  ( [ "$?" != 0 ] || [ "$LINEIMGS" = "" ] ) && return 1;
 
   local ed="";
   local FEATS="";
@@ -1620,7 +1856,7 @@ htrsh_pageimg_extract_linefeats () {
       pt2 = [ $bboxoff 0 ] + [ [ xmax h-1 ]+off 1 ] * A1 ;
       pt3 = [ $bboxoff 0 ] + [ [ xmin h-1 ]+off 1 ] * A1 ;
 
-      printf('%.0f,%.0f %.0f,%.0f %.0f,%.0f %.0f,%.0f\n',
+      printf('%g,%g %g,%g %g,%g %g,%g\n',
         pt0(1), pt0(2),
         pt1(1), pt1(2),
         pt2(1), pt2(2),
@@ -1774,8 +2010,9 @@ htrsh_langmodel_train () {
             case ">":    printf( "{gt}" );       break;
             case "{":    printf( "{lbrace}" );   break;
             case "}":    printf( "{rbrace}" );   break;
+            case "_":    printf( "{_}" );        break;
             case "\x22": printf( "{dquote}" );   break;
-            case "\x27": printf( "{quote}" );    break;
+            case "\x27": printf( "{squote}" );   break;
             default:     printf( "%s", txt[n] ); break;
             }
           }
@@ -1843,7 +2080,7 @@ htrsh_hmm_proto () {
       echo "Usage: $FN (DIMS|CODES) STATES [ Options ]";
       echo "Options:";
       echo " -n PNAME     Proto name(s), if several separated by '\n' (def.=$PNAME)";
-      echo " -g GLOBAL    Include given global options string (def.=no)";
+      echo " -g GLOBAL    Include given global options string (def.=none)";
       echo " -m MEAN      Use given mean vector (def.=zeros)";
       echo " -v VARIANCE  Use given variance vector (def.=ones)";
       echo " -D (yes|no)  Whether proto should be discrete (def.=$DISCR)";
@@ -1880,9 +2117,11 @@ htrsh_hmm_proto () {
   if [ "$DISCR" = "yes" ]; then
     echo '~o <DISCRETE> <STREAMINFO> 1 1';
   else
-    echo "~o";
-    echo "<STREAMINFO> 1 $DIMS";
-    echo "<VECSIZE> $DIMS<NULLD><USER><DIAGC>";
+    if [ "$GLOBAL" != "off" ]; then
+      echo "~o";
+      echo "<STREAMINFO> 1 $DIMS";
+      echo "<VECSIZE> $DIMS<NULLD><USER><DIAGC>";
+    fi
 
     [ "$MEAN" = "" ] &&
       MEAN=$(echo $DIMS | awk '{for(d=$1;d>0;d--)printf(" 0.0")}');
@@ -1891,7 +2130,7 @@ htrsh_hmm_proto () {
       VARIANCE=$(echo $DIMS | awk '{for(d=$1;d>0;d--)printf(" 1.0")}');
   fi
 
-  [ "$GLOBAL" != "" ] &&
+  [ "$GLOBAL" != "" ] && [ "$GLOBAL" != "off" ] &&
     echo "$GLOBAL";
 
   ### Print prototype(s) ###
@@ -2054,14 +2293,11 @@ htrsh_hmm_train () {
                    | LC_ALL=C.UTF-8 sort -u);
 
   if [ "$THREADS" -gt 1 ]; then
-    local FEATNUM=$(( ( $(wc -l < "$FEATLST") + THREADS - 1 ) / THREADS ));
-    [ $FEATNUM -le 1 ] && FEATNUM="2";
     rm -f "$OUTDIR/train_feats_part_"*;
-    awk '{printf("%s %s\n",rand(),$0)}' "$FEATLST" \
-      | sort \
-      | sed 's|^[^ ]* ||' \
-      | split --numeric-suffixes -l $FEATNUM - "$OUTDIR/train_feats_part_";
-    THREADS=$(ls "$OUTDIR/train_feats_part_"* | wc -l);
+    THREADS=$(htrsh_randsplit "$THREADS" "$FEATLST" "$OUTDIR/train_feats_part_%d" 1);
+    [ "$THREADS" = "" ] &&
+      echo "$FN: error: problems splitting list: $FEATLST" 1>&2 &&
+      return 1;
   fi
 
   ### Discrete training ###
@@ -2077,12 +2313,10 @@ htrsh_hmm_train () {
     [ "$KEEPITERS" = "yes" ] &&
       cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_i00.gz";
 
-
     # @todo train with viterbi
     #htrsh_hmm_proto "$CODES" "$htrsh_hmm_states" -D yes -n "$HMMLST" -R $RAND | gzip > "$OUTDIR/Macros_hmm.gz";
     #htrsh_hmm_proto "$CODES" "$htrsh_hmm_states" -D yes -R $RAND | gzip > proto.gz;
     #HInit -T 1 -C <( echo "$htrsh_HTK_config" ) -i $htrsh_hmm_iter -S "$FEATLST" -I "$MLF" -H "Macros_hmm.gz" proto.gz
-
 
     ### Iterate ###
     local i;
@@ -2136,6 +2370,8 @@ htrsh_hmm_train () {
         cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g001_i00.gz";
     fi
 
+    local TS=$(($(date +%s%N)/1000000));
+
     ### Training loop ###
     local g="1";
     local gg i;
@@ -2144,7 +2380,7 @@ htrsh_hmm_train () {
       if [ "$g" -gt 1 ] && ! ( [ "$RESUME" != "no" ] && [ -e "$OUTDIR/Macros_hmm_g${gg}_i$i.gz" ] ); then
         echo "$FN: info: duplicating Gaussians to $g" 1>&2;
         HHEd $htrsh_HTK_HHEd_opts -C <( echo "$htrsh_HTK_config" ) -H "$OUTDIR/Macros_hmm.gz" \
-          -M "$OUTDIR" <( echo "MU $g {*.state[2-$((10#$htrsh_hmm_states-1))].mix}" ) \
+          -M "$OUTDIR" <( echo "MU $g {*.state[2-$((htrsh_hmm_states-1))].mix}" ) \
           <( echo "$HMMLST" ) 1>&2;
       fi
 
@@ -2165,30 +2401,20 @@ htrsh_hmm_train () {
 
         ### Multi-thread ###
         if [ "$THREADS" -gt 1 ]; then
-          > "$OUTDIR/train_thread_done";
-          > "$OUTDIR/train_thread_errs";
-          local t;
-          for t in $(seq -f %02.0f 0 $((THREADS-1))); do
-            { HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_HTK_config" ) \
-                -S "$OUTDIR/train_feats_part_$t" -p $((10#$t+1)) \
-                -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" -M "$OUTDIR" <( echo "$HMMLST" ) 1>&2;
-              [ "$?" != 0 ] &&
-                echo $t >> "$OUTDIR/train_thread_errs";
-              echo $t >> "$OUTDIR/train_thread_done";
-            } &
-          done
-          while [ $(wc -l < "$OUTDIR/train_thread_done") != $THREADS ]; do
-            sleep 1;
-          done
-          [ $(wc -l < "$OUTDIR/train_thread_errs") != 0 ] &&
-            echo "$FN: error: problem with HERest" 1>&2 &&
+          local TMPDIR="$OUTDIR";
+          htrsh_run_parallel 1:$THREADS HERest \
+            $htrsh_HTK_HERest_opts -C <( echo "$htrsh_HTK_config" ) \
+            -S "$OUTDIR/train_feats_part_JOBID" -p JOBID \
+            -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" -M "$OUTDIR" <( echo "$HMMLST" ) 1>&2;
+          [ "$?" != 0 ] &&
+            echo "$FN: error: problem with parallel HERest" 1>&2 &&
             return 1;
           HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_HTK_config" ) \
             -p 0 -H "$OUTDIR/Macros_hmm.gz" <( echo "$HMMLST" ) "$OUTDIR/"*.acc 1>&2;
           [ "$?" != 0 ] &&
-            echo "$FN: error: problem with HERest" 1>&2 &&
+            echo "$FN: error: problem with accumulation HERest" 1>&2 &&
             return 1;
-          rm "$OUTDIR/train_thread_done" "$OUTDIR/train_thread_errs" "$OUTDIR/"*.acc;
+          rm "$OUTDIR/"*.acc;
 
         ### Single thread ###
         else
@@ -2198,6 +2424,8 @@ htrsh_hmm_train () {
             echo "$FN: error: problem with HERest" 1>&2 &&
             return 1;
         fi
+
+        local TE=$(($(date +%s%N)/1000000)); echo "$FN: time g=2^$((g-1)) i=$i: $((TE-TS)) ms" 1>&2; TS="$TE";
 
         [ "$KEEPITERS" = "yes" ] &&
           cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g${gg}_i$i.gz";
@@ -2228,20 +2456,20 @@ htrsh_hmm_train () {
 ## Function that executes N parallel threads of HVite or HLRescore for a given feature list
 ##
 htrsh_hvite_parallel () {
-  local FN="htrsh_htk_parallel";
+  local FN="htrsh_hvite_parallel";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Executes N parallel threads of HVite or HLRescore for a given feature list";
-      echo "Usage: $FN (HVite|HLRescore) THREADS OPTIONS";
+      echo "Usage: $FN THREADS (HVite|HLRescore) OPTIONS";
     } 1>&2;
     return 1;
   fi
 
   ### Parse input arguments ###
-  local CMD="$1";
-  local THREADS=$(printf %d $2);
-  [ "$?" != "0" ] && return 1;
+  local THREADS="$1";
+  local CMD="$2";
   shift 2;
+
   local FEATLST="";
   local MLF="";
   local CFG="";
@@ -2250,21 +2478,24 @@ htrsh_hvite_parallel () {
   while [ $# -gt 0 ]; do
     if [ "$1" = "-S" ]; then
       FEATLST="$2";
-      shift 2;
+      shift 1;
     elif [ "$1" = "-i" ]; then
       MLF="$2";
-      shift 2;
+      shift 1;
     elif [ "$1" = "-C" ]; then
-      CFG="$2";
-      shift 2;
+      CFG="-C $2";
+      shift 1;
     elif [ "$#" = 1 ] && [ "$CMD" = "HVite" ]; then
       HMMLST="$1";
-      shift 1;
     else
       OPTS="$OPTS $1";
-      shift 1;
     fi
+    shift 1;
   done
+
+  local TMPDIR=".";
+  [ $(echo "$MLF" | grep / | wc -l) != 0 ] &&
+    TMPDIR=$(echo "$MLF" | sed 's|/[^/]*$||');
 
   if [ "$CMD" != "HVite" ] && [ "$CMD" != "HLRescore" ]; then
     echo "$FN: error: command has to be either HVite or HLRescore" 1>&2;
@@ -2281,61 +2512,37 @@ htrsh_hvite_parallel () {
   elif [ ! -e "$FEATLST" ]; then
     echo "$FN: error: feature list file not found: $FEATLST" 1>&2;
     return 1;
+  elif [ ! -d "$TMPDIR" ]; then
+    echo "$FN: error: directory does not exist: $TMPDIR" 1>&2;
+    return 1;
   fi
 
-  local OUTDIR=".";
-  [ $(echo "$MLF" | grep / | wc -l) != 0 ] &&
-    OUTDIR=$(echo "$MLF" | sed 's|/[^/]*$||');
+  local TMP=$(mktemp --tmpdir="$TMPDIR" ${CMD}_parallel_XXXXX);
+  rm -f "${TMP}_"*;
 
-  if [ "$THREADS" = 1 ]; then
-    [ "$CFG" != "" ] && CFG="-C $CFG";
-    $CMD $CFG -S "$FEATLST" -i "$MLF" $OPTS $HMMLST 1>&2;
-    [ "$?" != 0 ] &&
-      echo "$FN: error: problems executing HVite" 1>&2 &&
-      return 1;
+  THREADS=$(htrsh_randsplit "$THREADS" "$FEATLST" "${TMP}_feats_%d" 1);
+  [ "$THREADS" = "" ] &&
+    echo "$FN: error: problems splitting list: $FEATLST" 1>&2 &&
+    return 1;
 
+  if [ "$CMD" = "HVite" ]; then
+    htrsh_run_parallel "${TMP##*_}|1:$THREADS" $CMD \
+      $CFG -S "${TMP}_feats_JOBID" \
+      -i "${TMP}_mlf_JOBID" $OPTS "$HMMLST";
   else
-    local TMP=$(mktemp --tmpdir="$OUTDIR" hvite_thread_XXXXX | sed 's|.*\_||');
-    > "$OUTDIR/hvite_thread_$TMP";
-    > "$OUTDIR/hvite_thread_${TMP}_errs";
+    htrsh_run_parallel "${TMP##*_}|1:$THREADS" $CMD \
+      $CFG -S "${TMP}_feats_JOBID" \
+      -i "${TMP}_mlf_JOBID" $OPTS;
+  fi 1>&2;
+  [ "$?" != 0 ] &&
+    echo "$FN: error: problems executing $CMD" 1>&2 &&
+    return 1;
 
-    local FEATNUM=$(( ( $(wc -l < "$FEATLST") + THREADS - 1 ) / THREADS ));
-    [ "$FEATNUM" -le 1 ] && FEATNUM="2";
-    rm -f "$OUTDIR/hvite_thread_${TMP}_feats_"*;
-    awk '{printf("%s %s\n",rand(),$0)}' "$FEATLST" \
-      | sort \
-      | sed 's|^[^ ]* ||' \
-      | split --numeric-suffixes -l $FEATNUM - "$OUTDIR/hvite_thread_${TMP}_feats_";
-    THREADS=$(ls "$OUTDIR/hvite_thread_${TMP}_feats_"* | wc -l);
-    [ "$CFG" != "" ] && CFG=$(< "$CFG");
-    [ "$CMD" = "HVite" ] && HMMLST=$(< "$HMMLST");
+  { echo "#!MLF!#";
+    sed '/^#!MLF!#/d' "${TMP}_mlf_"*;
+  } > "$MLF";
 
-    local t;
-    for t in $(seq -f %02.0f 0 $((THREADS-1))); do
-      { if [ "$CMD" = "HVite" ]; then
-          $CMD -C <( echo "$CFG" ) -S "$OUTDIR/hvite_thread_${TMP}_feats_$t" -i "$OUTDIR/hvite_thread_${TMP}_mlf_$t" $OPTS <( echo "$HMMLST" ) 1>&2;
-        else
-          $CMD -C <( echo "$CFG" ) -S "$OUTDIR/hvite_thread_${TMP}_feats_$t" -i "$OUTDIR/hvite_thread_${TMP}_mlf_$t" $OPTS 1>&2;
-        fi
-        [ "$?" != 0 ] &&
-          echo $t >> "$OUTDIR/hvite_thread_${TMP}_errs";
-        echo $t >> "$OUTDIR/hvite_thread_$TMP";
-      } &
-    done
-    while [ $(wc -l < "$OUTDIR/hvite_thread_$TMP") != $THREADS ]; do
-      sleep 1;
-    done
-    [ $(wc -l < "$OUTDIR/hvite_thread_${TMP}_errs") != 0 ] &&
-      echo "$FN: error: problems executing HVite" 1>&2 &&
-      return 1;
-
-    { echo "#!MLF!#";
-      sed '/^#!MLF!#/d' "$OUTDIR/hvite_thread_${TMP}_mlf_"*;
-    } > "$MLF";
-
-    rm "$OUTDIR/hvite_thread_$TMP" "$OUTDIR/hvite_thread_${TMP}_errs";
-    rm "$OUTDIR/hvite_thread_${TMP}_feats_"* "$OUTDIR/hvite_thread_${TMP}_mlf_"*;
-  fi
+  rm "$TMP"*;
 
   return 0;
 }
@@ -2384,8 +2591,9 @@ htrsh_fix_rec_names () {
   sed -i '
     s|@| |g;
     s|{at}|@|g;
+    s|{_}|_|g;
     s|{dquote}|"|g;
-    s|{quote}|'"'"'|g;
+    s|{squote}|'"'"'|g;
     s|{amp}|\&amp;|g;
     s|{lt}|\&lt;|g;
     s|{gt}|\&gt;|g;
@@ -2517,13 +2725,13 @@ htrsh_pagexml_insertalign_lines () {
         dx = ( f(2,1)-f(1,1) ) / a(end) ;
         dy = ( f(2,2)-f(1,2) ) / a(end) ;
 
-        xup = round( f(1,1) + dx*a );
-        yup = round( f(1,2) + dy*a );
-        xdown = round( f(4,1) + dx*a );
-        ydown = round( f(4,2) + dy*a );
+        xup = f(1,1) + dx*a;
+        yup = f(1,2) + dy*a;
+        xdown = f(4,1) + dx*a;
+        ydown = f(4,2) + dy*a;
 
         for n = 1:size(a,1)
-          printf('%d %d,%d %d,%d %d,%d %d,%d\n',
+          printf('%d %g,%g %g,%g %g,%g %g,%g\n',
             l,
             xdown(n,1), ydown(n,1),
             xup(n,1), yup(n,1),
@@ -2774,7 +2982,8 @@ htrsh_pageimg_forcealign () {
   local KEEPTMP="no";
   local KEEPAUX="no";
   local QBORD="no";
-  local FILTER="";
+  local FILTER="cat";
+  local SFACT="";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Does a line by line forced alignment given only a page with baselines or contours and optionally a model";
@@ -2790,6 +2999,7 @@ htrsh_pageimg_forcealign () {
       echo " -a (yes|no)  Whether to keep auxiliary attributes in XML (def.=$KEEPAUX)";
       #echo " -q (yes|no)  Whether to clean quadrilateral border of regions (def.=$QBORD)";
       echo " -F FILTER    Filtering pipe command, e.g. tokenizer, transliteration, etc. (def.=none)";
+      echo " -s SRES      Rescale image to SRES dpcm for processing (def.=orig.)";
     } 1>&2;
     return 1;
   fi
@@ -2819,6 +3029,8 @@ htrsh_pageimg_forcealign () {
       QBORD="$2";
     elif [ "$1" = "-F" ]; then
       FILTER="$2";
+    elif [ "$1" = "-s" ]; then
+      SFACT="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -2856,23 +3068,50 @@ htrsh_pageimg_forcealign () {
 
   local AREG="no"; [ "$LCNT" = 0 ] && AREG="yes";
 
-  mkdir -p "$TMPDIR";
-
   local B=$(echo "$XMLBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
 
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): processing page: $XML";
+
+  mkdir -p "$TMPDIR/proc";
+  cp -p "$XML" "$IMFILE" "$TMPDIR/proc";
+  sed 's|imageFilename="[^"/]*/|imageFilename=|' -i "$TMPDIR/proc/$XMLBASE.xml";
+
+  ### Generate contours from baselines ###
+  if [ "$htrsh_align_prefer_baselines" = "yes" ] ||
+     [ $(xmlstarlet sel -t -v \
+           "count($htrsh_xpath_regions/_:TextLine/$htrsh_xpath_coords)" \
+           "$XML") = 0 ]; then
+    echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating line contours from baselines ...";
+    page_format_generate_contour -a 75 -d 25 \
+      -p "$TMPDIR/proc/$XMLBASE.xml" \
+      -o "$TMPDIR/proc/$XMLBASE.xml";
+    [ "$?" != 0 ] &&
+      echo "$FN: error: page_format_generate_contour failed" 1>&2 &&
+      return 1;
+  fi
+
+  ### Rescale image for processing ###
+  if [ "$SFACT" != "" ]; then
+    echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): rescaling image ...";
+    #SFACT=$(echo "100*$SFACT/$IMRES" | bc -l);
+    # @todo check support for SFACT in %
+    SFACT=$(echo "$SFACT" "$IMRES" | awk '{printf("%g",match($1,"%$")?$1:100*$1/$2)}');
+    mkdir "$TMPDIR/scaled";
+    mv "$TMPDIR/proc/"* "$TMPDIR";
+    htrsh_pageimg_resize "$TMPDIR/$XMLBASE.xml" "$TMPDIR/proc" -s "$SFACT";
+  fi
 
   ### Clean page image ###
   if [ "$ENHIMG" = "yes" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): enhancing page image ...";
     [ "$INRES" != "" ] && INRES="-i $INRES";
-    htrsh_pageimg_clean "$XML" "$TMPDIR" $INRES \
+    htrsh_pageimg_clean "$TMPDIR/proc/$XMLBASE.xml" "$TMPDIR" $INRES \
       > "$TMPDIR/${XMLBASE}_pageclean.log";
     [ "$?" != 0 ] &&
       echo "$FN: error: more info might be in file $TMPDIR/${XMLBASE}_pageclean.log" 1>&2 &&
       return 1;
   else
-    cp -p "$XML" "$IMFILE" "$TMPDIR";
+    mv "$TMPDIR/proc/"* "$TMPDIR";
   fi
 
   ### Clean quadrilateral borders ###
@@ -2883,22 +3122,10 @@ htrsh_pageimg_forcealign () {
     mv "$TMPDIR/${IMBASE}_nobord.png" "$TMPDIR/$IMBASE.png";
   fi
 
-  ### Generate contours from baselines ###
-  if [ $(xmlstarlet sel -t -v 'count(//'"$htrsh_xpath_regions"'/_:TextLine/_:Coords[@points and @points!="0,0 0,0"])' "$TMPDIR/$XMLBASE.xml") = 0 ] ||
-     [ "$htrsh_align_prefer_baselines" = "yes" ]; then
-    echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating line contours from baselines ...";
-    page_format_generate_contour -a 75 -d 25 -p "$TMPDIR/$XMLBASE.xml" -o "$TMPDIR/${XMLBASE}_contours.xml";
-    [ "$?" != 0 ] &&
-      echo "$FN: error: page_format_generate_contour failed" 1>&2 &&
-      return 1;
-  else
-    mv "$TMPDIR/$XMLBASE.xml" "$TMPDIR/${XMLBASE}_contours.xml";
-  fi
-
   ### Extract line features ###
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): extracting line features ...";
   htrsh_pageimg_extract_linefeats \
-    "$TMPDIR/${XMLBASE}_contours.xml" "$TMPDIR/${XMLBASE}_feats.xml" \
+    "$TMPDIR/$XMLBASE.xml" "$TMPDIR/${XMLBASE}_feats.xml" \
     -d "$TMPDIR" -l "$TMPDIR/${B}_feats.lst" \
     > "$TMPDIR/${XMLBASE}_linefeats.log";
   [ "$?" != 0 ] &&
@@ -2928,11 +3155,7 @@ htrsh_pageimg_forcealign () {
   if [ "$MODEL" = "" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): training model for page ...";
     { echo '#!MLF!#';
-      if [ "$FILTER" != "" ]; then
-        htrsh_pagexml_textequiv "$TMPDIR/${XMLBASE}_feats.xml" -f mlf-chars -r $AREG -F "$FILTER";
-      else
-        htrsh_pagexml_textequiv "$TMPDIR/${XMLBASE}_feats.xml" -f mlf-chars -r $AREG;
-      fi
+      htrsh_pagexml_textequiv "$TMPDIR/${XMLBASE}_feats.xml" -f mlf-chars -r $AREG -F "$FILTER";
     } > "$TMPDIR/${B}_page.mlf";
     [ "$?" != 0 ] && return 1;
     MODEL=$(
@@ -2942,7 +3165,44 @@ htrsh_pageimg_forcealign () {
     [ "$?" != 0 ] &&
       echo "$FN: error: problems training model, more info might be in file $TMPDIR/${XMLBASE}_hmmtrain.log" 1>&2 &&
       return 1;
-    #MODEL="$TMPDIR/Macros_hmm_g$(printf %.3d $htrsh_hmm_nummix).gz";
+
+  ### Check that given model has all characters, otherwise add protos for these ###
+  else
+    local CHARCHECK=$(
+            htrsh_pagexml_textequiv "$TMPDIR/${XMLBASE}_feats.xml" \
+                -f mlf-chars -r $AREG -F "$FILTER" \
+              | sed '/^"\*\/.*"$/d; /^\.$/d; s|^"\(.*\)"|\1|;' \
+              | sort -u);
+    CHARCHECK=$(
+      zcat "$MODEL" \
+        | sed -n '/^~h ".*"$/ { s|^~h "\(.*\)"$|\1|; p; }' \
+        | awk '
+            { if( FILENAME == "-" )
+                model[$1] = "";
+              else if( ! ( $1 in model ) )
+                print;
+            }' - <( echo "$CHARCHECK" ) );
+    if [ "$CHARCHECK" != "" ]; then
+      echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): adding missing characters ($(echo $CHARCHECK | tr ' ' ',')) to given model ...";
+
+      local DIMS=$(HList -h -z $(head -n 1 < "$TMPDIR/${B}_feats.lst") \
+                     | sed -n '/^  Num Comps:/{s|^[^:]*: *||;s| .*||;p;}');
+
+      htrsh_hmm_proto "$DIMS" 1 | gzip > "$TMPDIR/proto";
+      HCompV $htrsh_HTK_HCompV_opts -C <( echo "$htrsh_HTK_config" ) \
+        -S "$TMPDIR/${B}_feats.lst" -M "$TMPDIR" "$TMPDIR/proto" 1>&2;
+
+      local MEAN=$(zcat "$TMPDIR/proto" | sed -n '/<MEAN>/{N;s|.*\n||;p;q;}');
+      local VARIANCE=$(zcat "$TMPDIR/proto" | sed -n '/<VARIANCE>/{N;s|.*\n||;N;p;q;}');
+      local NEWMODEL="$TMPDIR"/$(echo "$MODEL" | sed 's|.*/||');
+
+      { zcat "$MODEL";
+        htrsh_hmm_proto "$DIMS" "$htrsh_hmm_states" -n "$CHARCHECK" \
+          -g off -m "$MEAN" -v "$VARIANCE";
+      } | gzip \
+        > "$NEWMODEL";
+      MODEL="$NEWMODEL";
+    fi
   fi
   [ ! -e "$MODEL" ] &&
     echo "$FN: error: model file not found: $MODEL" 1>&2 &&
@@ -2981,6 +3241,18 @@ htrsh_pageimg_forcealign () {
   [ "$KEEPAUX" != "yes" ] && ed="$ed -d //@fpgram -d //@fcontour";
 
   eval xmlstarlet ed --inplace $ed "'$XMLOUT'";
+
+  if [ "$SFACT" != "" ]; then
+    SFACT=$(echo "10000/$SFACT" | bc -l);
+    cat "$XMLOUT" \
+      | htrsh_pagexml_resize "$SFACT"% \
+      | htrsh_pagexml_round \
+      | xmlstarlet ed \
+          -u //@imageWidth -v ${IMSIZE%x*} \
+          -u //@imageHeight -v ${IMSIZE#*x} \
+      > "$XMLOUT"~;
+    mv "$XMLOUT"~ "$XMLOUT";
+  fi
 
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): finished, $(( $(date +%s)-TS )) seconds";
 
