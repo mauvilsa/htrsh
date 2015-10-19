@@ -8,6 +8,9 @@
 ## @copyright Copyright(c) 2014 to the present, Mauricio Villegas (UPV)
 ##
 
+# @todo maybe shoud change @id paths to depend on base node type
+# @todo or when validating check that all ids are different
+
 [ "${BASH_SOURCE[0]}" = "$0" ] && 
   echo "htrsh.inc.sh: error: not intended for direct execution, use htrsh_load" 1>&2 &&
   exit 1;
@@ -35,6 +38,7 @@ htrsh_feat_deslant="yes"; # Whether to correct slant of the text
 htrsh_feat_padding="1.0"; # Left and right white padding in mm for line images
 htrsh_feat_contour="yes"; # Whether to compute connected components contours
 htrsh_feat_dilradi="0.5"; # Dilation radius in mm for contours
+htrsh_feat_normxheight="18"; # Normalize x-height to a fixed number of pixels
 
 htrsh_feat="dotmatrix";    # Type of features to extract
 htrsh_dotmatrix_shift="2"; # Sliding window shift in px, should change this to mm
@@ -251,37 +255,212 @@ htrsh_run_parallel () {
 
   ( local JOBID;
     for JOBID in ${JOBS//:/ }; do
-      { local CMD=("${@/JOBID/$JOBID}");
-        "${CMD[@]}";
-        [ "$?" != 0 ] &&
-          echo "JOBID:$JOBID failed" >> "$TMP";
-        echo "JOBID:$JOBID ended" >> "$TMP";
-      } > "$TMP.out_$JOBID" 2> "$TMP.err_$JOBID" &
+      > "$TMP.out_$JOBID";
+      > "$TMP.err_$JOBID";
     done
-
-    local GAWK_LOGS='
-      { if( $1=="==>" && $NF=="<==" )
-          J = gensub( /.*\.[oe][ur][tr]_([^ ]*) <==$/, "\\1", "" );
-        else
-          printf( "%s:%s\n", J, $0 );
-      }';
+    local PROC_LOGS='
+      ### Remove blank lines before tail file header ###
+      :loop;
+      /^$/ {
+        N;
+        /\n==> .* <==$/! { G; s|^\(.*\)\n\([^\n]*\)$|\2\1|; P; }
+        D; b loop;
+      }
+      ### Hold job ID from tail file header ###
+      /^==> .* <==$/ { s|^==> .*\.[oe][ur][tr]_\([^ ]*\) <==$|\1:|; h; d; }
+      ### Prepend job ID to each line ###
+      G; s|^\(.*\)\n\([^\n]*\)$|\2\1|;';
     { tail --pid=$$ -fn +1 "$TMP".out_* &
       echo "outPID $!" >> "$TMP";
-    } | sed '/^$/{ :loop; N; /\n==> .* <==$/D; /^$/b loop; }' \
-      | gawk "$GAWK_LOGS" &
+    } | sed "$PROC_LOGS" &
     { tail --pid=$$ -fn +1 "$TMP".err_* &
       echo "errPID $!" >> "$TMP";
-    } | sed '/^$/{ :loop; N; /\n==> .* <==$/D; /^$/b loop; }' \
-      | gawk "$GAWK_LOGS" 1>&2 &
+    } | sed "$PROC_LOGS" 1>&2 &
 
-    while [ $(sed -n '/^JOBID:[^ ]* ended$/p' "$TMP" | wc -l) != $NJOBS ]; do
-      sleep 1;
-    done
+    ( for JOBID in ${JOBS//:/ }; do
+        { local CMD=("${@/JOBID/$JOBID}");
+          "${CMD[@]}";
+          [ "$?" != 0 ] &&
+            echo "JOBID:$JOBID failed" >> "$TMP";
+          echo "JOBID:$JOBID ended" >> "$TMP";
+        } >> "$TMP.out_$JOBID" 2>> "$TMP.err_$JOBID" &
+      done
+      wait;
+    )
     kill $(sed -n '/^[oe][ur][tr]PID /{ s|^...PID ||; p; }' "$TMP");
   )
 
-  NJOBS=$(sed -n '/^JOBID:[^ ]* failed$/p' "$TMP" | wc -l);
+  NJOBS=$(grep -c '^JOBID:[^ ]* failed$' "$TMP");
   [ "$NJOBS" != 0 ] && return "$NJOBS";
+  rm "$TMP"*;
+
+  return 0;
+}
+
+##
+## Function that executes instances of a command in parallel to process a list
+##
+htrsh_run_parallel_list () {
+  local FN="htrsh_run_parallel_list";
+  if [ $# -lt 2 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Executes instances of a command in parallel to process a list.";
+      echo "  Each thread is given part of the list, and the moment any thread finishes";
+      echo "  a new instance is started with another part of the list. In the command";
+      echo "  arguments, '{}' is replaced by a file containing a partial list and '{#}'";
+      echo "  by the command instance number. The thread number is prepended to every";
+      echo "  line of stderr and stdout.";
+      echo "Usage: $FN THREADS LIST COMMAND ARG1 ARG2 ... '{}' ... '{#}' ...";
+      echo "Dummy example:"
+      echo "  $ my_func () { sleep \$((RANDOM%3)); echo done \$2: \$(<\$1) \\(\$(wc -w < \$1) items\\); }";
+      echo "  $ seq 1 100 | $FN 3 - my_func '{}' '{#}'";
+    } 1>&2;
+    return 1;
+  fi
+
+  local THREADS="$1";
+  local LIST="$2"; [ "$LIST" = "-" ] && LIST="/dev/stdin";
+  shift 2;
+
+  local TMP="${TMPDIR:-.}";
+  local RND="${TMPRND:-}";
+
+  if [ ! -e "$LIST" ]; then
+    echo "$FN: error: list not found: $LIST" 1>&2;
+    return 1;
+  elif [ "$THREADS" -le 0 ]; then
+    echo "$FN: error: unexpected number of threads: $THREADS" 1>&2;
+    return 1;
+  elif [ ! -d "$TMP" ]; then
+    echo "$FN: error: temporal directory does not exist: $TMP" 1>&2;
+    return 1;
+  fi
+
+  TMP="$TMP/${FN}_$RND";
+  [ "$RND" = "" ] &&
+    TMP=$(mktemp --tmpdir="$TMP" ${FN}_XXXXX);
+  rm -f "$TMP"*;
+
+  if [ -p "$LIST" ] || [ "$LIST" = "/dev/stdin" ]; then
+    cat "$LIST" > "$TMP.lst";
+    LIST="$TMP.lst";
+  fi
+  local NLIST=$(wc -l < "$LIST");
+  [ "$NLIST" -le 0 ] &&
+    echo "$FN: error: list apparently empty: $LIST" 1>&2 &&
+    rm "$TMP"* &&
+    return 1;
+
+  local CMD=("$@");
+  local n;
+  for n in $(seq 1 $(($#-1))); do
+    if [ -p "${CMD[n]}" ]; then
+      local p=$(ls "$TMP.pipe"* 2>/dev/null | wc -l);
+      cat "${CMD[n]}" > "$TMP.pipe$p";
+      CMD[n]="$TMP.pipe$p";
+    fi
+  done
+  set -- "${CMD[@]}";
+  echo "$@" > "$TMP";
+
+  awk -v fact0=0.5 -v TMP="$TMP" -v THREADS="$THREADS" -v NLIST="$NLIST" '
+    BEGIN {
+      fact = THREADS==1 ? 1 : fact0;
+      limit_list = fact*NLIST/THREADS;
+      limit_level = fact*NLIST;
+      list = 1;
+    }
+    { if( NR > limit_level ) {
+        list ++;
+        fact *= fact0;
+        limit_list = limit_level + fact*NLIST/THREADS;
+        limit_level += fact*NLIST;
+      }
+      else if( NR > limit_list ) {
+        list ++;
+        limit_list += fact*NLIST/THREADS;
+      }
+      print >> (TMP".lst_"list);
+    }' "$LIST";
+
+  local TOTP=$(ls $TMP.lst_* | wc -l);
+  local JOBS=$(seq 1 $THREADS);
+  [ "$THREADS" -gt "$TOTP" ] && JOBS=$(seq 1 $TOTP);
+
+  ( local JOBID;
+    for JOBID in $JOBS; do
+      > "$TMP.out_$JOBID";
+      > "$TMP.err_$JOBID";
+    done
+    local PROC_LOGS='
+      ### Remove blank lines before tail file header ###
+      :loop;
+      /^$/ {
+        N;
+        /\n==> .* <==$/! { G; s|^\(.*\)\n\([^\n]*\)$|\2\1|; P; }
+        D; b loop;
+      }
+      ### Hold job ID from tail file header ###
+      /^==> .* <==$/ { s|^==> .*\.[oe][ur][tr]_\([^ ]*\) <==$|\1:|; h; d; }
+      ### Prepend job ID to each line ###
+      G; s|^\(.*\)\n\([^\n]*\)$|\2\1|;';
+
+    { tail --pid=$$ -fn +1 "$TMP".out_* &
+      echo "outPID $!" >> "$TMP";
+    } | sed "$PROC_LOGS" &
+    { tail --pid=$$ -fn +1 "$TMP".err_* &
+      echo "errPID $!" >> "$TMP";
+    } | sed "$PROC_LOGS" 1>&2 &
+
+    ( local NUMP=0;
+      for JOBID in $JOBS; do
+        NUMP=$((NUMP+1));
+        { local CMD=("${@/\{\}/$TMP.lst_$NUMP}");
+          CMD=("${CMD[@]/\{\#\}/$NUMP}");
+          echo "JOBID:$JOBID:$NUMP starting" >> "$TMP";
+          "${CMD[@]}";
+          [ "$?" != 0 ] && echo "JOBID:$JOBID:$NUMP failed" >> "$TMP";
+          echo "JOBID:$JOBID:$NUMP ended" >> "$TMP";
+        } >> "$TMP.out_$JOBID" 2>> "$TMP.err_$JOBID" &
+      done
+      while true; do
+        local NUMR=$(( NUMP - $(grep -c '^JOBID:[^ ]* ended$' "$TMP") ));
+        if [ "$NUMP" = "$TOTP" ]; then
+          wait;
+          break;
+        elif [ "$NUMR" -lt "$THREADS" ]; then
+          NUMP=$((NUMP+1));
+          JOBID=$(
+            sed -n '/^JOBID:/{ s|^JOBID:\([^:]*\):[^ ]*|\1|; p; }' "$TMP" \
+              | awk '
+                  { if( $NF == "ended" )
+                      ended[$1] = "";
+                    else if( $NF == "starting" )
+                      delete ended[$1];
+                  }
+                  END {
+                    for( job in ended ) {
+                      print job;
+                      break;
+                    }
+                  }' );
+          { local CMD=("${@/\{\}/$TMP.lst_$NUMP}");
+            CMD=("${CMD[@]/\{\#\}/$NUMP}");
+            echo "JOBID:$JOBID:$NUMP starting" >> "$TMP";
+            "${CMD[@]}";
+            [ "$?" != 0 ] && echo "JOBID:$JOBID:$NUMP failed" >> "$TMP";
+            echo "JOBID:$JOBID:$NUMP ended" >> "$TMP";
+          } >> "$TMP.out_$JOBID" 2>> "$TMP.err_$JOBID" &
+          continue;
+        fi
+        sleep 1;
+      done
+    )
+    kill $(sed -n '/^[oe][ur][tr]PID /{ s|^...PID ||; p; }' "$TMP");
+  )
+
+  JOBS=$(grep -c '^JOBID:[^ ]* failed$' "$TMP");
+  [ "$JOBS" != 0 ] && return "$JOBS";
   rm "$TMP"*;
 
   return 0;
@@ -602,9 +781,13 @@ htrsh_pageimg_info () {
               }'
         );
 
-       [ $(echo "$IMRES" | sed 's|.*x||') != $(echo "$IMRES" | sed 's|x.*||') ] &&
-         echo "$FN: warning: image resolution different for vertical and horizontal: $IMFILE" 1>&2;
-       IMRES=$(echo "$IMRES" | sed 's|x.*||');
+      if [ "$IMRES" = "" ]; then
+        echo "$FN: warning: no resolution metadata for image: $IMFILE";
+      elif [ $(echo "$IMRES" | sed 's|.*x||') != $(echo "$IMRES" | sed 's|x.*||') ]; then
+        echo "$FN: warning: image resolution different for vertical and horizontal: $IMFILE";
+      fi 1>&2
+
+      IMRES=$(echo "$IMRES" | sed 's|x.*||');
     fi
   fi
 
@@ -1410,13 +1593,15 @@ SAVEASVQ       = T
 ##
 ## Function that extracts features from an image
 ##
-# @todo handle different types of features
 htrsh_extract_feats () {
   local FN="htrsh_extract_feats";
+  local XHEIGHT="";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Extracts features from an image";
-      echo "Usage: $FN IMGIN FEAOUT";
+      echo "Usage: $FN IMGIN FEAOUT [ Options ]";
+      echo "Options:";
+      echo " -xh XHEIGHT  The image x-height for size normalization";
     } 1>&2;
     return 1;
   fi
@@ -1424,19 +1609,53 @@ htrsh_extract_feats () {
   ### Parse input arguments ###
   local IMGIN="$1";
   local FEAOUT="$2";
+  shift 2;
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "-xh" ]; then
+      XHEIGHT="$2";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
+    shift 2;
+  done
+
+  local IMGPROC="$IMGIN";
+  if [ "$XHEIGHT" != "" ] && [ "$htrsh_feat_normxheight" != "" ]; then
+    IMGPROC=$(mktemp).png;
+    convert "$IMGIN" -resize $(echo "100*$htrsh_feat_normxheight/$XHEIGHT" | bc -l)% "$IMGPROC";
+  fi
 
   ### Extract features ###
   if [ "$htrsh_feat" = "dotmatrix" ]; then
     local featcfg="-S --htk --width $htrsh_dotmatrix_W --height $htrsh_dotmatrix_H --shift=$htrsh_dotmatrix_shift --win-size=$htrsh_dotmatrix_win -i";
     if [ "$htrsh_dotmatrix_mom" = "yes" ]; then
-      dotmatrix -m $featcfg "$IMGIN";
+      dotmatrix -m $featcfg "$IMGPROC";
     else
-      dotmatrix $featcfg "$IMGIN";
+      dotmatrix $featcfg "$IMGPROC";
     fi > "$FEAOUT";
+
+  elif [ "$htrsh_feat" = "prhlt" ]; then
+    local TMP=$(mktemp);
+    convert "$IMGPROC" $TMP.pgm;
+    pgmtextfea -F 2.5 -i $TMP.pgm > $TMP.fea;
+    pfl2htk $TMP.fea "$FEAOUT" 2>/dev/null;
+    rm $TMP $TMP.{pgm,fea};
+
+  elif [ "$htrsh_feat" = "fki" ]; then
+    local TMP=$(mktemp);
+    convert "$IMGPROC" -threshold 50% $TMP.pbm;
+    fkifeat $TMP.pbm > $TMP.fea;
+    pfl2htk $TMP.fea "$FEAOUT" 2>/dev/null;
+    rm $TMP $TMP.{pbm,fea};
+
   else
     echo "$FN: error: unknown features type: $htrsh_feat" 1>&2;
     return 1;
   fi
+
+  [ "$IMGIN" != "$IMGPROC" ] && [ "$htrsh_keeptmp" = 0 ] &&
+    rm "$IMGPROC" "${IMGPROC%.png}";
 
   return 0;
 }
@@ -1876,8 +2095,15 @@ htrsh_pageimg_extract_linefeats () {
       ed="$ed -i '//*[@id=\"$id\"]/_:Coords' -t attr -n fcontour -v '$pts'";
     fi 2>&1;
 
+    local FEATOP="";
+    if [ "$htrsh_feat_normxheight" != "" ]; then
+      FEATOP=$(xmlstarlet sel -t -v "//*[@id=\"$id\"]/@custom" "$XML" 2>/dev/null \
+        | sed -n '/x-height:/ { s|.*x-height:\([^;]*\).*|\1|; s|px$||; p; }' );
+      [ "$FEATOP" != "" ] && FEATOP="-xh $FEATOP";
+    fi
+
     ### Extract features ###
-    htrsh_extract_feats "${ff}_fea.png" "$ff.fea";
+    htrsh_extract_feats "${ff}_fea.png" "$ff.fea" $FEATOP;
     [ "$?" != 0 ] && return 1;
 
     echo "$ff.fea" >> "$FEATLST";
@@ -2467,44 +2693,41 @@ htrsh_hvite_parallel () {
 
   ### Parse input arguments ###
   local THREADS="$1";
-  local CMD="$2";
+  local CMD=("$2");
   shift 2;
+
+  local ARGN="1";
+  local TMP="${TMPDIR:-.}";
+  local RND="${TMPRND:-}";
+  local TMPDIR="$TMP";
+  local TMPRND="$RND";
+
+  TMP="$TMP/${FN}_$RND";
+  [ "$RND" = "" ] &&
+    TMP=$(mktemp --tmpdir="$TMP" ${FN}_XXXXX);
+  rm -f "$TMP"*;
 
   local FEATLST="";
   local MLF="";
-  local CFG="";
-  local HMMLST="";
-  local OPTS="";
   while [ $# -gt 0 ]; do
+    CMD[$ARGN]="$1";
+    ARGN=$((ARGN+1));
     if [ "$1" = "-S" ]; then
       FEATLST="$2";
+      CMD[$ARGN]="{}";
+      ARGN=$((ARGN+1));
       shift 1;
     elif [ "$1" = "-i" ]; then
       MLF="$2";
+      CMD[$ARGN]="$TMP.mlf_{#}";
+      ARGN=$((ARGN+1));
       shift 1;
-    elif [ "$1" = "-C" ]; then
-      CFG="-C $2";
-      shift 1;
-    elif [ "$#" = 1 ] && [ "$CMD" = "HVite" ]; then
-      HMMLST="$1";
-    else
-      OPTS="$OPTS $1";
     fi
     shift 1;
   done
 
-  local TMPDIR=".";
-  [ $(echo "$MLF" | grep / | wc -l) != 0 ] &&
-    TMPDIR=$(echo "$MLF" | sed 's|/[^/]*$||');
-
   if [ "$CMD" != "HVite" ] && [ "$CMD" != "HLRescore" ]; then
     echo "$FN: error: command has to be either HVite or HLRescore" 1>&2;
-    return 1;
-  elif [ "$THREADS" -lt 1 ]; then
-    echo "$FN: error: number of threads must be at least one" 1>&2;
-    return 1;
-  elif [ "$MLF" = "" ]; then
-    echo "$FN: error: an output MLF file using option -i must be given" 1>&2;
     return 1;
   elif [ "$FEATLST" = "" ]; then
     echo "$FN: error: a feature list using option -S must be given" 1>&2;
@@ -2512,35 +2735,18 @@ htrsh_hvite_parallel () {
   elif [ ! -e "$FEATLST" ]; then
     echo "$FN: error: feature list file not found: $FEATLST" 1>&2;
     return 1;
-  elif [ ! -d "$TMPDIR" ]; then
-    echo "$FN: error: directory does not exist: $TMPDIR" 1>&2;
-    return 1;
   fi
 
-  local TMP=$(mktemp --tmpdir="$TMPDIR" ${CMD}_parallel_XXXXX);
-  rm -f "${TMP}_"*;
-
-  THREADS=$(htrsh_randsplit "$THREADS" "$FEATLST" "${TMP}_feats_%d" 1);
-  [ "$THREADS" = "" ] &&
-    echo "$FN: error: problems splitting list: $FEATLST" 1>&2 &&
-    return 1;
-
-  if [ "$CMD" = "HVite" ]; then
-    htrsh_run_parallel "${TMP##*_}|1:$THREADS" $CMD \
-      $CFG -S "${TMP}_feats_JOBID" \
-      -i "${TMP}_mlf_JOBID" $OPTS "$HMMLST";
-  else
-    htrsh_run_parallel "${TMP##*_}|1:$THREADS" $CMD \
-      $CFG -S "${TMP}_feats_JOBID" \
-      -i "${TMP}_mlf_JOBID" $OPTS;
-  fi 1>&2;
+  sort -R "$FEATLST" \
+    | htrsh_run_parallel_list "$THREADS" - "${CMD[@]}" 1>&2;
   [ "$?" != 0 ] &&
-    echo "$FN: error: problems executing $CMD" 1>&2 &&
+    echo "$FN: error: problems executing ${CMD[0]}" 1>&2 &&
     return 1;
 
-  { echo "#!MLF!#";
-    sed '/^#!MLF!#/d' "${TMP}_mlf_"*;
-  } > "$MLF";
+  [ "$MLF" != "" ] &&
+    { echo "#!MLF!#";
+      sed '/^#!MLF!#/d' "$TMP.mlf_"*;
+    } > "$MLF";
 
   rm "$TMP"*;
 
@@ -3077,10 +3283,13 @@ htrsh_pageimg_forcealign () {
   sed 's|imageFilename="[^"/]*/|imageFilename=|' -i "$TMPDIR/proc/$XMLBASE.xml";
 
   ### Generate contours from baselines ###
-  if [ "$htrsh_align_prefer_baselines" = "yes" ] ||
-     [ $(xmlstarlet sel -t -v \
-           "count($htrsh_xpath_regions/_:TextLine/$htrsh_xpath_coords)" \
-           "$XML") = 0 ]; then
+  if [ $(xmlstarlet sel -t -v \
+           "count($htrsh_xpath_regions/_:TextLine/_:Baseline)" \
+           "$XML") -gt 0 ] && (
+       [ "$htrsh_align_prefer_baselines" = "yes" ] ||
+       [ $(xmlstarlet sel -t -v \
+             "count($htrsh_xpath_regions/_:TextLine/$htrsh_xpath_coords)" \
+             "$XML") = 0 ] ); then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating line contours from baselines ...";
     page_format_generate_contour -a 75 -d 25 \
       -p "$TMPDIR/proc/$XMLBASE.xml" \
@@ -3133,6 +3342,7 @@ htrsh_pageimg_forcealign () {
     return 1;
 
   ### Compute PCA and project features ###
+  [ "$htrsh_feat" != "dotmatrix" ] && DOPCA="no";
   if [ "$PBASE" = "" ] && [ "$DOPCA" = "yes" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): computing PCA for page ...";
     PBASE="$TMPDIR/pcab.mat.gz";
