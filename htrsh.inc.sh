@@ -300,7 +300,7 @@ htrsh_run_parallel () {
 ##
 ## Function that executes instances of a command in parallel to process a list
 ##
-# @todo create single parallel function supporting: 1) either one process per element or several, 2) elements as stdin, file list '{@}' or arguments '{*}', 3) list given as argument, file or stdin, 4) threads either single number or mutiple names separated by commas, 4) '{#}' instance number, '{%}' thread name
+# @todo create single parallel function supporting: 1) either one process per element or several, 2) elements given to command as stdin, file '{@}' or arguments '{*}', 3) list given to parallel as argument, file or stdin, 4) threads either single number, range or mutiple names separated by commas, 4) replace in arguments '{#}' for instance number and '{%}' for thread name
 htrsh_run_parallel_list () {
   local FN="htrsh_run_parallel_list";
   if [ $# -lt 2 ]; then
@@ -340,14 +340,17 @@ htrsh_run_parallel_list () {
   elif [ "$THREADS" -le 0 ]; then
     echo "$FN: error: unexpected number of threads: $THREADS" 1>&2;
     return 1;
-  elif [ ! -d "$TMP" ]; then
-    echo "$FN: error: temporal files directory does not exist: $TMP" 1>&2;
-    return 1;
   fi
 
-  TMP="$TMP/${FN}_$RND";
-  [ "$RND" = "" ] &&
+  if [ "$RND" = "" ]; then
     TMP=$(mktemp --tmpdir="$TMP" ${FN}_XXXXX);
+  else
+    TMP="$TMP/${FN}_$RND";
+    > "$TMP";
+  fi
+  [ ! -e "$TMP" ] &&
+    echo "$FN: error: failed to create temporal files" 1>&2 &&
+    return 1;
   rm -f "$TMP"*;
 
   if [ -p "$LIST" ] || [ "$LIST" = "/dev/stdin" ]; then
@@ -2711,13 +2714,15 @@ htrsh_hvite_parallel () {
   local TMPDIR="$TMP";
   local TMPRND="$RND";
 
-  [ ! -d "$TMPDIR" ] &&
-    echo "$FN: error: temporal files directory does not exist: $TMP" 1>&2 &&
-    return 1;
-
-  TMP="$TMP/${FN}_$RND";
-  [ "$RND" = "" ] &&
+  if [ "$RND" = "" ]; then
     TMP=$(mktemp --tmpdir="$TMP" ${FN}_XXXXX);
+  else
+    TMP="$TMP/${FN}_$RND";
+    > "$TMP";
+  fi
+  [ ! -e "$TMP" ] &&
+    echo "$FN: error: failed to create temporal files" 1>&2 &&
+    return 1;
   rm -f "$TMP"*;
 
   local FEATLST="";
