@@ -2708,23 +2708,15 @@ htrsh_hvite_parallel () {
   local CMD=("$2");
   shift 2;
 
-  local ARGN="1";
   local TMP="${TMPDIR:-.}";
-  local RND="${TMPRND:-}";
-  local TMPDIR="$TMP";
-  local TMPRND="$RND";
-
-  if [ "$RND" = "" ]; then
-    TMP=$(mktemp --tmpdir="$TMP" ${FN}_XXXXX);
-  else
-    TMP="$TMP/${FN}_$RND";
-    > "$TMP";
-  fi
+  TMP=$(mktemp --tmpdir="$TMP" ${FN}_XXXXX);
   [ ! -e "$TMP" ] &&
     echo "$FN: error: failed to create temporal files" 1>&2 &&
     return 1;
   rm -f "$TMP"*;
+  local TMPRND=$(echo "$TMP" | sed 's|.*_||');
 
+  local ARGN="1";
   local FEATLST="";
   local MLF="";
   while [ $# -gt 0 ]; do
@@ -2758,7 +2750,7 @@ htrsh_hvite_parallel () {
   sort -R "$FEATLST" \
     | htrsh_run_parallel_list "$THREADS" - "${CMD[@]}" 1>&2;
   [ "$?" != 0 ] &&
-    echo "$FN: error: problems executing ${CMD[0]}" 1>&2 &&
+    echo "$FN: error: problems executing $CMD" 1>&2 &&
     return 1;
 
   [ "$MLF" != "" ] &&
