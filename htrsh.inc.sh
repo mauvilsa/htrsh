@@ -300,6 +300,7 @@ htrsh_run_parallel () {
 ##
 ## Function that executes instances of a command in parallel to process a list
 ##
+# @todo create single parallel function supporting: 1) either one process per element or several, 2) elements as stdin, file list '{@}' or arguments '{*}', 3) list given as argument, file or stdin, 4) threads either single number or mutiple names separated by commas, 4) '{#}' instance number, '{%}' thread name
 htrsh_run_parallel_list () {
   local FN="htrsh_run_parallel_list";
   if [ $# -lt 2 ]; then
@@ -311,9 +312,17 @@ htrsh_run_parallel_list () {
       echo "  by the command instance number. The thread number is prepended to every";
       echo "  line of stderr and stdout.";
       echo "Usage: $FN THREADS LIST COMMAND ARG1 ARG2 ... '{}' ... '{#}' ...";
+      #echo "Usage: $FN THREADS [OPTIONS] COMMAND ARG1 ARG2 ... ('{@}'|'{*}') ... '{#}' ... '{%}' ...";
+      #echo "Options:";
+      #echo " -k (yes|no)  Whether to keep temporal files (def.=$KEEPTMP)";
+      #echo " -n NUMELEMS  Elements per instance, either an integer>0 or 'auto' (def.=$ELEMS)";
+      #echo " -e ELEMENTS  Elements, either a file, list {id1},{id2},... or range {#ini}:[{#inc}:]{#end} (def.=from stdin)";
+      echo "Environment variables:";
+      echo "  TMPDIR      Directory for temporal files, must exist (def.=.)";
+      echo "  TMPRND      Hash for unique temporal files (def.=mktemp command)";
       echo "Dummy example:"
-      echo "  $ my_func () { sleep \$((RANDOM%3)); echo done \$2: \$(<\$1) \\(\$(wc -w < \$1) items\\); }";
-      echo "  $ seq 1 100 | $FN 3 - my_func '{}' '{#}'";
+      echo "  $ my_func () { sleep \$((RANDOM%3)); echo done \$1: \$(<\$2) \\(\$(wc -w < \$2) items\\); }";
+      echo "  $ seq 1 100 | $FN 3 - my_func '{#}' '{}'";
     } 1>&2;
     return 1;
   fi
@@ -332,7 +341,7 @@ htrsh_run_parallel_list () {
     echo "$FN: error: unexpected number of threads: $THREADS" 1>&2;
     return 1;
   elif [ ! -d "$TMP" ]; then
-    echo "$FN: error: temporal directory does not exist: $TMP" 1>&2;
+    echo "$FN: error: temporal files directory does not exist: $TMP" 1>&2;
     return 1;
   fi
 
@@ -2701,6 +2710,10 @@ htrsh_hvite_parallel () {
   local RND="${TMPRND:-}";
   local TMPDIR="$TMP";
   local TMPRND="$RND";
+
+  [ ! -d "$TMPDIR" ] &&
+    echo "$FN: error: temporal files directory does not exist: $TMP" 1>&2 &&
+    return 1;
 
   TMP="$TMP/${FN}_$RND";
   [ "$RND" = "" ] &&
