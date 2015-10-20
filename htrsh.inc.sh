@@ -300,7 +300,7 @@ htrsh_run_parallel () {
 ##
 ## Function that executes instances of a command in parallel to process a list
 ##
-# @todo create single parallel function supporting: 1) either one process per element or several, 2) elements given to command as stdin, file '{@}' or arguments '{*}', 3) list given to parallel as argument, file or stdin, 4) threads either single number, range or mutiple names separated by commas, 4) replace in arguments '{#}' for instance number and '{%}' for thread name
+# @todo create single parallel function supporting: 1) either one process per element or several, 2) elements given to command as stdin, file '{@}', '{<}' pipe, or arguments '{*}', 3) list given to parallel as argument, file or stdin, 4) threads either single number, range or mutiple names separated by commas, 4) replace in arguments '{#}' for instance number and '{%}' for thread name
 htrsh_run_parallel_list () {
   local FN="htrsh_run_parallel_list";
   if [ $# -lt 2 ]; then
@@ -308,10 +308,10 @@ htrsh_run_parallel_list () {
       echo "Description: Executes instances of a command in parallel to process a list.";
       echo "  Each thread is given part of the list, and the moment any thread finishes";
       echo "  a new instance is started with another part of the list. In the command";
-      echo "  arguments, '{}' is replaced by a file containing a partial list and '{#}'";
+      echo "  arguments, '{@}' is replaced by a file containing a partial list and '{#}'";
       echo "  by the command instance number. The thread number is prepended to every";
       echo "  line of stderr and stdout.";
-      echo "Usage: $FN THREADS LIST COMMAND ARG1 ARG2 ... '{}' ... '{#}' ...";
+      echo "Usage: $FN THREADS LIST COMMAND ARG1 ARG2 ... '{@}' ... '{#}' ...";
       #echo "Usage: $FN THREADS [OPTIONS] COMMAND ARG1 ARG2 ... ('{@}'|'{*}') ... '{#}' ... '{%}' ...";
       #echo "Options:";
       #echo " -k (yes|no)  Whether to keep temporal files (def.=$KEEPTMP)";
@@ -322,7 +322,7 @@ htrsh_run_parallel_list () {
       echo "  TMPRND      Hash for unique temporal files (def.=mktemp command)";
       echo "Dummy example:"
       echo "  $ my_func () { sleep \$((RANDOM%3)); echo done \$1: \$(<\$2) \\(\$(wc -w < \$2) items\\); }";
-      echo "  $ seq 1 100 | $FN 3 - my_func '{#}' '{}'";
+      echo "  $ seq 1 100 | $FN 3 - my_func '{#}' '{@}'";
     } 1>&2;
     return 1;
   fi
@@ -330,9 +330,6 @@ htrsh_run_parallel_list () {
   local THREADS="$1";
   local LIST="$2"; [ "$LIST" = "-" ] && LIST="/dev/stdin";
   shift 2;
-
-  local TMP="${TMPDIR:-.}";
-  local RND="${TMPRND:-}";
 
   if [ ! -e "$LIST" ]; then
     echo "$FN: error: list not found: $LIST" 1>&2;
@@ -342,67 +339,101 @@ htrsh_run_parallel_list () {
     return 1;
   fi
 
+  LIST=$( < "$LIST" );
+  local NLIST=$( echo "$LIST" | wc -l );
+  [ "$NLIST" = 0 ] &&
+    echo "$FN: error: list apparently empty: $LIST" 1>&2 &&
+    return 1;
+
+  local TMP="${TMPDIR:-.}";
+  local RND="${TMPRND:-}";
   if [ "$RND" = "" ]; then
-    TMP=$(mktemp --tmpdir="$TMP" ${FN}_XXXXX);
+    TMP=$(mktemp -d --tmpdir="$TMP" ${FN}_XXXXX);
   else
     TMP="$TMP/${FN}_$RND";
-    > "$TMP";
+    mkdir "$TMP";
   fi
-  [ ! -e "$TMP" ] &&
-    echo "$FN: error: failed to create temporal files" 1>&2 &&
+  [ ! -d "$TMP" ] &&
+    echo "$FN: error: failed to create temporal directory: $TMP" 1>&2 &&
     return 1;
-  rm -f "$TMP"*;
 
-  if [ -p "$LIST" ] || [ "$LIST" = "/dev/stdin" ]; then
-    cat "$LIST" > "$TMP.lst";
-    LIST="$TMP.lst";
-  fi
-  local NLIST=$(wc -l < "$LIST");
-  [ "$NLIST" -le 0 ] &&
-    echo "$FN: error: list apparently empty: $LIST" 1>&2 &&
-    rm "$TMP"* &&
-    return 1;
+  #if [ -p "$LIST" ] || [ "$LIST" = "/dev/stdin" ]; then
+  #  cat "$LIST" > "$TMP.lst";
+  #  LIST="$TMP.lst";
+  #fi
+  #local NLIST=$(wc -l < "$LIST");
+  #[ "$NLIST" -le 0 ] &&
+  #  echo "$FN: error: list apparently empty: $LIST" 1>&2 &&
+  #  rmdir "$TMP" &&
+  #  return 1;
 
   local CMD=("$@");
   local n;
   for n in $(seq 1 $(($#-1))); do
     if [ -p "${CMD[n]}" ]; then
-      local p=$(ls "$TMP.pipe"* 2>/dev/null | wc -l);
-      cat "${CMD[n]}" > "$TMP.pipe$p";
-      CMD[n]="$TMP.pipe$p";
+      local p=$(ls "$TMP/pipe"* 2>/dev/null | wc -l);
+      cat "${CMD[n]}" > "$TMP/pipe$p";
+      CMD[n]="$TMP/pipe$p";
     fi
   done
   set -- "${CMD[@]}";
-  echo "$@" > "$TMP";
+  echo "$@" > "$TMP/state";
 
-  awk -v fact0=0.5 -v TMP="$TMP" -v THREADS="$THREADS" -v NLIST="$NLIST" '
-    BEGIN {
-      fact = THREADS==1 ? 1 : fact0;
-      limit_list = fact*NLIST/THREADS;
-      limit_level = fact*NLIST;
-      list = 1;
-    }
-    { if( NR > limit_level ) {
-        list ++;
-        fact *= fact0;
-        limit_list = limit_level + fact*NLIST/THREADS;
-        limit_level += fact*NLIST;
-      }
-      else if( NR > limit_list ) {
-        list ++;
-        limit_list += fact*NLIST/THREADS;
-      }
-      print >> (TMP".lst_"list);
-    }' "$LIST";
+  #awk -v fact0=0.5 -v TMP="$TMP" -v THREADS="$THREADS" -v NLIST="$NLIST" '
+  #  BEGIN {
+  #    fact = THREADS==1 ? 1 : fact0;
+  #    limit_list = fact*NLIST/THREADS;
+  #    limit_level = fact*NLIST;
+  #    list = 1;
+  #  }
+  #  { if( NR > limit_level ) {
+  #      list ++;
+  #      fact *= fact0;
+  #      limit_list = limit_level + fact*NLIST/THREADS;
+  #      limit_level += fact*NLIST;
+  #    }
+  #    else if( NR > limit_list ) {
+  #      list ++;
+  #      limit_list += fact*NLIST/THREADS;
+  #    }
+  #    print >> (TMP"/list_"list);
+  #  }' "$LIST";
 
-  local TOTP=$(ls $TMP.lst_* | wc -l);
+  eval LIST=\( $( echo "$LIST" | sed "s|\x27|\\\\x27|g" | \
+    awk -v fact0=0.5 -v THREADS="$THREADS" -v NLIST="$NLIST" '
+      BEGIN {
+        fact = THREADS==1 ? 1 : fact0;
+        limit_list = fact*NLIST/THREADS;
+        limit_level = fact*NLIST;
+        list = 1;
+        nlist = 0;
+        printf( "$\x27" );
+      }
+      { if( NR > limit_level || NR > limit_list ) {
+          list ++;
+          nlist = 0;
+          printf( "\x27 $\x27" );
+          if( NR > limit_level ) {
+            fact *= fact0;
+            limit_list = limit_level + fact*NLIST/THREADS;
+            limit_level += fact*NLIST;
+          }
+          else
+            limit_list += fact*NLIST/THREADS;
+        }
+        printf( nlist++ > 0 ? "\\n%s" : "%s", $0 );
+      }
+      END { printf( "\x27" ); }' ) \);
+
+  local TOTP=${#LIST[@]};
+  #local TOTP=$(ls $TMP/list_* | wc -l);
   local JOBS=$(seq 1 $THREADS);
   [ "$THREADS" -gt "$TOTP" ] && JOBS=$(seq 1 $TOTP);
 
   ( local JOBID;
     for JOBID in $JOBS; do
-      > "$TMP.out_$JOBID";
-      > "$TMP.err_$JOBID";
+      > "$TMP/out_$JOBID";
+      > "$TMP/err_$JOBID";
     done
     local PROC_LOGS='
       ### Remove blank lines before tail file header ###
@@ -417,64 +448,66 @@ htrsh_run_parallel_list () {
       ### Prepend job ID to each line ###
       G; s|^\(.*\)\n\([^\n]*\)$|\2\1|;';
 
-    { tail --pid=$$ -fn +1 "$TMP".out_* &
-      echo "outPID $!" >> "$TMP";
+    { tail --pid=$$ -fn +1 "$TMP"/out_* &
+      echo "outPID $!" >> "$TMP/state";
     } | sed "$PROC_LOGS" &
-    { tail --pid=$$ -fn +1 "$TMP".err_* &
-      echo "errPID $!" >> "$TMP";
+    { tail --pid=$$ -fn +1 "$TMP"/err_* &
+      echo "errPID $!" >> "$TMP/state";
     } | sed "$PROC_LOGS" 1>&2 &
 
     ( local NUMP=0;
       for JOBID in $JOBS; do
         NUMP=$((NUMP+1));
-        { local CMD=("${@/\{\}/$TMP.lst_$NUMP}");
+        { local CMD=("${@/\{@\}/$TMP\/list_$NUMP}");
+          local NELEM=$(echo "${LIST[$((NUMP-1))]}" | wc -l);
+          echo "${LIST[$((NUMP-1))]}" > "$TMP/list_$NUMP";
           CMD=("${CMD[@]/\{\#\}/$NUMP}");
-          echo "JOBID:$JOBID:$NUMP starting" >> "$TMP";
+          echo "JOBID:$JOBID:$NUMP $NELEM starting" >> "$TMP/state";
           "${CMD[@]}";
-          [ "$?" != 0 ] && echo "JOBID:$JOBID:$NUMP failed" >> "$TMP";
-          echo "JOBID:$JOBID:$NUMP ended" >> "$TMP";
-        } >> "$TMP.out_$JOBID" 2>> "$TMP.err_$JOBID" &
+          [ "$?" != 0 ] && echo "JOBID:$JOBID:$NUMP failed" >> "$TMP/state";
+          echo "JOBID:$JOBID:$NUMP ended" >> "$TMP/state";
+        } >> "$TMP/out_$JOBID" 2>> "$TMP/err_$JOBID" &
       done
       while true; do
-        local NUMR=$(( NUMP - $(grep -c '^JOBID:[^ ]* ended$' "$TMP") ));
+        local NUMR=$(( NUMP - $(grep -c '^JOBID:[^ ]* ended$' "$TMP/state") ));
         if [ "$NUMP" = "$TOTP" ]; then
           wait;
           break;
         elif [ "$NUMR" -lt "$THREADS" ]; then
           NUMP=$((NUMP+1));
           JOBID=$(
-            sed -n '/^JOBID:/{ s|^JOBID:\([^:]*\):[^ ]*|\1|; p; }' "$TMP" \
+            sed -n '/^JOBID:/{ s|^JOBID:\([^:]*\):[^ ]*|\1|; p; }' "$TMP/state" \
               | awk '
                   { if( $NF == "ended" )
                       ended[$1] = "";
                     else if( $NF == "starting" )
                       delete ended[$1];
-                  }
-                  END {
-                    for( job in ended ) {
-                      print job;
-                      break;
-                    }
+                  } END {
+                    for( job in ended ) { print job; break; }
                   }' );
-          { local CMD=("${@/\{\}/$TMP.lst_$NUMP}");
+          { local CMD=("${@/\{@\}/$TMP\/list_$NUMP}");
+            local NELEM=$(echo "${LIST[$((NUMP-1))]}" | wc -l);
+            echo "${LIST[$((NUMP-1))]}" > "$TMP/list_$NUMP";
             CMD=("${CMD[@]/\{\#\}/$NUMP}");
-            echo "JOBID:$JOBID:$NUMP starting" >> "$TMP";
+            echo "JOBID:$JOBID:$NUMP $NELEM starting" >> "$TMP/state";
             "${CMD[@]}";
-            [ "$?" != 0 ] && echo "JOBID:$JOBID:$NUMP failed" >> "$TMP";
-            echo "JOBID:$JOBID:$NUMP ended" >> "$TMP";
-          } >> "$TMP.out_$JOBID" 2>> "$TMP.err_$JOBID" &
+            [ "$?" != 0 ] && echo "JOBID:$JOBID:$NUMP failed" >> "$TMP/state";
+            echo "JOBID:$JOBID:$NUMP ended" >> "$TMP/state";
+          } >> "$TMP/out_$JOBID" 2>> "$TMP/err_$JOBID" &
           continue;
         fi
         sleep 1;
       done
     )
-    kill $(sed -n '/^[oe][ur][tr]PID /{ s|^...PID ||; p; }' "$TMP");
+    kill $(sed -n '/^[oe][ur][tr]PID /{ s|^...PID ||; p; }' "$TMP/state");
   )
 
-  JOBS=$(grep -c '^JOBID:[^ ]* failed$' "$TMP");
-  [ "$JOBS" != 0 ] && return "$JOBS";
-  rm "$TMP"*;
+  JOBS=$(grep -c '^JOBID:[^ ]* failed$' "$TMP/state");
+  [ "$JOBS" != 0 ] &&
+    echo $(grep '^JOBID:[^ ]* failed$' "$TMP/state") 1>&2 &&
+    return "$JOBS";
 
+  rm -r "$TMP";
   return 0;
 }
 
@@ -2709,11 +2742,11 @@ htrsh_hvite_parallel () {
   shift 2;
 
   local TMP="${TMPDIR:-.}";
-  TMP=$(mktemp --tmpdir="$TMP" ${FN}_XXXXX);
-  [ ! -e "$TMP" ] &&
+  TMP=$(mktemp -d --tmpdir="$TMP" ${FN}_XXXXX);
+  [ ! -d "$TMP" ] &&
     echo "$FN: error: failed to create temporal files" 1>&2 &&
     return 1;
-  rm -f "$TMP"*;
+  local TMPDIR="$TMP";
   local TMPRND=$(echo "$TMP" | sed 's|.*_||');
 
   local ARGN="1";
@@ -2724,12 +2757,12 @@ htrsh_hvite_parallel () {
     ARGN=$((ARGN+1));
     if [ "$1" = "-S" ]; then
       FEATLST="$2";
-      CMD[$ARGN]="{}";
+      CMD[$ARGN]="{@}";
       ARGN=$((ARGN+1));
       shift 1;
     elif [ "$1" = "-i" ]; then
       MLF="$2";
-      CMD[$ARGN]="$TMP.mlf_{#}";
+      CMD[$ARGN]="$TMP/mlf_{#}";
       ARGN=$((ARGN+1));
       shift 1;
     fi
@@ -2750,16 +2783,15 @@ htrsh_hvite_parallel () {
   sort -R "$FEATLST" \
     | htrsh_run_parallel_list "$THREADS" - "${CMD[@]}" 1>&2;
   [ "$?" != 0 ] &&
-    echo "$FN: error: problems executing $CMD" 1>&2 &&
+    echo "$FN: error: problems executing $CMD ($TMPRND)" 1>&2 &&
     return 1;
 
   [ "$MLF" != "" ] &&
     { echo "#!MLF!#";
-      sed '/^#!MLF!#/d' "$TMP.mlf_"*;
+      sed '/^#!MLF!#/d' "$TMP/mlf_"*;
     } > "$MLF";
 
-  rm "$TMP"*;
-
+  rm -r "$TMP";
   return 0;
 }
 
