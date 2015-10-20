@@ -399,7 +399,7 @@ htrsh_run_parallel_list () {
   #    print >> (TMP"/list_"list);
   #  }' "$LIST";
 
-  eval LIST=\( $( echo "$LIST" | sed "s|\x27|\\\\x27|g" | \
+  eval LIST=\( $( echo "$LIST" | sed 's|\x27|\\\\x27|g' | \
     awk -v fact0=0.5 -v THREADS="$THREADS" -v NLIST="$NLIST" '
       BEGIN {
         fact = THREADS==1 ? 1 : fact0;
