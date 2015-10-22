@@ -1,9 +1,12 @@
 #!/bin/bash
 
-htrsh_align_wordsplit="no"; # Whether to split words when aligning regions
+#htrsh_align_wordsplit="no"; # Whether to split words when aligning regions
+htrsh_align_wordsplit="yes";
 #htrsh_align_words="no"; # Whether to align at a word level when aligning regions
+htrsh_align_words="yes";
 
-htrsh_hmm_software="kaldi";
+#htrsh_hmm_software="kaldi";
+htrsh_hmm_software="htk";
 
 #htrsh_hmm_iter="10";
 htrsh_keeptmp="1";
@@ -12,6 +15,8 @@ htrsh_keeptmp="1";
 #htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.2"; # Zwettl
 
 #htrsh_feat_deslant="no";
+
+htrsh_xpath_lines='_:TextLine[_:Coords]';
 
 htrsh_pagexsd="/home/mvillegas/work/prog/mvsh/HTR/xsd/pagecontent+.xsd";
 
@@ -61,7 +66,7 @@ htrsh_pageimg_forcealign_region () {
   #fi
 
   ### Check page and obtain basic info ###
-  local XMLDIR IMFILE IMSIZE IMRES;
+  local $htrsh_infovars;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
@@ -95,7 +100,7 @@ htrsh_pageimg_forcealign_region () {
     return 1;
   fi
 
-  htrsh_pagexml_to_mlf "$XML" -r yes > "$TMPDIR/$XMLBASE.mlf";
+  { echo '#!MLF!#'; htrsh_pagexml_textequiv "$XML" -f mlf-chars -r yes; } > "$TMPDIR/$XMLBASE.mlf";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems creating MLF file: $XML" 1>&2 &&
     return 1;

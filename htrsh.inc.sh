@@ -99,6 +99,7 @@ htrsh_realpath="readlink -f";
 [ $(realpath --help 2>&1 | grep relative | wc -l) != 0 ] &&
   htrsh_realpath="realpath --relative-to=.";
 
+htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 
 #---------------------------#
 # Generic library functions #
@@ -204,7 +205,7 @@ htrsh_randsplit () {
 ##
 ## Function that executes several instances of a command in parallel
 ##
-htrsh_run_parallel () {
+htrsh_run_parallel_old () {
   local FN="htrsh_run_parallel";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
@@ -298,55 +299,152 @@ htrsh_run_parallel () {
 }
 
 ##
-## Function that executes instances of a command in parallel to process a list
+## Function that executes several instances of a command in parallel
 ##
-# @todo create single parallel function supporting: 1) either one process per element or several, 2) elements given to command as stdin, file '{@}', '{<}' pipe, or arguments '{*}', 3) list given to parallel as argument, file or stdin, 4) threads either single number, range or mutiple names separated by commas, 4) replace in arguments '{#}' for instance number and '{%}' for thread name
-htrsh_run_parallel_list () {
-  local FN="htrsh_run_parallel_list";
+# @todo daemon mode, i.e. tail -f LIST | htrsh_run_parallel -l - -n daemon ... , processes items as they are received from stdin, otherwise waits
+# @todo only read whole list for balanced mode, in other cases read list as it arrives like the daemon mode
+htrsh_run_parallel () {(
+  FN="htrsh_run_parallel";
+  THREADS="1";
+  LIST="";
+  NUMELEM="1";
+  KEEPTMP="no";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
-      echo "Description: Executes instances of a command in parallel to process a list.";
-      echo "  Each thread is given part of the list, and the moment any thread finishes";
-      echo "  a new instance is started with another part of the list. In the command";
-      echo "  arguments, '{@}' is replaced by a file containing a partial list and '{#}'";
-      echo "  by the command instance number. The thread number is prepended to every";
-      echo "  line of stderr and stdout.";
-      echo "Usage: $FN THREADS LIST COMMAND ARG1 ARG2 ... '{@}' ... '{#}' ...";
-      #echo "Usage: $FN THREADS [OPTIONS] COMMAND ARG1 ARG2 ... ('{@}'|'{*}') ... '{#}' ... '{%}' ...";
-      #echo "Options:";
+      echo "Description: Executes instances of a command in parallel. In the command";
+      echo "  arguments, '{#}' is replaced by the command instance number (1, 2, ...)";
+      echo "  and '{%}' is replaced by the thread ID (see options). The thread ID is";
+      echo "  prepended to every line of stderr and stdout. If a list to process";
+      echo "  is given, there are three possibilities to supply the list elements to the";
+      echo "  command: 1) if an argument is '{*}' elements are given as arguments in that";
+      echo "  position, 2) if an argument is '{@}' elements are given in a file and";
+      echo "  '{@}' is replaced by the file path, 3) if an argument is '{<}' elements";
+      echo "  are given as a named pipe, and 4) if no special argument is provided";
+      echo "  the elements are given through stdin.";
+      echo "Usage: $FN [OPTIONS] COMMAND ARG1 ARG2 ... [('{@}'|'{*}'|'{<}') ... '{#}' ... '{%}'] ...";
+      echo "Options:";
+      echo " -t THREADS   Concurrent threads, either an int>0, list {id1},{id2},...";
+      echo "              or range {#ini}:[{#inc}:]{#end} (def.=nproc)";
+      echo " -l LIST      List of elements to process, either a file (- is stdin), list";
+      echo "              {el1},{el2},... or range {#ini}:[{#inc}:]{#end} (def.=none)";
+      echo " -n NUMELEM   Elements per instance, either an int>0 or 'balance' (def.=$NUMELEM)";
       #echo " -k (yes|no)  Whether to keep temporal files (def.=$KEEPTMP)";
-      #echo " -n NUMELEMS  Elements per instance, either an integer>0 or 'auto' (def.=$ELEMS)";
-      #echo " -e ELEMENTS  Elements, either a file, list {id1},{id2},... or range {#ini}:[{#inc}:]{#end} (def.=from stdin)";
       echo "Environment variables:";
       echo "  TMPDIR      Directory for temporal files, must exist (def.=.)";
-      echo "  TMPRND      Hash for unique temporal files (def.=mktemp command)";
-      echo "Dummy example:"
-      echo "  $ my_func () { sleep \$((RANDOM%3)); echo done \$1: \$(<\$2) \\(\$(wc -w < \$2) items\\); }";
-      echo "  $ seq 1 100 | $FN 3 - my_func '{#}' '{@}'";
+      echo "  TMPRND      ID for unique temporal files (def.=rand)";
+      echo "Dummy examples:"
+      #echo "  $ myfunc () { echo \"Processing file \$1\"; }";
+      #echo "  $ $FN -t 5 myfunc 'input_{%}.txt'";
+      #echo "  $ $FN -t 2:3:9 myfunc 'input_{%}.txt'";
+      echo "  $ myfunc () {";
+      echo "      sleep \$((RANDOM%3));";
+      echo "      NUM=\$( wc -w < \$2 );";
+      echo "      ITEMS=\$( echo \$( < \$2 ) );";
+      echo "      echo \"\$1: processed \$NUM items (\$ITEMS)\";";
+      echo "    }";
+      echo "  $ seq 1 100 | $FN -t 3 -n balance -l - myfunc 'Thread {%} instance {#}' '{@}'";
+      echo "  $ seq 1 100 | $FN -t A,B,C -n 7 -l - myfunc 'Thread {%} instance {#}' '{@}'";
     } 1>&2;
     return 1;
   fi
 
-  local THREADS="$1";
-  local LIST="$2"; [ "$LIST" = "-" ] && LIST="/dev/stdin";
-  shift 2;
+  ### Parse input arguments ###
+  while [ $# -gt 0 ]; do
+    if [ "${1:0:1}" != "-" ]; then
+      break;
+    elif [ "$1" = "-t" ]; then
+      THREADS="$2";
+    elif [ "$1" = "-l" ]; then
+      LIST="$2";
+    elif [ "$1" = "-n" ]; then
+      NUMELEM="$2";
+    elif [ "$1" = "-k" ]; then
+      KEEPTMP="$2";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
+    shift 2;
+  done
 
-  if [ ! -e "$LIST" ]; then
-    echo "$FN: error: list not found: $LIST" 1>&2;
-    return 1;
-  elif [ "$THREADS" -le 0 ]; then
-    echo "$FN: error: unexpected number of threads: $THREADS" 1>&2;
-    return 1;
+  if [ "$THREADS" = "" ]; then
+    THREADS=( $(seq 1 $(nproc)) );
+  elif [[ "$THREADS" == *,* ]]; then
+    THREADS=( ${THREADS//,/ } );
+  elif [[ "$THREADS" == *:* ]]; then
+    THREADS=( $(seq ${THREADS//:/ }) );
+  else
+    THREADS=( $(seq 1 $THREADS) );
   fi
-
-  LIST=$( < "$LIST" );
-  local NLIST=$( echo "$LIST" | wc -l );
-  [ "$NLIST" = 0 ] &&
-    echo "$FN: error: list apparently empty: $LIST" 1>&2 &&
+  NTHREADS=${#THREADS[@]};
+  TOTP="$NTHREADS";
+  [ "$NTHREADS" -le 0 ] &&
+    echo "$FN: error: unexpected number of threads" 1>&2 &&
     return 1;
 
-  local TMP="${TMPDIR:-.}";
-  local RND="${TMPRND:-}";
+if false; then
+  NLIST="0";
+  if [ "$LIST" != "" ]; then
+    [ "$LIST" = "-" ] && LIST="/dev/stdin";
+    if [ -e "$LIST" ]; then
+      LIST=$( < "$LIST" );
+    elif [[ "$LIST" == *,* ]]; then
+      LIST=$( echo "$LIST" | tr ',' '\n' );
+    elif [[ "$LIST" == *:* ]]; then
+      LIST=$( seq ${LIST//:/ } );
+    else
+      echo "$FN: error: unexpected list format: $LIST" 1>&2;
+      return 1;
+    fi
+    NLIST=$( echo "$LIST" | wc -l );
+    [ "$NLIST" = 0 ] &&
+      echo "$FN: error: list apparently empty" 1>&2 &&
+      return 1;
+
+    eval LIST=\( $( echo "$LIST" | sed 's|\x27|\\\\x27|g' | \
+      awk -v NUMELEM="$NUMELEM" -v NTHREADS="$NTHREADS" -v NLIST="$NLIST" '
+        BEGIN {
+          if( NUMELEM == "balance" ) {
+            fact0 = 0.5;
+            fact = NTHREADS==1 ? 1 : fact0;
+            limit_list = fact*NLIST/NTHREADS;
+            limit_level = fact*NLIST;
+          }
+          else {
+            limit_list = NUMELEM;
+            limit_level = NLIST+1;
+          }
+          nlist = 0;
+          printf( "$\x27" );
+        }
+        { if( NR > limit_level || NR > limit_list ) {
+            nlist = 0;
+            printf( "\x27 $\x27" );
+            if( NR > limit_level ) {
+              fact *= fact0;
+              limit_list = limit_level + fact*NLIST/NTHREADS;
+              limit_level += fact*NLIST;
+            }
+            else if( NUMELEM == "balance" )
+              limit_list += fact*NLIST/NTHREADS;
+            else
+              limit_list += NUMELEM;
+          }
+          printf( nlist++ > 0 ? "\\n%s" : "%s", $0 );
+        }
+        END { printf( "\x27" ); }' ) \);
+
+    TOTP=${#LIST[@]};
+    if [ "$NTHREADS" -gt "$TOTP" ]; then
+      THREADS=( $(echo "${THREADS[@]}" | awk "{NF=$TOTP;print;}") );
+      NTHREADS="$TOTP";
+    fi
+  fi
+fi
+
+  ### Create temporal directory ###
+  TMP="${TMPDIR:-.}";
+  RND="${TMPRND:-}";
   if [ "$RND" = "" ]; then
     TMP=$(mktemp -d --tmpdir="$TMP" ${FN}_XXXXX);
   else
@@ -357,159 +455,206 @@ htrsh_run_parallel_list () {
     echo "$FN: error: failed to create temporal directory: $TMP" 1>&2 &&
     return 1;
 
-  #if [ -p "$LIST" ] || [ "$LIST" = "/dev/stdin" ]; then
-  #  cat "$LIST" > "$TMP.lst";
-  #  LIST="$TMP.lst";
-  #fi
-  #local NLIST=$(wc -l < "$LIST");
-  #[ "$NLIST" -le 0 ] &&
-  #  echo "$FN: error: list apparently empty: $LIST" 1>&2 &&
-  #  rmdir "$TMP" &&
-  #  return 1;
-
-  local CMD=("$@");
-  local n;
+  ### Prepare command ###
+  PROTO=("$@");
+  ARGPOS="0";
+  PIPEPOS="0";
+  FILEPOS="0";
   for n in $(seq 1 $(($#-1))); do
-    if [ -p "${CMD[n]}" ]; then
-      local p=$(ls "$TMP/pipe"* 2>/dev/null | wc -l);
-      cat "${CMD[n]}" > "$TMP/pipe$p";
-      CMD[n]="$TMP/pipe$p";
+    if [ "${PROTO[n]}" = "{*}" ]; then
+      [ "$LIST" != "" ] && ARGPOS=$n;
+    elif [ "${PROTO[n]}" = "{<}" ]; then
+      [ "$LIST" != "" ] && PIPEPOS=$n;
+    elif [ "${PROTO[n]}" = "{@}" ]; then
+      [ "$LIST" != "" ] && FILEPOS=$n;
+    elif [ -p "${PROTO[n]}" ]; then
+      p=$(ls "$TMP/pipe"* 2>/dev/null | wc -l);
+      cat "${PROTO[n]}" > "$TMP/pipe$p";
+      PROTO[n]="$TMP/pipe$p";
     fi
   done
-  set -- "${CMD[@]}";
-  echo "$@" > "$TMP/state";
+  echo "${PROTO[@]}" > "$TMP/state";
 
-  #awk -v fact0=0.5 -v TMP="$TMP" -v THREADS="$THREADS" -v NLIST="$NLIST" '
-  #  BEGIN {
-  #    fact = THREADS==1 ? 1 : fact0;
-  #    limit_list = fact*NLIST/THREADS;
-  #    limit_level = fact*NLIST;
-  #    list = 1;
-  #  }
-  #  { if( NR > limit_level ) {
-  #      list ++;
-  #      fact *= fact0;
-  #      limit_list = limit_level + fact*NLIST/THREADS;
-  #      limit_level += fact*NLIST;
-  #    }
-  #    else if( NR > limit_list ) {
-  #      list ++;
-  #      limit_list += fact*NLIST/THREADS;
-  #    }
-  #    print >> (TMP"/list_"list);
-  #  }' "$LIST";
+  ### Prepare list ###
+  if [ "$LIST" != "" ]; then
+    TOTP="-1";
+    [ "$LIST" = "-" ] && LIST="/dev/stdin";
+    if [ -e "$LIST" ]; then
+      exec 3< "$LIST";
+    elif [[ "$LIST" == *,* ]]; then
+      exec 3< <( echo "$LIST" | tr ',' '\n' );
+    elif [[ "$LIST" == *:* ]]; then
+      exec 3< <( seq ${LIST//:/ } );
+    else
+      echo "$FN: error: unexpected list: $LIST" 1>&2;
+      [ "$KEEPTMP" != "yes" ] && rm -r "$TMP";
+      return 1;
+    fi
 
-  eval LIST=\( $( echo "$LIST" | sed 's|\x27|\\\\x27|g' | \
-    awk -v fact0=0.5 -v THREADS="$THREADS" -v NLIST="$NLIST" '
-      BEGIN {
-        fact = THREADS==1 ? 1 : fact0;
-        limit_list = fact*NLIST/THREADS;
-        limit_level = fact*NLIST;
-        list = 1;
-        nlist = 0;
-        printf( "$\x27" );
-      }
-      { if( NR > limit_level || NR > limit_list ) {
-          list ++;
-          nlist = 0;
-          printf( "\x27 $\x27" );
-          if( NR > limit_level ) {
-            fact *= fact0;
-            limit_list = limit_level + fact*NLIST/THREADS;
-            limit_level += fact*NLIST;
-          }
-          else
-            limit_list += fact*NLIST/THREADS;
-        }
-        printf( nlist++ > 0 ? "\\n%s" : "%s", $0 );
-      }
-      END { printf( "\x27" ); }' ) \);
+    if [ "$NUMELEM" = "balance" ]; then
+      NLIST=$( cat /proc/self/fd/3 | tee "$TMP/list" | wc -l );
+      exec 3< "$TMP/list";
 
-  local TOTP=${#LIST[@]};
-  #local TOTP=$(ls $TMP/list_* | wc -l);
-  local JOBS=$(seq 1 $THREADS);
-  [ "$THREADS" -gt "$TOTP" ] && JOBS=$(seq 1 $TOTP);
+      NLIST=( $( seq 1 $NLIST \
+        | awk -v fact0=0.5 -v NTHREADS="$NTHREADS" -v NLIST="$NLIST" '
+            BEGIN {
+              fact = NTHREADS==1 ? 1 : fact0;
+              limit_list = fact*NLIST/NTHREADS;
+              limit_level = fact*NLIST;
+              nlist = 0;
+            }
+            { if( NR > limit_level || NR > limit_list ) {
+                printf( " %d", nlist );
+                nlist = 0;
+                if( NR > limit_level ) {
+                  fact *= fact0;
+                  limit_list = limit_level + fact*NLIST/NTHREADS;
+                  limit_level += fact*NLIST;
+                }
+                else
+                  limit_list += fact*NLIST/NTHREADS;
+              }
+              nlist++;
+            }
+            END {
+              if( nlist > 0 )
+                printf( " %d", nlist );
+            }' ) );
 
-  ( local JOBID;
-    for JOBID in $JOBS; do
-      > "$TMP/out_$JOBID";
-      > "$TMP/err_$JOBID";
-    done
-    local PROC_LOGS='
-      ### Remove blank lines before tail file header ###
-      :loop;
-      /^$/ {
-        N;
-        /\n==> .* <==$/! { G; s|^\(.*\)\n\([^\n]*\)$|\2\1|; P; }
-        D; b loop;
-      }
-      ### Hold job ID from tail file header ###
-      /^==> .* <==$/ { s|^==> .*\.[oe][ur][tr]_\([^ ]*\) <==$|\1:|; h; d; }
-      ### Prepend job ID to each line ###
-      G; s|^\(.*\)\n\([^\n]*\)$|\2\1|;';
+      if [ "$NTHREADS" -gt "${#NLIST[@]}" ]; then
+        THREADS=( $(echo "${THREADS[@]}" | awk "{NF=${#NLIST[@]};print;}") );
+        NTHREADS="${#NLIST[@]}";
+      fi
+    fi
+  fi
 
-    { tail --pid=$$ -fn +1 "$TMP"/out_* &
-      echo "outPID $!" >> "$TMP/state";
-    } | sed "$PROC_LOGS" &
-    { tail --pid=$$ -fn +1 "$TMP"/err_* &
-      echo "errPID $!" >> "$TMP/state";
-    } | sed "$PROC_LOGS" 1>&2 &
+  ### Sed script to remove tail file headers and prepend IDs to each line ###
+  PROC_LOGS=':loop;
+    /^$/ { N; /\n==> .* <==$/! { G; s|^\(.*\)\n\([^\n]*\)$|\2\1|; P; }; D; b loop; };
+    /^==> .* <==$/ { s|^==> .*/[oe][ur][tr]_\([^ ]*\) <==$|\1\t|; h; d; };
+    G; s|^\(.*\)\n\([^\n]*\)$|\2\1|;';
 
-    ( local NUMP=0;
-      for JOBID in $JOBS; do
-        NUMP=$((NUMP+1));
-        { local CMD=("${@/\{@\}/$TMP\/list_$NUMP}");
-          local NELEM=$(echo "${LIST[$((NUMP-1))]}" | wc -l);
-          echo "${LIST[$((NUMP-1))]}" > "$TMP/list_$NUMP";
-          CMD=("${CMD[@]/\{\#\}/$NUMP}");
-          echo "JOBID:$JOBID:$NUMP $NELEM starting" >> "$TMP/state";
-          "${CMD[@]}";
-          [ "$?" != 0 ] && echo "JOBID:$JOBID:$NUMP failed" >> "$TMP/state";
-          echo "JOBID:$JOBID:$NUMP ended" >> "$TMP/state";
-        } >> "$TMP/out_$JOBID" 2>> "$TMP/err_$JOBID" &
-      done
-      while true; do
-        local NUMR=$(( NUMP - $(grep -c '^JOBID:[^ ]* ended$' "$TMP/state") ));
-        if [ "$NUMP" = "$TOTP" ]; then
-          wait;
-          break;
-        elif [ "$NUMR" -lt "$THREADS" ]; then
-          NUMP=$((NUMP+1));
-          JOBID=$(
-            sed -n '/^JOBID:/{ s|^JOBID:\([^:]*\):[^ ]*|\1|; p; }' "$TMP/state" \
-              | awk '
-                  { if( $NF == "ended" )
-                      ended[$1] = "";
-                    else if( $NF == "starting" )
-                      delete ended[$1];
-                  } END {
-                    for( job in ended ) { print job; break; }
-                  }' );
-          { local CMD=("${@/\{@\}/$TMP\/list_$NUMP}");
-            local NELEM=$(echo "${LIST[$((NUMP-1))]}" | wc -l);
-            echo "${LIST[$((NUMP-1))]}" > "$TMP/list_$NUMP";
-            CMD=("${CMD[@]/\{\#\}/$NUMP}");
-            echo "JOBID:$JOBID:$NUMP $NELEM starting" >> "$TMP/state";
-            "${CMD[@]}";
-            [ "$?" != 0 ] && echo "JOBID:$JOBID:$NUMP failed" >> "$TMP/state";
-            echo "JOBID:$JOBID:$NUMP ended" >> "$TMP/state";
-          } >> "$TMP/out_$JOBID" 2>> "$TMP/err_$JOBID" &
-          continue;
-        fi
-        sleep 1;
-      done
-    )
+  ### Parallel stdout and stdin ###
+  for THREAD in "${THREADS[@]}"; do
+    mkfifo "$TMP/out_$THREAD" "$TMP/err_$THREAD";
+  done
+  { tail --pid=$$ -fn +1 "$TMP"/out_* &
+    echo "outPID $!" >> "$TMP/state";
+  } | sed "$PROC_LOGS" &
+  { tail --pid=$$ -fn +1 "$TMP"/err_* &
+    echo "errPID $!" >> "$TMP/state";
+  } | sed "$PROC_LOGS" 1>&2 &
+
+  ### Cleanup function ###
+  trap cleanup INT;
+  cleanup () {
+    NTHREADS=$(grep -c '^THREAD:[^ ]* failed$' "$TMP/state");
+    [ "$NTHREADS" != 0 ] &&
+      grep '^THREAD:[^ ]* failed$' "$TMP/state" 1>&2;
     kill $(sed -n '/^[oe][ur][tr]PID /{ s|^...PID ||; p; }' "$TMP/state");
+    [ "$KEEPTMP" != "yes" ] && rm -r "$TMP";
+    cleanup () { return 0; };
+  }
+
+  readlist () {
+    NUM="$NUMELEM";
+    [ "$NUM" = "balance" ] && NUM="${NLIST[$((NUMP-1))]}";
+    for n in $(seq 1 $NUM); do
+      IFS= read -r -u3 line;
+      if [ "$?" != 0 ]; then
+        echo "listdone" >> "$TMP/state";
+        break;
+      fi
+      echo "$line";
+    done
+  }
+
+  ### Run threads ###
+  runcmd () {(
+    if [ "$LIST" != "" ]; then
+      LISTP=$( readlist );
+      [ "$LISTP" = "" ] && return 0;
+    fi
+    THREAD="$1";
+    NUMP="$2";
+    { CMD=("${PROTO[@]//\{\%\}/$THREAD}");
+      CMD=("${CMD[@]//\{\#\}/$NUMP}");
+      echo "THREAD:$THREAD:$NUMP starting" >> "$TMP/state";
+      if [ "$ARGPOS" != 0 ]; then
+        eval LISTP=\( $( echo "$LISTP" \
+          | sed 's|\x27|\\\\x27|g; s|^|$\x27|; s|$|\x27|;' ) \);
+        "${CMD[@]:0:$ARGPOS}" "${LISTP[@]}" "${CMD[@]:$((ARGPOS+1))}";
+      elif [ "$PIPEPOS" != 0 ]; then
+        "${CMD[@]:0:$PIPEPOS}" <( echo "$LISTP" ) "${CMD[@]:$((PIPEPOS+1))}";
+      elif [ "$FILEPOS" != 0 ]; then
+        echo "$LISTP" > "$TMP/list_$NUMP";
+        "${CMD[@]:0:$FILEPOS}" "$TMP/list_$NUMP" "${CMD[@]:$((FILEPOS+1))}";
+      elif [ "$NLIST" != 0 ]; then
+        echo "$LISTP" | "${CMD[@]}";
+      else
+        "${CMD[@]}";
+      fi
+      [ "$?" != 0 ] && echo "THREAD:$THREAD:$NUMP failed" >> "$TMP/state";
+      echo "THREAD:$THREAD:$NUMP ended" >> "$TMP/state";
+    } >> "$TMP/out_$THREAD" 2>> "$TMP/err_$THREAD" &
+  )}
+
+  #runcmd () {
+  #  { CMD=("${PROTO[@]//\{\%\}/$THREAD}");
+  #    CMD=("${CMD[@]//\{\#\}/$NUMP}");
+  #    echo "THREAD:$THREAD:$NUMP starting" >> "$TMP/state";
+  #    if [ "$ARGPOS" != 0 ]; then
+  #      eval LISTP=\( $( echo "${LIST[$((NUMP-1))]}" \
+  #        | sed 's|\x27|\\\\x27|g; s|^|$\x27|; s|$|\x27|;' ) \);
+  #      "${CMD[@]:0:$ARGPOS}" "${LISTP[@]}" "${CMD[@]:$((ARGPOS+1))}";
+  #    elif [ "$PIPEPOS" != 0 ]; then
+  #      "${CMD[@]:0:$PIPEPOS}" <( echo "${LIST[$((NUMP-1))]}" ) "${CMD[@]:$((PIPEPOS+1))}";
+  #    elif [ "$FILEPOS" != 0 ]; then
+  #      echo "${LIST[$((NUMP-1))]}" > "$TMP/list_$NUMP";
+  #      "${CMD[@]:0:$FILEPOS}" "$TMP/list_$NUMP" "${CMD[@]:$((FILEPOS+1))}";
+  #    elif [ "$NLIST" != 0 ]; then
+  #      echo "${LIST[$((NUMP-1))]}" | "${CMD[@]}";
+  #    else
+  #      "${CMD[@]}";
+  #    fi
+  #    [ "$?" != 0 ] && echo "THREAD:$THREAD:$NUMP failed" >> "$TMP/state";
+  #    echo "THREAD:$THREAD:$NUMP ended" >> "$TMP/state";
+  #  } >> "$TMP/out_$THREAD" 2>> "$TMP/err_$THREAD";
+  #}
+
+  ( NUMP=0;
+    for THREAD in "${THREADS[@]}"; do
+      NUMP=$((NUMP+1));
+      runcmd "$THREAD" "$NUMP";
+    done
+    while true; do
+      NUMR=$(( $(grep -c ' starting$' "$TMP/state") - $(grep -c ' ended$' "$TMP/state") ));
+      if [ "$NUMP" = "$TOTP" ] ||
+         [ $(grep -c '^listdone$' "$TMP/state") != 0 ]; then
+        wait;
+        break;
+      elif [ "$NUMR" -lt "$NTHREADS" ]; then
+        NUMP=$((NUMP+1));
+        THREAD=$(
+          sed -n '/^THREAD:/{ s|^THREAD:\([^:]*\):[^ ]*|\1|; p; }' "$TMP/state" \
+            | awk '
+                { if( $NF == "ended" )
+                    ended[$1] = "";
+                  else if( $NF == "starting" )
+                    delete ended[$1];
+                } END {
+                  for( job in ended ) { print job; break; }
+                }' );
+        runcmd "$THREAD" "$NUMP";
+        continue;
+      fi
+      sleep 1;
+    done
   )
 
-  JOBS=$(grep -c '^JOBID:[^ ]* failed$' "$TMP/state");
-  [ "$JOBS" != 0 ] &&
-    echo $(grep '^JOBID:[^ ]* failed$' "$TMP/state") 1>&2 &&
-    return "$JOBS";
-
-  rm -r "$TMP";
-  return 0;
-}
+  cleanup;
+  return "$NTHREADS";
+)}
 
 #---------------------------------#
 # XML Page manipulation functions #
@@ -881,7 +1026,7 @@ htrsh_pageimg_resize () {
   done
 
   ### Check XML file and image ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC;
+  local $htrsh_infovars;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
@@ -966,8 +1111,6 @@ htrsh_pagexml_orderlines () {
 </xsl:stylesheet>';
 
   xmlstarlet tr <( echo "$XSLT" ) < /dev/stdin;
-
-  return $?;
 }
 
 ##
@@ -1066,8 +1209,6 @@ htrsh_pagexml_resize () {
 </xsl:stylesheet>';
 
   xmlstarlet tr <( echo "$XSLT" ) < /dev/stdin;
-
-  return $?;
 }
 
 ##
@@ -1125,8 +1266,6 @@ htrsh_pagexml_round () {
 </xsl:stylesheet>';
 
   xmlstarlet tr <( echo "$XSLT" ) < /dev/stdin;
-
-  return $?;
 }
 
 ##
@@ -1170,8 +1309,6 @@ htrsh_pagexml_sort_lines () {
 </xsl:stylesheet>';
 
   xmlstarlet tr <( echo "$XSLT" ) < /dev/stdin;
-
-  return $?;
 }
 
 ##
@@ -1216,8 +1353,6 @@ htrsh_pagexml_sort_regions () {
 </xsl:stylesheet>';
 
   saxonb-xslt -s:- -xsl:<( echo "$XSLT" ) < /dev/stdin;
-
-  return $?;
 }
 
 ##
@@ -1292,8 +1427,6 @@ htrsh_pagexml_relabel () {
 
   xmlstarlet tr <( echo "$XSLT1" ) < /dev/stdin \
     | xmlstarlet tr <( echo "$XSLT2" );
-
-  return $?;
 }
 
 ##
@@ -1320,8 +1453,6 @@ htrsh_pagexml_fpgram2points () {
   done
 
   eval $cmd "'$XML'";
-
-  return 0;
 }
 
 
@@ -1360,7 +1491,7 @@ htrsh_pageimg_clean () {
   done
 
   ### Check XML file and image ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC;
+  local $htrsh_infovars;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
@@ -1451,7 +1582,7 @@ htrsh_pageimg_quadborderclean () {
   done
 
   ### Check XML file and image ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC;
+  local $htrsh_infovars;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
@@ -1559,7 +1690,7 @@ htrsh_pageimg_extract_lines () {
   done
 
   ### Check page and obtain basic info ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC;
+  local $htrsh_infovars;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
@@ -1736,7 +1867,7 @@ htrsh_feats_catregions () {
   done
 
   ### Check page and obtain basic info ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC;
+  local $htrsh_infovars;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
@@ -2008,7 +2139,7 @@ htrsh_pageimg_extract_linefeats () {
   done
 
   ### Check page and obtain basic info ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC;
+  local $htrsh_infovars;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
@@ -2673,9 +2804,13 @@ htrsh_hmm_train () {
         ### Multi-thread ###
         if [ "$THREADS" -gt 1 ]; then
           local TMPDIR="$OUTDIR";
-          htrsh_run_parallel 1:$THREADS HERest \
+          #htrsh_run_parallel 1:$THREADS HERest \
+          #  $htrsh_HTK_HERest_opts -C <( echo "$htrsh_HTK_config" ) \
+          #  -S "$OUTDIR/train_feats_part_JOBID" -p JOBID \
+          #  -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" -M "$OUTDIR" <( echo "$HMMLST" ) 1>&2;
+          htrsh_run_parallel -t $THREADS HERest \
             $htrsh_HTK_HERest_opts -C <( echo "$htrsh_HTK_config" ) \
-            -S "$OUTDIR/train_feats_part_JOBID" -p JOBID \
+            -S "$OUTDIR/train_feats_part_{#}" -p '{#}' \
             -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" -M "$OUTDIR" <( echo "$HMMLST" ) 1>&2;
           [ "$?" != 0 ] &&
             echo "$FN: error: problem with parallel HERest" 1>&2 &&
@@ -2781,7 +2916,8 @@ htrsh_hvite_parallel () {
   fi
 
   sort -R "$FEATLST" \
-    | htrsh_run_parallel_list "$THREADS" - "${CMD[@]}" 1>&2;
+    | htrsh_run_parallel -t $THREADS -n balanced -l - "${CMD[@]}" 1>&2;
+  #  | htrsh_run_parallel_list "$THREADS" - "${CMD[@]}" 1>&2;
   [ "$?" != 0 ] &&
     echo "$FN: error: problems executing $CMD ($TMPRND)" 1>&2 &&
     return 1;
@@ -2914,7 +3050,7 @@ htrsh_pagexml_insertalign_lines () {
   fi
 
   ### Check XML file and image ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT;
+  local $htrsh_infovars;
   htrsh_pageimg_info "$XML" noimg;
   [ "$?" != 0 ] && return 1;
 
@@ -3180,7 +3316,7 @@ htrsh_pageimg_forcealign_lines () {
   fi
 
   ### Check XML file and image ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC;
+  local $htrsh_infovars;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
   local B=$(echo "$XMLBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
@@ -3299,12 +3435,12 @@ htrsh_pageimg_forcealign () {
   fi
 
   ### Check page ###
-  local XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC;
+  local $htrsh_infovars;
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
-  #local RCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextEquiv/_:Unicode)" "$XML");
-  local RCNT="0";
+  local RCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextEquiv/_:Unicode)" "$XML");
+  #local RCNT="0";
   local LCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/$htrsh_xpath_lines/_:TextEquiv/_:Unicode)" "$XML");
   [ "$RCNT" = 0 ] && [ "$LCNT" = 0 ] &&
     echo "$FN: error: no TextEquiv/Unicode nodes for processing: $XML" 1>&2 &&
