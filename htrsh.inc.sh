@@ -304,6 +304,10 @@ htrsh_run_parallel () {(
   [ ! -d "$TMP" ] &&
     echo "$FN: error: failed to write to temporal directory: $TMP" 1>&2 &&
     return 1;
+  local FSTYPE=$( df -PT "$TMP" | sed -n '2{ s|^[^ ]* *||; s| .*||; p; }' );
+  ( [ "$FSTYPE" = "nfs" ] || [[ "$FSTYPE" == *sshfs* ]] ) &&
+    echo "$FN: error: temporal directory should be on a local file system: $FSTYPE" 1>&2 &&
+    return 1;
 
   ### Prepare command ###
   local PROTO=("$@");
@@ -366,7 +370,7 @@ htrsh_run_parallel () {(
               if( n >= limit_level || n >= limit_list ) {
                 printf( " %d", nlist );
                 nlist = 0;
-                if( n > limit_level ) {
+                if( n >= limit_level ) {
                   fact *= fact0;
                   limit_list = limit_level + fact*NLIST/NTHREADS;
                   limit_level += fact*NLIST;
@@ -387,30 +391,40 @@ htrsh_run_parallel () {(
     fi
   fi
 
-  ### Sed script to remove tail file headers and prepend IDs to each line ###
-  local PROC_LOGS=':loop;
+  ### Join thread logs prepending IDs to each line ###
+  local PROC_LOGS="/::$FN::/q;"' :loop;
     /^$/ { N; /\n==> .* <==$/! { G; s|^\(.*\)\n\([^\n]*\)$|\2\1|; P; }; D; b loop; };
     /^==> .* <==$/ { s|^==> .*/[oe][ur][tr]_\([^ ]*\) <==$|\1\t|; h; d; };
-    G; s|^\(.*\)\n\([^\n]*\)$|\2\1|;';
+    G; s|^\(.*\)\n\([^\n]*\)$|\2\1|; p;';
 
-  ### Parallel stdout and stdin ###
   local THREAD;
   for THREAD in "${THREADS[@]}"; do
     mkfifo "$TMP/out_$THREAD" "$TMP/err_$THREAD";
   done
-  { tail --pid=$$ -fn +1 "$TMP"/out_* &
-    echo "outPID $!" >> "$TMP/state";
-  } | sed -u "$PROC_LOGS" &
-  { tail --pid=$$ -fn +1 "$TMP"/err_* &
-    echo "errPID $!" >> "$TMP/state";
-  } | sed -u "$PROC_LOGS" 1>&2 &
+  mkfifo "$TMP/out" "$TMP/err";
+  local SEDPID;
+  sed -un "$PROC_LOGS" < "$TMP/out"      & SEDPID[0]="$!";
+  tail --pid=${SEDPID[0]} -fn +1 "$TMP"/out_* > "$TMP/out" &
+  sed -un "$PROC_LOGS" < "$TMP/err" 1>&2 & SEDPID[1]="$!";
+  tail --pid=${SEDPID[1]} -fn +1 "$TMP"/err_* > "$TMP/err" &
 
   ### Cleanup function ###
   trap cleanup INT;
   cleanup () {
-    kill $(sed -n '/^[oe][ur][tr]PID /{ s|^...PID ||; p; }' "$TMP/state");
-    NTHREADS=$(grep -c '^THREAD:[^ ]* failed$' "$TMP/state");
-    [ "$NTHREADS" != 0 ] && grep '^THREAD:[^ ]* failed$' "$TMP/state" 1>&2;
+    echo "::$FN::" >> "$TMP/out_${THREADS[0]}";
+    echo "::$FN::" >> "$TMP/err_${THREADS[0]}";
+    local SLEEP="0.01";
+    for n in $(seq 1 10); do
+      ( ! ( ps -p "${SEDPID[0]}" || ps -p "${SEDPID[1]}" ) >/dev/null ) && break;
+      sleep "$SLEEP";
+      SLEEP=$(echo "$SLEEP+$SLEEP" | bc);
+    done
+    ( ps -p "${SEDPID[0]}" || ps -p "${SEDPID[1]}" ) >/dev/null && 
+      kill ${SEDPID[@]} 2>/dev/null;
+    #[ $(uname) = "Darwin" ] &&
+    #  echo "$FN: warning: on OS X output may be incomplete" 1>&2;
+    NTHREADS=$(grep -c '^THREAD:.* failed$' "$TMP/state");
+    [ "$NTHREADS" != 0 ] && grep '^THREAD:.* failed$' "$TMP/state" 1>&2;
     [ "$LISTFD" != "" ] && exec {LISTFD}>&-;
     [ "$KEEPTMP" != "yes" ] && rm -r "$TMP";
     cleanup () { return 0; };
@@ -439,7 +453,7 @@ htrsh_run_parallel () {(
     CMD=("${CMD[@]//\{\#\}/$NUMP}");
     if [ "$LIST" != "" ]; then
       LISTP=$( readlist );
-      [ "$LISTP" = "" ] && return;
+      [ "$LISTP" = "" ] && return 0;
     fi
     echo "THREAD:$THREAD:$NUMP starting" >> "$TMP/state";
     { if [ "$ARGPOS" != 0 ]; then
@@ -456,15 +470,16 @@ htrsh_run_parallel () {(
       else
         "${CMD[@]}";
       fi
-      [ "$?" != 0 ] && echo "THREAD:$THREAD:$NUMP failed" >> "$TMP/state";
+      local RC="$?";
+      [ "$RC" != 0 ] && echo "THREAD:$THREAD:$NUMP $RC failed" >> "$TMP/state";
       echo "THREAD:$THREAD:$NUMP ended" >> "$TMP/state";
     } >> "$TMP/out_$THREAD" 2>> "$TMP/err_$THREAD" &
   }
 
   ( local NUMP=0;
     for THREAD in "${THREADS[@]}"; do
-      > "$TMP/out_$THREAD";
-      > "$TMP/err_$THREAD";
+      >> "$TMP/out_$THREAD";
+      >> "$TMP/err_$THREAD";
       NUMP=$((NUMP+1));
       runcmd "$THREAD" "$NUMP";
     done
