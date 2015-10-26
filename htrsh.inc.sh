@@ -230,7 +230,7 @@ htrsh_run_parallel () {(
       echo "              or range {#ini}:[{#inc}:]{#end} (def.=$THREADS)";
       echo " -l LIST      List of elements to process, either a file (- is stdin), list";
       echo "              {el1},{el2},... or range {#ini}:[{#inc}:]{#end} (def.=none)";
-      echo " -n NUMELEM   Elements per instance, either an int>0 or 'balance' (def.=$NUMELEM)";
+      echo " -n NUMELEM   Elements per instance, either an int>0, 'split' or 'balance' (def.=$NUMELEM)";
       echo " -k (yes|no)  Whether to keep temporal files (def.=$KEEPTMP)";
       echo " -d TMPDIR   Use given directory for temporal files, also sets -k yes (def.=false)";
       echo "Environment variables:";
@@ -348,11 +348,12 @@ htrsh_run_parallel () {(
       return 1;
     fi
 
-    if [ "$NUMELEM" = "balance" ]; then
+    if [ "$NUMELEM" = "balance" ] || [ "$NUMELEM" = "split" ]; then
       NLIST=$( tee "$TMP/list" <&$LISTFD | wc -l );
       exec {LISTFD}>&-;
       exec {LISTFD}< "$TMP/list";
 
+      [ "$NUMELEM" = "balance" ] &&
       NLIST=( $( awk -v fact0=0.5 -v NTHREADS="$NTHREADS" -v NLIST="$NLIST" '
         BEGIN {
           if ( NTHREADS == 1 )
@@ -381,6 +382,32 @@ htrsh_run_parallel () {(
             }
             if( nlist > 0 )
               printf( " %d", nlist );
+          }
+        }' ) );
+
+      [ "$NUMELEM" = "split" ] &&
+      NLIST=( $( awk -v NTHREADS="$NTHREADS" -v NLIST="$NLIST" '
+        BEGIN {
+          if ( NTHREADS == 1 )
+            printf( " %d", NLIST );
+          else if( NLIST <= NTHREADS )
+            for ( n=1; n<=NLIST; n++ )
+              printf( " 1" );
+          else {
+            fact0 = NLIST/NTHREADS;
+            fact = fact0;
+            accu = fact0;
+            nxt = sprintf("%.0f",accu);
+            prev = 0;
+            for ( n=1; n<=NLIST; n++ )
+              if( n == nxt ) {
+                printf( " %d", n-prev );
+                prev = n;
+                accu += fact0;
+                nxt = sprintf( "%.0f", accu );
+              }
+            if( NLIST > prev )
+              printf( " %d", n-prev );
           }
         }' ) );
 
@@ -438,7 +465,7 @@ htrsh_run_parallel () {(
   ### Function to read elements from the list ###
   readlist () {
     local NUM="$NUMELEM";
-    if [ "$NUM" = "balance" ]; then
+    if [ "$NUM" = "balance" ] || [ "$NUM" = "split" ]; then
       [ "$NUMP" -gt "${#NLIST[@]}" ] &&
         echo "listdone" >> "$TMP/state" &&
         return 0;
@@ -1787,6 +1814,7 @@ htrsh_feats_pca () {(
       echo " -e EXCL     Dimensions to exclude in matlab range format (def.=false)";
       echo " -r RDIM     Return base of RDIM dimensions (def.=all)";
       echo " -R (yes|no) Random rotation (def.=$RNDR)";
+      echo " -T THREADS  Threads for parallel processing (def.=$THREADS)";
     } 1>&2;
     return 1;
   fi
@@ -1802,6 +1830,8 @@ htrsh_feats_pca () {(
       RDIM="$2";
     elif [ "$1" = "-R" ]; then
       RNDR="$2";
+    elif [ "$1" = "-T" ]; then
+      THREADS="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -1827,56 +1857,77 @@ htrsh_feats_pca () {(
   else
 
   local xEXCL=""; [ "$EXCL" != "[]" ] && xEXCL="se = se + sum(x(:,$EXCL)); x(:,$EXCL) = [];";
+  local xxEXCL=""; [ "$EXCL" != "[]" ] && xxEXCL="se = se + cse;";
   local nRDIM="D"; [ "$RDIM" != "" ] && nRDIM="min(D,$RDIM)";
 
-if false; then
-  htrsh_comp_cumcov () {
-    { local f=$(head -n 1 < "$1");
+  htrsh_comp_csgma () {
+    { local f;
       echo "
         DE = length($EXCL);
         se = zeros(1,DE);
-        x = readhtk('$f'); $xEXCL
-        N = size(x,1);
-        mu = sum(x);
-        sgma = x'*x;
       ";
-      for f in $(tail -n +2 < "$1"); do
+      for f in $(<"$1"); do
         echo "
           x = readhtk('$f'); $xEXCL
-          N = N + size(x,1);
-          mu = mu + sum(x);
-          sgma = sgma + x'*x;
+          if ~exist('cN','var')
+            cN = size(x,1);
+            cmu = sum(x);
+            csgma = x'*x;
+          else
+            cN = cN + size(x,1);
+            cmu = cmu + sum(x);
+            csgma = csgma + x'*x;
+          end
         ";
       done
-      if [ "$#" -gt 1 ]; then
-        echo "
-          cN = N;
-          cmu = mu;
-          csgma = sgma;
-          save('$2','cN','cmu','csgma');
-        ";
-      fi
+      echo "
+        cse = se;
+        save('-z','$2','cN','cmu','csgma','cse');
+      ";
     } | octave -q -H;
   }
-fi
 
-  { local f=$(head -n 1 < "$FEATLST");
+  htrsh_run_parallel -T "$THREADS" -n split -l "$FEATLST" htrsh_comp_csgma "{@}" "$OUTMAT.csgma{%}.mat.gz";
+  [ "$?" != 0 ] &&
+    echo "$FN: error: problems computing PCA" 1>&2 &&
+    return 1;
+
+  { local f;
     echo "
       DE = length($EXCL);
       se = zeros(1,DE);
-      x = readhtk('$f'); $xEXCL
-      N = size(x,1);
-      mu = sum(x);
-      sgma = x'*x;
     ";
-    for f in $(tail -n +2 < "$FEATLST"); do
+    for f in "$OUTMAT.csgma"*.mat.gz; do
       echo "
-        x = readhtk('$f'); $xEXCL
-        N = N + size(x,1);
-        mu = mu + sum(x);
-        sgma = sgma + x'*x;
+        load('$f'); $xxEXCL
+        if ~exist('N','var')
+          N = cN;
+          mu = cmu;
+          sgma = csgma;
+        else
+          N = N + cN;
+          mu = mu + cmu;
+          sgma = sgma + csgma;
+        end
       ";
     done
+    #local f=$(head -n 1 < "$FEATLST");
+    #echo "
+    #  DE = length($EXCL);
+    #  se = zeros(1,DE);
+    #  x = readhtk('$f'); $xEXCL
+    #  N = size(x,1);
+    #  mu = sum(x);
+    #  sgma = x'*x;
+    #";
+    #for f in $(tail -n +2 < "$FEATLST"); do
+    #  echo "
+    #    x = readhtk('$f'); $xEXCL
+    #    N = N + size(x,1);
+    #    mu = mu + sum(x);
+    #    sgma = sgma + x'*x;
+    #  ";
+    #done
     echo "
       mu = (1/N)*mu;
       sgma = (1/N)*sgma - mu'*mu;
@@ -1914,6 +1965,8 @@ fi
     fi
     echo "save('-z','$OUTMAT','B','V','mu');";
   } | octave -q -H;
+
+  rm "$OUTMAT.csgma"*.mat.gz;
 
   fi
 
@@ -2540,7 +2593,7 @@ htrsh_hmm_train () {
       echo " -k (yes|no)  Whether to keep models per iteration, including initialization (def.=$KEEPITERS)";
       echo " -r (yes|no)  Whether to resume previous training, looks for models per iteration (def.=$RESUME)";
       echo " -R (yes|no)  Whether to randomize initialization prototype (def.=$RAND)";
-      echo " -T THREADS   Threads for parallel processing, max. 99 (def.=$THREADS)";
+      echo " -T THREADS   Threads for parallel processing (def.=$THREADS)";
     } 1>&2;
     return 1;
   fi
