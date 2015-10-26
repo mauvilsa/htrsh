@@ -438,7 +438,12 @@ htrsh_run_parallel () {(
   ### Function to read elements from the list ###
   readlist () {
     local NUM="$NUMELEM";
-    [ "$NUM" = "balance" ] && NUM="${NLIST[$((NUMP-1))]}";
+    if [ "$NUM" = "balance" ]; then
+      [ "$NUMP" -gt "${#NLIST[@]}" ] &&
+        echo "listdone" >> "$TMP/state" &&
+        return 0;
+      NUM="${NLIST[$((NUMP-1))]}";
+    fi
     for n in $(seq 1 $NUM); do
       IFS= read -r -u$LISTFD line;
       if [ "$?" != 0 ]; then
