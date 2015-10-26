@@ -1772,11 +1772,13 @@ htrsh_feats_catregions () {
 ##
 ## Function that computes a PCA base for a given list of HTK features
 ##
-htrsh_feats_pca () {
+# @todo make this parallel
+htrsh_feats_pca () {(
   local FN="htrsh_feats_pca";
   local EXCL="[]";
   local RDIM="";
   local RNDR="no";
+  local THREADS="1";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Computes a PCA base for a given list of HTK features";
@@ -1826,6 +1828,37 @@ htrsh_feats_pca () {
 
   local xEXCL=""; [ "$EXCL" != "[]" ] && xEXCL="se = se + sum(x(:,$EXCL)); x(:,$EXCL) = [];";
   local nRDIM="D"; [ "$RDIM" != "" ] && nRDIM="min(D,$RDIM)";
+
+if false; then
+  htrsh_comp_cumcov () {
+    { local f=$(head -n 1 < "$1");
+      echo "
+        DE = length($EXCL);
+        se = zeros(1,DE);
+        x = readhtk('$f'); $xEXCL
+        N = size(x,1);
+        mu = sum(x);
+        sgma = x'*x;
+      ";
+      for f in $(tail -n +2 < "$1"); do
+        echo "
+          x = readhtk('$f'); $xEXCL
+          N = N + size(x,1);
+          mu = mu + sum(x);
+          sgma = sgma + x'*x;
+        ";
+      done
+      if [ "$#" -gt 1 ]; then
+        echo "
+          cN = N;
+          cmu = mu;
+          csgma = sgma;
+          save('$2','cN','cmu','csgma');
+        ";
+      fi
+    } | octave -q -H;
+  }
+fi
 
   { local f=$(head -n 1 < "$FEATLST");
     echo "
@@ -1887,9 +1920,7 @@ htrsh_feats_pca () {
   [ "$?" != 0 ] &&
     echo "$FN: error: problems computing PCA" 1>&2 &&
     return 1;
-
-  return 0;
-}
+)}
 
 ##
 ## Function that projects a list of features for a given base
@@ -2669,7 +2700,7 @@ htrsh_hmm_train () {
 
         ### Multi-thread ###
         if [ "$THREADS" -gt 1 ]; then
-          local TMPDIR="$OUTDIR";
+          #local TMPDIR="$OUTDIR";
           htrsh_run_parallel -T $THREADS HERest \
             $htrsh_HTK_HERest_opts -C <( echo "$htrsh_HTK_config" ) \
             -S "$OUTDIR/train_feats_part_{#}" -p '{#}' \
