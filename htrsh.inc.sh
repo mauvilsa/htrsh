@@ -397,16 +397,23 @@ htrsh_run_parallel () {(
     /^==> .* <==$/ { s|^==> .*/[oe][ur][tr]_\([^ ]*\) <==$|\1\t|; h; d; };
     G; s|^\(.*\)\n\([^\n]*\)$|\2\1|; p;';
 
+echo "before tails" 1>&2;
+
   local THREAD;
   for THREAD in "${THREADS[@]}"; do
-    mkfifo "$TMP/out_$THREAD" "$TMP/err_$THREAD";
+    #mkfifo "$TMP/out_$THREAD" "$TMP/err_$THREAD"; # for many threads hangs in >> "$TMP/out_$THREAD"; why?
+    > "$TMP/out_$THREAD"; > "$TMP/err_$THREAD";
   done
   mkfifo "$TMP/out" "$TMP/err";
   local SEDPID;
   sed -un "$PROC_LOGS" < "$TMP/out"      & SEDPID[0]="$!";
-  tail --pid=${SEDPID[0]} -fn +1 "$TMP"/out_* > "$TMP/out" &
+  tail --pid=${SEDPID[0]} -f "$TMP"/out_* > "$TMP/out" &
   sed -un "$PROC_LOGS" < "$TMP/err" 1>&2 & SEDPID[1]="$!";
-  tail --pid=${SEDPID[1]} -fn +1 "$TMP"/err_* > "$TMP/err" &
+  tail --pid=${SEDPID[1]} -f "$TMP"/err_* > "$TMP/err" &
+  #for THREAD in "${THREADS[@]}"; do
+  #  >> "$TMP/out_$THREAD";
+  #  >> "$TMP/err_$THREAD";
+  #done
 
   ### Cleanup function ###
   trap cleanup INT;
@@ -478,8 +485,8 @@ htrsh_run_parallel () {(
 
   ( local NUMP=0;
     for THREAD in "${THREADS[@]}"; do
-      >> "$TMP/out_$THREAD";
-      >> "$TMP/err_$THREAD";
+      #>> "$TMP/out_$THREAD";
+      #>> "$TMP/err_$THREAD";
       NUMP=$((NUMP+1));
       runcmd "$THREAD" "$NUMP";
     done
