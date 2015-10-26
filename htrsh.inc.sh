@@ -397,8 +397,6 @@ htrsh_run_parallel () {(
     /^==> .* <==$/ { s|^==> .*/[oe][ur][tr]_\([^ ]*\) <==$|\1\t|; h; d; };
     G; s|^\(.*\)\n\([^\n]*\)$|\2\1|; p;';
 
-echo "before tails" 1>&2;
-
   local THREAD;
   for THREAD in "${THREADS[@]}"; do
     #mkfifo "$TMP/out_$THREAD" "$TMP/err_$THREAD"; # for many threads hangs in >> "$TMP/out_$THREAD"; why?
