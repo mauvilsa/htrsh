@@ -440,6 +440,9 @@ htrsh_run_parallel () {(
   #  >> "$TMP/err_$THREAD";
   #done
 
+  local ENDFD;
+  exec {ENDFD}< <( tail --pid=${SEDPID[0]} -f "$TMP/state" | grep --line-buffered ' ended$' );
+
   ### Cleanup function ###
   trap cleanup INT;
   cleanup () {
@@ -458,6 +461,7 @@ htrsh_run_parallel () {(
     NTHREADS=$(grep -c '^THREAD:.* failed$' "$TMP/state");
     [ "$NTHREADS" != 0 ] && grep '^THREAD:.* failed$' "$TMP/state" 1>&2;
     [ "$LISTFD" != "" ] && exec {LISTFD}>&-;
+    exec {ENDFD}>&-;
     [ "$KEEPTMP" != "yes" ] && rm -r "$TMP";
     cleanup () { return 0; };
   }
@@ -472,11 +476,11 @@ htrsh_run_parallel () {(
       NUM="${NLIST[$((NUMP-1))]}";
     fi
     for n in $(seq 1 $NUM); do
+      local line;
       IFS= read -r -u$LISTFD line;
-      if [ "$?" != 0 ]; then
-        echo "listdone" >> "$TMP/state";
+      [ "$?" != 0 ] &&
+        echo "listdone" >> "$TMP/state" &&
         break;
-      fi
       echo "$line";
     done
   }
@@ -541,7 +545,8 @@ htrsh_run_parallel () {(
         runcmd "$THREAD" "$NUMP";
         continue;
       fi
-      sleep 1;
+      local ended;
+      IFS= read -r -u$ENDFD ended;
     done
   )
 
