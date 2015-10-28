@@ -8,9 +8,6 @@
 ## @copyright Copyright(c) 2014 to the present, Mauricio Villegas (UPV)
 ##
 
-# @todo maybe shoud change @id paths to depend on base node type
-# @todo or when validating check that all ids are different
-
 [ "${BASH_SOURCE[0]}" = "$0" ] && 
   echo "htrsh.inc.sh: error: not intended for direct execution, use htrsh_load" 1>&2 &&
   exit 1;
@@ -819,6 +816,9 @@ htrsh_pageimg_info () {
   elif [ $(eval xmlstarlet val $VAL "'$XML'" | grep ' invalid$' | wc -l) != 0 ]; then
     echo "$FN: error: invalid page file: $XML" 1>&2;
     return 1;
+  elif [ $(xmlstarlet sel -t -m '//*/@id' -v . -n "$XML" 2>/dev/null | sort | uniq -d | wc -l) != 0 ]; then
+    echo "$FN: error: page file has duplicate IDs: $XML" 1>&2;
+    return 1;
   fi
 
   if [ $# -eq 1 ] || [ "$2" != "noinfo" ]; then
@@ -967,51 +967,6 @@ htrsh_pageimg_resize () {
 }
 
 ##
-## Function that reorders lines of an XML Page file based ONLY on the baseline's first x,y coordinates
-##
-htrsh_pagexml_orderlines () {
-  local FN="htrsh_pagexml_orderlines";
-  if [ $# != 0 ]; then
-    { echo "$FN: Error: Incorrect input arguments";
-      echo "Description: Reorders the lines of an XML Page file based ONLY on the baseline's first x,y coordinates";
-      echo "Usage: $FN < XML_PAGE_FILE";
-    } 1>&2;
-    return 1;
-  fi
-
-  local XSLT='<?xml version="1.0"?>
-<xsl:stylesheet
-  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
-  xmlns:_="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
-  version="1.0">
-
-  <xsl:output method="xml" indent="yes" encoding="utf-8" omit-xml-declaration="no"/>
-
-  <xsl:variable name="Width" select="//_:Page/@imageWidth"/>
-
-  <xsl:template match="@* | node()">
-    <xsl:copy>
-      <xsl:apply-templates select="@* | node()"/>
-    </xsl:copy>
-  </xsl:template>
-
-  <xsl:template match="//_:TextRegion[count(_:TextLine)=count(_:TextLine/_:Baseline)]">
-    <xsl:copy>
-      <xsl:apply-templates select="@* | node()[not(self::_:TextLine)]" />
-      <xsl:apply-templates select="_:TextLine">
-        <!--<xsl:sort select="number(substring-before(substring-after(_:Baseline/@points,&quot;,&quot;),&quot; &quot;))" data-type="number" order="ascending"/>-->
-        <xsl:sort select="number(substring-before(substring-after(_:Baseline/@points,&quot;,&quot;),&quot; &quot;))+(number(substring-before(_:Baseline/@points,&quot;,&quot;)) div number($Width))" data-type="number" order="ascending"/>
-      </xsl:apply-templates>
-    </xsl:copy>
-  </xsl:template>
-</xsl:stylesheet>';
-
-  xmlstarlet tr <( echo "$XSLT" ) < /dev/stdin;
-}
-
-##
 ## Function that resizes an XML Page file
 ##
 htrsh_pagexml_resize () {
@@ -1086,15 +1041,12 @@ htrsh_pagexml_resize () {
           <xsl:choose>
             <xsl:when test="position() = 1">
               <xsl:value-of select="number($scaleWidth)*number(.)"/>
-              <!--<xsl:value-of select="round(number($scaleWidth)*number(.))"/>-->
             </xsl:when>
             <xsl:when test="position() mod 2 = 0">
               <xsl:text>,</xsl:text><xsl:value-of select="number($scaleHeight)*number(.)"/>
-              <!--<xsl:text>,</xsl:text><xsl:value-of select="round(number($scaleHeight)*number(.))"/>-->
             </xsl:when>
             <xsl:otherwise>
               <xsl:text> </xsl:text><xsl:value-of select="number($scaleWidth)*number(.)"/>
-              <!--<xsl:text> </xsl:text><xsl:value-of select="round(number($scaleWidth)*number(.))"/>-->
             </xsl:otherwise>
           </xsl:choose>
         </xsl:for-each>
@@ -1168,13 +1120,13 @@ htrsh_pagexml_round () {
 
 ##
 ## Function that sorts TextLines within each TextRegion in an XML Page file
-## (sorts using only the first Y coordinate of baselines)
+## (based ONLY on the first Y coordinate of the baselines)
 ##
 htrsh_pagexml_sort_lines () {
   local FN="htrsh_pagexml_sort_lines";
   if [ $# != 0 ]; then
-    { echo "$FN: error: function does not expect arguments";
-      echo "Description: Sorts TextLines within each TextRegion in an XML Page file (sorts using only the first Y coordinate of baselines)";
+    { echo "$FN: Error: Incorrect input arguments";
+      echo "Description: Sorts TextLines within each TextRegion in an XML Page file (based ONLY on the first Y coordinate of the baselines)";
       echo "Usage: $FN < XMLIN";
     } 1>&2;
     return 1;
@@ -1190,17 +1142,19 @@ htrsh_pagexml_sort_lines () {
 
   <xsl:output method="xml" indent="yes" encoding="utf-8" omit-xml-declaration="no"/>
 
+  <xsl:variable name="Width" select="//_:Page/@imageWidth"/>
+
   <xsl:template match="@* | node()">
     <xsl:copy>
       <xsl:apply-templates select="@* | node()"/>
     </xsl:copy>
   </xsl:template>
 
-  <xsl:template match="//_:TextRegion">
+  <xsl:template match="//_:TextRegion[count(_:TextLine)=count(_:TextLine/_:Baseline)]">
     <xsl:copy>
       <xsl:apply-templates select="@* | node()[not(self::_:TextLine)]" />
       <xsl:apply-templates select="_:TextLine">
-        <xsl:sort select="number(substring-before(substring-after(_:Baseline/@points,&quot;,&quot;),&quot; &quot;))" data-type="number" order="ascending"/>
+        <xsl:sort select="number(substring-before(substring-after(_:Baseline/@points,&quot;,&quot;),&quot; &quot;))+(number(substring-before(_:Baseline/@points,&quot;,&quot;)) div number($Width))" data-type="number" order="ascending"/>
       </xsl:apply-templates>
     </xsl:copy>
   </xsl:template>
@@ -1211,12 +1165,12 @@ htrsh_pagexml_sort_lines () {
 
 ##
 ## Function that sorts TextRegions in an XML Page file
-## (sorts using only the minimum Y coordinate of the region Coords)
+## (based ONLY on the minimum Y coordinate of the region Coords)
 ##
 htrsh_pagexml_sort_regions () {
   local FN="htrsh_pagexml_sort_regions";
   if [ $# != 0 ]; then
-    { echo "$FN: error: function does not expect arguments";
+    { echo "$FN: Error: Incorrect input arguments";
       echo "Description: Sorts TextRegions in an XML Page file (sorts using only the minimum Y coordinate of the region Coords)";
       echo "Usage: $FN < XMLIN";
     } 1>&2;
@@ -1233,6 +1187,8 @@ htrsh_pagexml_sort_regions () {
 
   <xsl:output method="xml" indent="yes" encoding="utf-8" omit-xml-declaration="no"/>
 
+  <xsl:variable name="Width" select="//_:Page/@imageWidth"/>
+
   <xsl:template match="@* | node()">
     <xsl:copy>
       <xsl:apply-templates select="@* | node()"/>
@@ -1243,7 +1199,8 @@ htrsh_pagexml_sort_regions () {
     <xsl:copy>
       <xsl:apply-templates select="@* | node()[not(self::_:TextRegion)]" />
       <xsl:apply-templates select="_:TextRegion">
-        <xsl:sort select="min(for $i in tokenize(replace(_:Coords/@points,'"'\d+,'"','"''"'),'"' '"') return number($i))" data-type="number" order="ascending"/>
+        <!--<xsl:sort select="min(for $i in tokenize(replace(_:Coords/@points,'"'\d+,'"','"''"'),'"' '"') return number($i))" data-type="number" order="ascending"/>-->
+        <xsl:sort select="min(for $i in tokenize(replace(_:Coords/@points,'"'\d+,'"','"''"'),'"' '"') return number($i))+(min(for $i in tokenize(replace(_:Coords/@points,'"',\d+'"','"''"'),'"' '"') return number($i)) div number($Width))" data-type="number" order="ascending"/>
       </xsl:apply-templates>
     </xsl:copy>
   </xsl:template>
@@ -1804,7 +1761,6 @@ htrsh_feats_catregions () {
 ##
 ## Function that computes a PCA base for a given list of HTK features
 ##
-# @todo make this parallel
 htrsh_feats_pca () {(
   local FN="htrsh_feats_pca";
   local EXCL="[]";
@@ -3429,8 +3385,6 @@ htrsh_pageimg_forcealign () {
   ### Rescale image for processing ###
   if [ "$SFACT" != "" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): rescaling image ...";
-    #SFACT=$(echo "100*$SFACT/$IMRES" | bc -l);
-    # @todo check support for SFACT in %
     SFACT=$(echo "$SFACT" "$IMRES" | awk '{printf("%g",match($1,"%$")?$1:100*$1/$2)}');
     mkdir "$TMPDIR/scaled";
     mv "$TMPDIR/proc/"* "$TMPDIR";
