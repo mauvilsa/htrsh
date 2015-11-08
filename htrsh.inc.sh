@@ -38,10 +38,10 @@ htrsh_feat_dilradi="0.5"; # Dilation radius in mm for contours
 htrsh_feat_normxheight="18"; # Normalize x-height to a fixed number of pixels
 
 htrsh_feat="dotmatrix";    # Type of features to extract
-htrsh_dotmatrix_shift="2"; # Sliding window shift in px, should change this to mm
-htrsh_dotmatrix_win="20";  # Sliding window width in px, should change this to mm
-htrsh_dotmatrix_W="8";     # Width of normalized frame in px, should change this to mm
-htrsh_dotmatrix_H="32";    # Height of normalized frame in px, should change this to mm
+htrsh_dotmatrix_shift="2"; # Sliding window shift in px, should be with respect to x-height
+htrsh_dotmatrix_win="20";  # Sliding window width in px, should be with respect to x-height
+htrsh_dotmatrix_W="8";     # Width of normalized frame in px
+htrsh_dotmatrix_H="32";    # Height of normalized frame in px
 htrsh_dotmatrix_mom="yes"; # Whether to add moments to features
 
 htrsh_align_chars="no";             # Whether to align at a character level
@@ -450,7 +450,7 @@ htrsh_run_parallel () {(
     for n in $(seq 1 10); do
       ( ! ( ps -p "${SEDPID[0]}" || ps -p "${SEDPID[1]}" ) >/dev/null ) && break;
       sleep "$SLEEP";
-      SLEEP=$(echo "$SLEEP+$SLEEP" | bc);
+      SLEEP=$(echo "$SLEEP+$SLEEP" | bc -l);
     done
     ( ps -p "${SEDPID[0]}" || ps -p "${SEDPID[1]}" ) >/dev/null && 
       kill ${SEDPID[@]} 2>/dev/null;
@@ -1120,6 +1120,96 @@ htrsh_pagexml_round () {
 }
 
 ##
+## Function that sorts Words from left to right within TextLines in an XML Page file
+## (based ONLY on (xmin+xmax)/2 of the word Coords)
+##
+htrsh_pagexml_sort_words () {
+  local FN="htrsh_pagexml_sort_words";
+  if [ $# != 0 ]; then
+    { echo "$FN: Error: Incorrect input arguments";
+      echo "Description: Sorts Words from left to right within TextLines in an XML Page file (based ONLY on (xmin+xmax)/2 of the word Coords)";
+      echo "Usage: $FN < XMLIN";
+    } 1>&2;
+    return 1;
+  fi
+
+  local XML=$(cat /dev/stdin);
+
+  local SORTVALS=$(
+    xmlstarlet sel -t -m '//_:TextLine[_:Word]' -v @id -o " " -v 'count(_:Word)' -m _:Word -o " | " -v @id -o " " -v _:Coords/@points -b -n <( echo "$XML" ) \
+      | sed 's|,[0-9]*||g' \
+      | awk '
+          { printf( "%s %s", $1, $2 );
+            mn = 1e9;
+            mx = 0;
+            id = $4;
+            for( n=5; n<=NF; n++ )
+              if( $n == "|" ) {
+                printf( " %s %g", id, (mn+mx)/2 );
+                mn = 1e9;
+                mx = 0;
+                n ++;
+                id = $n;
+              }
+              else {
+                mn = mn > $n ? $n : mn ;
+                mx = mx < $n ? $n : mx ;
+              }
+            printf( " %s %g\n", id, (mn+mx)/2 );
+          }' \
+      | awk '
+          { if( $2 != (NF-2)/2 )
+              printf( "parse error at line %s\n", $1 ) > "/dev/stderr";
+            else if( $2 != 1 ) {
+              for( n=6; n<=NF; n+=2 )
+                if( $n <= $(n-2) )
+                  break;
+              if( n <= NF ) {
+                printf( " -i '"'"'//*[@id=\"%s\"]'"'"' -t attr -n wordsort -v true", $1 );
+                for( n=3; n<=NF; n+=2 )
+                  printf( " -i '"'"'//*[@id=\"%s\"]'"'"' -t attr -n sortval -v %s", $n, $(n+1) );
+              }
+            }
+          }' );
+
+  local XSLT='<?xml version="1.0"?>
+<xsl:stylesheet
+  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  xmlns:_="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  version="1.0">
+
+  <xsl:output method="xml" indent="yes" encoding="utf-8" omit-xml-declaration="no"/>
+
+  <xsl:template match="@* | node()">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()"/>
+    </xsl:copy>
+  </xsl:template>
+
+  <xsl:template match="//_:TextLine[@wordsort]">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()[not(self::_:Word) and not(self::_:TextEquiv)]" />
+      <xsl:apply-templates select="_:Word">
+        <xsl:sort select="@sortval" data-type="number" order="ascending"/>
+      </xsl:apply-templates>
+      <xsl:apply-templates select="node()[self::_:TextEquiv]" />
+    </xsl:copy>
+  </xsl:template>
+</xsl:stylesheet>';
+
+  if [ "$SORTVALS" = "" ]; then
+    echo "$XML";
+  else
+    echo "$XML" \
+      | eval xmlstarlet ed $SORTVALS \
+      | xmlstarlet tr <( echo "$XSLT" ) \
+      | xmlstarlet ed -d //@wordsort -d //@sortval;
+  fi
+}
+
+##
 ## Function that sorts TextLines within each TextRegion in an XML Page file
 ## (based ONLY on the first Y coordinate of the baselines)
 ##
@@ -1311,6 +1401,46 @@ htrsh_pagexml_fpgram2points () {
   eval $cmd "'$XML'";
 }
 
+##
+## Function that replaces new line characters in TextEquiv/Unicode with spaces
+##
+htrsh_pagexml_rm_textequiv_newlines () {
+  local FN="htrsh_pagexml_rm_textequiv_newlines";
+  if [ $# != 0 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Replaces new line characters in TextEquiv/Unicode with spaces";
+      echo "Usage: $FN < XMLIN";
+    } 1>&2;
+    return 1;
+  fi
+
+  local XSLT='<?xml version="1.0"?>
+<xsl:stylesheet
+  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  xmlns:_="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  version="1.0">
+
+  <xsl:output method="xml" indent="yes" encoding="utf-8" omit-xml-declaration="no"/>
+
+  <xsl:template match="@* | node()">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()"/>
+    </xsl:copy>
+  </xsl:template>
+
+  <xsl:template match="//_:Unicode">
+    <xsl:copy>
+      <xsl:value-of select="translate(.,'"'&#10;'"','"' '"')"/>
+    </xsl:copy>
+  </xsl:template>
+
+</xsl:stylesheet>';
+
+  xmlstarlet tr <( echo "$XSLT" ) < /dev/stdin;
+}
+
 
 #--------------------------------------#
 # Feature extraction related functions #
@@ -1416,7 +1546,7 @@ htrsh_pageimg_quadborderclean () {
       echo "Usage: $FN XML OUTIMG [ Options ]";
       echo "Options:";
       echo " -c CFG      Options for imgpageborder (def.=$CFG)";
-      echo " -d TMPDIR   Directory for temporary files (def.=$TMPDIR)";
+      echo " -d TMPDIR   Directory for temporal files (def.=$TMPDIR)";
     } 1>&2;
     return 1;
   fi
@@ -1816,8 +1946,11 @@ htrsh_feats_pca () {(
             | sed -n '/^  Num Comps:/{s|^[^:]*: *||;s| .*||;p;}');
     tail -qc +13 $(< "$FEATLST") | swap4bytes | fast_pca -C -e $EXCL -f binary -b 500 -p $DIMS -m "$OUTMAT";
 
+    RC="$?";
+
   else
 
+  local RC;
   local xEXCL=""; [ "$EXCL" != "[]" ] && xEXCL="se = se + sum(x(:,$EXCL)); x(:,$EXCL) = [];";
   local xxEXCL=""; [ "$EXCL" != "[]" ] && xxEXCL="se = se + cse;";
   local nRDIM="D"; [ "$RDIM" != "" ] && nRDIM="min(D,$RDIM)";
@@ -1928,13 +2061,16 @@ htrsh_feats_pca () {(
     echo "save('-z','$OUTMAT','B','V','mu');";
   } | octave -q -H;
 
+  RC="$?";
+
   rm "$OUTMAT.csgma"*.mat.gz;
 
   fi
 
-  [ "$?" != 0 ] &&
-    echo "$FN: error: problems computing PCA" 1>&2 &&
-    return 1;
+  [ "$RC" != 0 ] &&
+    echo "$FN: error: problems computing PCA" 1>&2;
+
+  return $RC;
 )}
 
 ##
@@ -1971,7 +2107,7 @@ htrsh_feats_project () {
     for f in $(< "$FEATLST"); do
       ff=$(echo "$f" | sed "s|.*/|$OUTDIR/|");
       echo "
-        [x,FP,DT,TC,T] = readhtk('$f');
+        [x,FP,DT,TC] = readhtk('$f');
         x = (x-repmat(mu,size(x,1),1))*B;
         writehtk('$ff',x,FP,TC);
         ";
@@ -2259,7 +2395,7 @@ htrsh_langmodel_train () {
       echo "Usage: $FN TEXTFILE [ Options ]";
       echo "Options:";
       echo " -o ORDER        Order of the language model (def.=$ORDER)";
-      echo " -d OUTDIR       Directory for output models and temporary files (def.=$OUTDIR)";
+      echo " -d OUTDIR       Directory for output models and temporal files (def.=$OUTDIR)";
       echo " -T TOKENIZER    Tokenizer pipe command (def.=none)";
       echo " -C CANONIZER    Word canonization pipe command, e.g. convert to upper (def.=none)";
       echo " -D DIPLOMATIZER Word diplomatizer pipe command, e.g. remove expansions (def.=none)";
@@ -2549,7 +2685,7 @@ htrsh_hmm_train () {
       echo "Description: Trains HMMs for a given feature list and mlf";
       echo "Usage: $FN FEATLST MLF [ Options ]";
       echo "Options:";
-      echo " -d OUTDIR    Directory for output models and temporary files (def.=$OUTDIR)";
+      echo " -d OUTDIR    Directory for output models and temporal files (def.=$OUTDIR)";
       echo " -c CODES     Train discrete model with given codebook size (def.=false)";
       echo " -P PROTO     Use PROTO as initialization prototype (def.=false)";
       echo " -k (yes|no)  Whether to keep models per iteration, including initialization (def.=$KEEPITERS)";
@@ -3189,7 +3325,7 @@ htrsh_pageimg_forcealign_lines () {
       echo "Description: Does a forced alignment at a line level for a given XML Page, feature list and model";
       echo "Usage: $FN XMLIN FEATLST MODEL XMLOUT [ Options ]";
       echo "Options:";
-      echo " -d TMPDIR    Directory for temporary files (def.=$TMPDIR)";
+      echo " -d TMPDIR    Directory for temporal files (def.=$TMPDIR)";
     } 1>&2;
     return 1;
   fi
@@ -3279,13 +3415,13 @@ htrsh_pageimg_forcealign () {
       echo "Description: Does a line by line forced alignment given only a page with baselines or contours and optionally a model";
       echo "Usage: $FN XMLIN XMLOUT [ Options ]";
       echo "Options:";
-      echo " -d TMPDIR    Directory for temporary files (def.=$TMPDIR)";
+      echo " -d TMPDIR    Directory for temporal files (def.=$TMPDIR)";
       echo " -i INRES     Input image resolution in ppc (def.=use image metadata)";
       echo " -m MODEL     Use given model for aligning (def.=train model for page)";
       echo " -b PBASE     Project features using given base (def.=false)";
       echo " -e (yes|no)  Whether to enhance the image using imgtxtenh (def.=$ENHIMG)";
       echo " -p (yes|no)  Whether to compute PCA for image and project features (def.=$DOPCA)";
-      echo " -t (yes|no)  Whether to keep temporary directory and files (def.=$KEEPTMP)";
+      echo " -t (yes|no)  Whether to keep temporal directory and files (def.=$KEEPTMP)";
       echo " -a (yes|no)  Whether to keep auxiliary attributes in XML (def.=$KEEPAUX)";
       #echo " -q (yes|no)  Whether to clean quadrilateral border of regions (def.=$QBORD)";
       echo " -F FILTER    Filtering pipe command, e.g. tokenizer, transliteration, etc. (def.=none)";
@@ -3329,7 +3465,7 @@ htrsh_pageimg_forcealign () {
   done
 
   if [ -d "$TMPDIR" ]; then
-    echo -n "$FN: temporary directory ($TMPDIR) already exists, current contents will be deleted, continue? " 1>&2;
+    echo -n "$FN: temporal directory ($TMPDIR) already exists, current contents will be deleted, continue? " 1>&2;
     local RMTMP="";
     read RMTMP;
     if [ "${RMTMP:0:1}" = "y" ]; then
@@ -3451,7 +3587,7 @@ htrsh_pageimg_forcealign () {
     } > "$TMPDIR/${B}_page.mlf";
     [ "$?" != 0 ] && return 1;
     MODEL=$(
-      htrsh_hmm_train "$TMPDIR/${B}_feats.lst" "$TMPDIR/${B}_page.mlf" -d "$TMPDIR" \
+      htrsh_hmm_train "$TMPDIR/${B}_feats.lst" "$TMPDIR/${B}_page.mlf" -d "$TMPDIR" -k no \
         2> "$TMPDIR/${XMLBASE}_hmmtrain.log"
       );
     [ "$?" != 0 ] &&
