@@ -68,9 +68,22 @@ STARTWORD      = "<s>"
 ENDWORD        = "</s>"
 ';
 
+htrsh_special_chars=$'
+<gap/> {gap}
+@ {at}
+_ {_}
+\x27 {squote}
+" {dquote}
+& {amp}
+< {lt}
+> {gt}
+{ {lbrace}
+} {rbrace}
+';
+
 htrsh_sed_tokenize_simplest='
   s|$\.|$*|g;
-  s|\([.,:;!¡?¿+\x27´`"“”„(){}[—–_]\)| \1 |g;
+  s|\([.,:;!¡?¿+\x27´`"“”„|(){}[—–_]\)| \1 |g;
   s|\x5D| ] |g;
   s|$\*|$.|g;
   s|\([0-9]\)| \1 |g;
@@ -150,54 +163,6 @@ htrsh_check_req () {
   } 1>&2;
 
   return 0;
-}
-
-##
-## Function that randomly and evenly splits a list
-##
-htrsh_randsplit () {
-  local FN="htrsh_randsplit";
-  local START="0";
-  if [ $# -lt 3 ]; then
-    { echo "$FN: Error: Not enough input arguments";
-      echo "Description: Randomly and evenly splits a list";
-      echo "Usage: $FN PARTS LIST OUTFORMAT [ #start (def.=$START) ]";
-    } 1>&2;
-    return 1;
-  fi
-
-  ### Parse input arguments ###
-  local PARTS="$1";
-  local LIST="$2";
-  local OUTFORMAT="$3";
-  [ $# -gt 3 ] && START="$4";
-
-  if [ ! -e "$LIST" ]; then
-    echo "$FN: error: list not found: $LIST" 1>&2;
-    return 1;
-  fi
-
-  local NLIST=$(wc -l < "$LIST");
-
-  cat "$LIST" \
-    | awk '{ printf( "%s %s\n", rand(), $0 ); }' \
-    | sort \
-    | sed 's|^[^ ]* ||' \
-    | awk '
-        BEGIN {
-          fact = '$NLIST'/'$PARTS';
-          part = -1;
-          accu = 1;
-        }
-        { if( NR == 1 || nxt == NR ) {
-            part += 1;
-            accu += fact;
-            nxt = sprintf("%.0f",accu);
-            outfile = sprintf( "'"$OUTFORMAT"'", part+'"$START"' );
-          }
-          print > outfile;
-        }
-        END { printf( "%s\n", part >= 0 ? part+1 : "" ); }';
 }
 
 ##
@@ -561,7 +526,7 @@ htrsh_run_parallel () {(
 ##
 htrsh_pagexml_textequiv () {
   local FN="htrsh_pagexml_textequiv";
-  local REGSRC="no";
+  local SRC="lines";
   local FORMAT="raw";
   local FILTER="cat";
   if [ $# -lt 1 ]; then
@@ -569,7 +534,7 @@ htrsh_pagexml_textequiv () {
       echo "Description: Prints to stdout the TextEquiv from an XML Page file supporting several formats";
       echo "Usage: $FN XMLFILE [ Options ]";
       echo "Options:";
-      echo " -r (yes|no)  Whether to get TextEquiv from regions instead of lines (def.=$REGSRC)";
+      echo " -s SOURCE    Source of TextEquiv, either 'regions', 'lines' or 'words' (def.=$SRC)";
       echo " -f FORMAT    Output format among 'raw', 'mlf-chars', 'mlf-words' and 'tab' (def.=$FORMAT)";
       echo " -F FILTER    Filtering pipe command, e.g. tokenizer, transliteration, etc. (def.=none)";
     } 1>&2;
@@ -580,8 +545,8 @@ htrsh_pagexml_textequiv () {
   local XML="$1";
   shift;
   while [ $# -gt 0 ]; do
-    if [ "$1" = "-r" ]; then
-      REGSRC="$2";
+    if [ "$1" = "-s" ]; then
+      SRC="$2";
     elif [ "$1" = "-f" ]; then
       FORMAT="$2";
     elif [ "$1" = "-F" ]; then
@@ -601,12 +566,17 @@ htrsh_pagexml_textequiv () {
                | sed 's|.*/||; s|\.[^.]*$||; s|[\[ ()]|_|g; s|]|_|g;');
 
   local XPATH IDop;
-  if [ "$REGSRC" = "yes" ]; then
+  local PRINT=( -v . -n );
+  if [ "$SRC" = "regions" ]; then
     XPATH="$htrsh_xpath_regions/_:TextEquiv/_:Unicode[. != '']";
-    IDop="-o $PG. -v ../../@id";
+    IDop=( -o "$PG." -v ../../@id );
+  elif [ "$SRC" = "words" ]; then
+    XPATH="$htrsh_xpath_regions/_:TextLine[_:Word/_:TextEquiv/_:Unicode != '']";
+    PRINT=( -m "_:Word/_:TextEquiv/_:Unicode[. != '']" -o " " -v . -b -n );
+    IDop=( -o "$PG." -v ../@id -o . -v @id );
   else
     XPATH="$htrsh_xpath_regions/_:TextLine/_:TextEquiv/_:Unicode[. != '']";
-    IDop="-o $PG. -v ../../../@id -o . -v ../../@id";
+    IDop=( -o "$PG." -v ../../../@id -o . -v ../../@id );
   fi
 
   [ $(xmlstarlet sel -t -v "count($XPATH)" "$XML") = 0 ] &&
@@ -614,20 +584,29 @@ htrsh_pagexml_textequiv () {
     return 1;
 
   paste \
-      <( xmlstarlet sel -t -m "$XPATH" $IDop -n "$XML" ) \
+      <( xmlstarlet sel -t -m "$XPATH" "${IDop[@]}" -n "$XML" ) \
       <( cat "$XML" \
            | tr '\t\n' '  ' \
-           | xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" -v . -n \
+           | xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" "${PRINT[@]}" \
            | eval $FILTER ) \
     | sed '
         s|\t  *|\t|;
         s|  *$||;
         s|   *| |g;
         ' \
-    | awk -F'\t' -v FORMAT=$FORMAT '
+    | awk -F'\t' -v FORMAT=$FORMAT -v SPECIAL=<( echo "$htrsh_special_chars" ) '
         BEGIN {
           if( FORMAT == "tab" )
             OFS=" ";
+          while( (getline line<SPECIAL) > 0 )
+            if( line != "" ) {
+              n = split(line,sline," ");
+              c = substr( sline[1], 1, 1 );
+              SCHAR[c] = "";
+              NSPECIAL++;
+              SWORD[NSPECIAL] = sline[1];
+              SMARK[NSPECIAL] = n == 1 ? sline[1] : sline[2] ;
+            }
         }
         { if( FORMAT == "raw" )
             print $2;
@@ -646,26 +625,20 @@ htrsh_pagexml_textequiv () {
             printf("@\n");
             N = split($2,txt,"");
             for( n=1; n<=N; n++ ) {
+              if( txt[n] in SCHAR ) {
+                for( m=1; m<=NSPECIAL; m++ ) {
+                  w = SWORD[m];
+                  if( w == substr($2,n,length(w)) ) {
+                    printf( "%s\n", SMARK[m] );
+                    n += length(w)-1;
+                    break;
+                  }
+                }
+                if( m <= NSPECIAL )
+                  continue;
+              }
               if( txt[n] == " " )
                 printf( "@\n" );
-              else if( txt[n] == "@" )
-                printf( "{at}\n" );
-              else if( txt[n] == "_" )
-                printf( "{_}\n" );
-              else if( txt[n] == "\"" )
-                printf( "{dquote}\n" );
-              else if( txt[n] == "\x27" )
-                printf( "{squote}\n" );
-              else if( txt[n] == "&" )
-                printf( "{amp}\n" );
-              else if( txt[n] == "<" )
-                printf( "{lt}\n" );
-              else if( txt[n] == ">" )
-                printf( "{gt}\n" );
-              else if( txt[n] == "{" )
-                printf( "{lbrace}\n" );
-              else if( txt[n] == "}" )
-                printf( "{rbrace}\n" );
               else if( match(txt[n],"[.0-9]") )
                 printf( "\"%s\"\n", txt[n] );
               else
@@ -707,95 +680,6 @@ htrsh_mlf_to_tab () {
         }
       }
     }' $1;
-}
-
-##
-## Function that transforms two MLF files to the format used by tasas
-##
-htrsh_mlf_to_tasas () {
-  local FN="htrsh_mlf_to_tasas";
-  local SEPCHARS="no";
-  if [ $# -lt 2 ]; then
-    { echo "$FN: Error: Not enough input arguments";
-      echo "Description: Transforms two MLF files to the format used by tasas";
-      echo "Usage: $FN MLF_LAB MLF_REC [ Options ]";
-      echo "Options:";
-      echo " -c (yes|no)  Whether to separate characters for CER computation (def.=$SEPCHARS)";
-    } 1>&2;
-    return 1;
-  fi
-
-  ### Parse input arguments ###
-  local MLF_LAB="$1";
-  local MLF_REC="$2";
-  shift 2;
-  while [ $# -gt 0 ]; do
-    if [ "$1" = "-c" ]; then
-      SEPCHARS="$2";
-    else
-      echo "$FN: error: unexpected input argument: $1" 1>&2;
-      return 1;
-    fi
-    shift 2;
-  done
-
-  if ! [ -e "$MLF_LAB" ]; then
-    echo "$FN: error: MLF file not found: $MLF_LAB" 1>&2;
-    return 1;
-  elif ! [ -e "$MLF_REC" ]; then
-    echo "$FN: error: MLF file not found: $MLF_REC" 1>&2;
-    return 1;
-  fi
-
-  local GAWK_FORMAT_MLF='
-    BEGIN {
-      NMLF = 0;
-      SEPCHARS = SEPCHARS == "yes" ? 1 : 0 ;
-    }
-    { if( match( $1, /^"\*\// ) ) {
-        $1 = gensub( /^"\*\/(.+)\.[^.]+"$/, "\\1", "", $1 );
-        printf( NMLF == 0 ? "%s\t" : "\n%s\t", $1 );
-        NMLF ++;
-        NTOKENS = 0;
-      }
-      else if( $0 != "#!MLF!#" && $0 != "." ) {
-        if( NF >= 3 )
-          $1 = $3;
-        if( match( $1, /^".+"$/ ) )
-          $1 = gensub( /\\"/, "\"", "g", gensub( /^"(.+)"$/, "\\1", "", $1 ) );
-        if( ! SEPCHARS ) {
-          printf( NTOKENS == 0 ? "%s" : " %s", $1 );
-          NTOKENS ++;
-        }
-        else {
-          if( NTOKENS > 0 )
-            printf( " @" );
-          N = split( $1, chars, "" );
-          for( n=1; n<=N; n++ ) {
-            printf( NTOKENS == 0 ? "%s" : " %s", chars[n] );
-            NTOKENS ++;
-          }
-        }
-      }
-    }
-    END {
-      if( NMLF > 0 )
-        printf( "\n" );
-    }';
-
-  awk -v SEPCHARS=$SEPCHARS "$GAWK_FORMAT_MLF" "$MLF_LAB" \
-    | awk -F'\t' '
-        { if( FILENAME == "-" )
-            LAB[$1] = $2;
-          else {
-            if( !( $1 in LAB ) )
-              printf( "warning: no lab for %s\n", $1 ) > "/dev/stderr";
-            else
-              printf( "%s|%s\n", LAB[$1], $2 );
-          }
-        }' - <( awk -v SEPCHARS=$SEPCHARS "$GAWK_FORMAT_MLF" "$MLF_REC" );
-
-  return 0;
 }
 
 ##
@@ -2006,23 +1890,6 @@ htrsh_feats_pca () {(
         end
       ";
     done
-    #local f=$(head -n 1 < "$FEATLST");
-    #echo "
-    #  DE = length($EXCL);
-    #  se = zeros(1,DE);
-    #  x = readhtk('$f'); $xEXCL
-    #  N = size(x,1);
-    #  mu = sum(x);
-    #  sgma = x'*x;
-    #";
-    #for f in $(tail -n +2 < "$FEATLST"); do
-    #  echo "
-    #    x = readhtk('$f'); $xEXCL
-    #    N = N + size(x,1);
-    #    mu = mu + sum(x);
-    #    sgma = sgma + x'*x;
-    #  ";
-    #done
     echo "
       mu = (1/N)*mu;
       sgma = (1/N)*sgma - mu'*mu;
@@ -2076,8 +1943,9 @@ htrsh_feats_pca () {(
 ##
 ## Function that projects a list of features for a given base
 ##
-htrsh_feats_project () {
+htrsh_feats_project () {(
   local FN="htrsh_feats_project";
+  local THREADS="1";
   if [ $# -lt 3 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Projects a list of features for a given base";
@@ -2090,6 +1958,16 @@ htrsh_feats_project () {
   local FEATLST="$1";
   local PBASE="$2";
   local OUTDIR="$3";
+  shift 3;
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "-T" ]; then
+      THREADS="$2";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
+    shift 2;
+  done
 
   if [ ! -e "$FEATLST" ]; then
     echo "$FN: error: features list file does not exists: $FEATLST" 1>&2;
@@ -2102,24 +1980,32 @@ htrsh_feats_project () {
     return 1;
   fi
 
-  { echo "load('$PBASE');"
-    local f ff;
-    for f in $(< "$FEATLST"); do
-      ff=$(echo "$f" | sed "s|.*/|$OUTDIR/|");
-      echo "
-        [x,FP,DT,TC] = readhtk('$f');
-        x = (x-repmat(mu,size(x,1),1))*B;
-        writehtk('$ff',x,FP,TC);
-        ";
-    done
-  } | octave -q -H;
+  feats_project () {
+    { echo "load('$PBASE');"
+      local f ff;
+      for f in $(<"$1"); do
+        ff=$(echo "$f" | sed "s|.*/|$OUTDIR/|");
+        echo "
+          [x,FP,DT,TC] = readhtk('$f');
+          x = (x-repmat(mu,size(x,1),1))*B;
+          writehtk('$ff',x,FP,TC);
+          ";
+      done
+    } | octave -q -H;
+  }
+
+  if [ "$THREADS" = 1 ]; then
+    feats_project "$FEATLST";
+  else
+    htrsh_run_parallel -T $THREADS -n balance -l "$FEATLST" feats_project '{@}';
+  fi
 
   [ "$?" != 0 ] &&
     echo "$FN: error: problems projecting features" 1>&2 &&
     return 1;
 
   return 0;
-}
+)}
 
 ##
 ## Function that converts a list of features in HTK format to Kaldi ark,scp
@@ -2433,6 +2319,15 @@ htrsh_langmodel_train () {
   local GAWK_CREATE_DIC='
     BEGIN {
       FS="\t";
+      while( (getline line<SPECIAL) > 0 )
+        if( line != "" ) {
+          n = split(line,sline," ");
+          c = substr( sline[1], 1, 1 );
+          SCHAR[c] = "";
+          NSPECIAL++;
+          SWORD[NSPECIAL] = sline[1];
+          SMARK[NSPECIAL] = n == 1 ? sline[1] : sline[2] ;
+        }
     }
     { canonic_count[$1] ++;
       variant_count[$1][$2] ++;
@@ -2450,21 +2345,23 @@ htrsh_langmodel_train () {
           if( ! match(vprob,/\./) )
             vprob = ( vprob ".0" );
           printf( "\"%s\"\t[%s]\t%s\t", wcanonic, variant, vprob );
-          N = split( variant_models[canonic][variant], txt, "" );
+          utxt = variant_models[canonic][variant];
+          N = split( utxt, txt, "" );
           for( n=1; n<=N; n++ ) {
             printf( n==1 ? "" : " " );
-            switch( txt[n] ) {
-            case "@":    printf( "{at}" );       break;
-            case "&":    printf( "{amp}" );      break;
-            case "<":    printf( "{lt}" );       break;
-            case ">":    printf( "{gt}" );       break;
-            case "{":    printf( "{lbrace}" );   break;
-            case "}":    printf( "{rbrace}" );   break;
-            case "_":    printf( "{_}" );        break;
-            case "\x22": printf( "{dquote}" );   break;
-            case "\x27": printf( "{squote}" );   break;
-            default:     printf( "%s", txt[n] ); break;
+            if( txt[n] in SCHAR ) {
+              for( m=1; m<=NSPECIAL; m++ ) {
+                w = SWORD[m];
+                if( w == substr(utxt,n,length(w)) ) {
+                  printf( "%s", SMARK[m] );
+                  n += length(w)-1;
+                  break;
+                }
+              }
+              if( m <= NSPECIAL )
+                continue;
             }
+            printf( "%s", txt[n] );
           }
           printf( " @\n" );
         }
@@ -2487,7 +2384,7 @@ htrsh_langmodel_train () {
       <( cat "$OUTDIR/text_tokenized.txt" \
            | eval $DIPLOMATIZER \
            | tr ' ' '\n' ) \
-    | gawk "$GAWK_CREATE_DIC" \
+    | gawk -v SPECIAL=<( echo "$htrsh_special_chars" ) "$GAWK_CREATE_DIC" \
     | LC_ALL=C.UTF-8 sort \
     > "$OUTDIR/dictionary.txt";
 
@@ -2680,6 +2577,7 @@ htrsh_hmm_train () {
   local RESUME="yes";
   local RAND="no";
   local THREADS="1";
+  local NUMELEM="balance";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Trains HMMs for a given feature list and mlf";
@@ -2692,6 +2590,7 @@ htrsh_hmm_train () {
       echo " -r (yes|no)  Whether to resume previous training, looks for models per iteration (def.=$RESUME)";
       echo " -R (yes|no)  Whether to randomize initialization prototype (def.=$RAND)";
       echo " -T THREADS   Threads for parallel processing (def.=$THREADS)";
+      echo " -n NUMELEM   Elements per instance for parallel (see htrsh_run_parallel) (def.=$NUMELEM)";
     } 1>&2;
     return 1;
   fi
@@ -2714,7 +2613,9 @@ htrsh_hmm_train () {
     elif [ "$1" = "-R" ]; then
       RAND="$2";
     elif [ "$1" = "-T" ]; then
-      THREADS=$(echo $2 | awk '{ v=0.0+$1; printf( "%d", v>99 ? 99 : (v<1?1:v) ) }');
+      THREADS="$2";
+    elif [ "$1" = "-n" ]; then
+      NUMELEM="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -2742,14 +2643,6 @@ htrsh_hmm_train () {
                    | sed '/^#!MLF!#/d; /^"\*\//d; /^\.$/d; s|^"\(.*\)"$|\1|;' \
                    | LC_ALL=C.UTF-8 sort -u);
 
-  if [ "$THREADS" -gt 1 ]; then
-    rm -f "$OUTDIR/train_feats_part_"*;
-    THREADS=$(htrsh_randsplit "$THREADS" "$FEATLST" "$OUTDIR/train_feats_part_%d" 1);
-    [ "$THREADS" = "" ] &&
-      echo "$FN: error: problems splitting list: $FEATLST" 1>&2 &&
-      return 1;
-  fi
-
   ### Discrete training ###
   if [ "$CODES" -gt 0 ]; then
     ### Initialization ###
@@ -2762,11 +2655,6 @@ htrsh_hmm_train () {
 
     [ "$KEEPITERS" = "yes" ] &&
       cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_i00.gz";
-
-    # @todo train with viterbi
-    #htrsh_hmm_proto "$CODES" "$htrsh_hmm_states" -D yes -n "$HMMLST" -R $RAND | gzip > "$OUTDIR/Macros_hmm.gz";
-    #htrsh_hmm_proto "$CODES" "$htrsh_hmm_states" -D yes -R $RAND | gzip > proto.gz;
-    #HInit -T 1 -C <( echo "$htrsh_HTK_config" ) -i $htrsh_hmm_iter -S "$FEATLST" -I "$MLF" -H "Macros_hmm.gz" proto.gz
 
     ### Iterate ###
     local i;
@@ -2800,8 +2688,6 @@ htrsh_hmm_train () {
 
     else
       RESUME="no";
-
-      # @todo implement random ?
 
       htrsh_hmm_proto "$DIMS" 1 | gzip > "$OUTDIR/proto";
       HCompV $htrsh_HTK_HCompV_opts -C <( echo "$htrsh_HTK_config" ) \
@@ -2851,11 +2737,9 @@ htrsh_hmm_train () {
 
         ### Multi-thread ###
         if [ "$THREADS" -gt 1 ]; then
-          #local TMPDIR="$OUTDIR";
-          htrsh_run_parallel -T $THREADS HERest \
-            $htrsh_HTK_HERest_opts -C <( echo "$htrsh_HTK_config" ) \
-            -S "$OUTDIR/train_feats_part_{#}" -p '{#}' \
-            -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" -M "$OUTDIR" <( echo "$HMMLST" ) 1>&2;
+          htrsh_run_parallel -T $THREADS -n $NUMELEM -l "$FEATLST" \
+            HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_HTK_config" ) -p '{#}' \
+            -S '{@}' -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" -M "$OUTDIR" <( echo "$HMMLST" ) 1>&2;
           [ "$?" != 0 ] &&
             echo "$FN: error: problem with parallel HERest" 1>&2 &&
             return 1;
@@ -2892,7 +2776,6 @@ htrsh_hmm_train () {
   fi
 
   rm -f "$OUTDIR/proto" "$OUTDIR/vFloors" "$OUTDIR/Macros_hmm.gz";
-  rm -f "$OUTDIR/train_feats_part_"*;
 
   return 0;
 }
@@ -3014,19 +2897,15 @@ htrsh_fix_rec_names () {
     return 1;
   fi
 
-  sed -i '
-    s|@| |g;
-    s|{at}|@|g;
-    s|{_}|_|g;
-    s|{dquote}|"|g;
-    s|{squote}|'"'"'|g;
-    s|{amp}|\&amp;|g;
-    s|{lt}|\&lt;|g;
-    s|{gt}|\&gt;|g;
-    s|{dash}|--|g;
-    s|{lbrace}|{|g;
-    s|{rbrace}|}|g;
-    ' "$1";
+  local SED_REP="s|@| |g;"$(
+    echo "$htrsh_special_chars" \
+      | sed '
+          s/^\([^ ]*\) \([^ ]*\)/s|\2|\1|g;/;
+          s/&/\\\&amp;/g;
+          s/</\\\&lt;/g;
+          s/>/\\\&gt;/g;' );
+
+  sed -i "$SED_REP" "$1";
 
   return 0;
 }
@@ -3346,13 +3225,13 @@ htrsh_pageimg_forcealign_lines () {
     shift 2;
   done
 
-  if ! [ -e "$XML" ]; then
+  if [ ! -e "$XML" ]; then
     echo "$FN: error: Page XML file not found: $XML" 1>&2;
     return 1;
-  elif ! [ -e "$FEATLST" ]; then
+  elif [ ! -e "$FEATLST" ]; then
     echo "$FN: error: feature list not found: $FEATLST" 1>&2;
     return 1;
-  elif ! [ -e "$MODEL" ]; then
+  elif [ ! -e "$MODEL" ]; then
     echo "$FN: error: model file not found: $MODEL" 1>&2;
     return 1;
   fi
@@ -3492,7 +3371,7 @@ htrsh_pageimg_forcealign () {
   [ "$WGCNT" != "0 0" ] &&
     echo "$FN: warning: input already contains Word and/or Glyph information: $XML" 1>&2;
 
-  local AREG="no"; [ "$LCNT" = 0 ] && AREG="yes";
+  local AREG=(); [ "$LCNT" = 0 ] && AREG=( -s regions );
 
   local B=$(echo "$XMLBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
 
@@ -3500,7 +3379,7 @@ htrsh_pageimg_forcealign () {
 
   mkdir -p "$TMPDIR/proc";
   cp -p "$XML" "$IMFILE" "$TMPDIR/proc";
-  sed 's|imageFilename="[^"/]*/|imageFilename=|' -i "$TMPDIR/proc/$XMLBASE.xml";
+  sed 's|\(imageFilename="\)[^"/]*/|\1|' -i "$TMPDIR/proc/$XMLBASE.xml";
 
   ### Generate contours from baselines ###
   if [ $(xmlstarlet sel -t -v \
@@ -3566,7 +3445,7 @@ htrsh_pageimg_forcealign () {
     PBASE="$TMPDIR/pcab.mat.gz";
     htrsh_feats_pca "$TMPDIR/${B}_feats.lst" "$PBASE" -e 1:4 -r 24;
     [ "$?" != 0 ] && return 1;
-  fi
+  fi | sed '/^$/d';
   if [ "$PBASE" != "" ]; then
     [ ! -e "$PBASE" ] &&
       echo "$FN: error: projection base file not found: $PBASE" 1>&2 &&
@@ -3574,16 +3453,16 @@ htrsh_pageimg_forcealign () {
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): projecting features ...";
     htrsh_feats_project "$TMPDIR/${B}_feats.lst" "$PBASE" "$TMPDIR";
     [ "$?" != 0 ] && return 1;
-  fi
+  fi | sed '/^$/d';
 
-  [ "$AREG" = "yes" ] &&
+  [ "${#AREG[@]}" != 0 ] &&
     htrsh_feats_catregions "$TMPDIR/${XMLBASE}_feats.xml" "$TMPDIR" > $TMPDIR/${B}_feats.lst;
 
   ### Train HMMs model for this single page ###
   if [ "$MODEL" = "" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): training model for page ...";
     { echo '#!MLF!#';
-      htrsh_pagexml_textequiv "$TMPDIR/${XMLBASE}_feats.xml" -f mlf-chars -r $AREG -F "$FILTER";
+      htrsh_pagexml_textequiv "$TMPDIR/${XMLBASE}_feats.xml" -f mlf-chars "${AREG[@]}" -F "$FILTER";
     } > "$TMPDIR/${B}_page.mlf";
     [ "$?" != 0 ] && return 1;
     MODEL=$(
@@ -3598,7 +3477,7 @@ htrsh_pageimg_forcealign () {
   else
     local CHARCHECK=$(
             htrsh_pagexml_textequiv "$TMPDIR/${XMLBASE}_feats.xml" \
-                -f mlf-chars -r $AREG -F "$FILTER" \
+                -f mlf-chars "${AREG[@]}" -F "$FILTER" \
               | sed '/^"\*\/.*"$/d; /^\.$/d; s|^"\(.*\)"|\1|;' \
               | sort -u);
     CHARCHECK=$(
@@ -3638,7 +3517,7 @@ htrsh_pageimg_forcealign () {
 
   ### Do forced alignment using model ###
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): doing forced alignment ...";
-  if [ "$AREG" = "yes" ]; then
+  if [ "${#AREG[@]}" != 0 ]; then
     cp "$TMPDIR/${XMLBASE}_feats.xml" "$TMPDIR/${XMLBASE}_align.xml";
     local id;
     for id in $(xmlstarlet sel -t -m "$htrsh_xpath_regions" -v @id -n "$XML"); do
