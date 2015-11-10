@@ -2182,6 +2182,11 @@ htrsh_pageimg_extract_linefeats () {
              -virtual-pixel white +distort AffineProjection ${affine} \
              -shave 1x1 -format %X,%Y -write info: \
              +repage -trim ${ff}_affine.png);
+      [ $(identify -format "%wx%h" ${ff}_affine.png) = "1x1" ] &&
+        mn=$(convert ${ff}_clean.png +repage -flatten \
+               -virtual-pixel white +distort AffineProjection ${affine} \
+               -shave 1x1 -format %X,%Y -write info: \
+               +repage ${ff}_affine.png);
     #fi
 
     ### Add left and right padding ###
@@ -2230,6 +2235,7 @@ htrsh_pageimg_extract_linefeats () {
     ### Compute detailed contours if requested ###
     if [ "$htrsh_feat_contour" = "yes" ]; then
       local pts=$(imgccomp -V1 -NJS -A 0.5 -D $htrsh_feat_dilradi -R 5,2,2,2 ${ff}_clean.png);
+      [ "$pts" = "" ] && pts="$fpgram";
       ed="$ed -i '//*[@id=\"$id\"]/_:Coords' -t attr -n fcontour -v '$pts'";
     fi 2>&1;
 
