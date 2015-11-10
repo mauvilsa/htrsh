@@ -26,6 +26,8 @@ htrsh_xpath_lines='_:TextLine[_:Coords and _:TextEquiv/_:Unicode and _:TextEquiv
 htrsh_xpath_quads='_:Coords[../_:TextLine/_:TextEquiv/_:Unicode and ../_:TextLine/_:TextEquiv/_:Unicode != ""]';
 htrsh_xpath_coords='_:Coords[@points and @points!="0,0 0,0"]';
 
+htrsh_imgclean="prhlt"; # Image preprocessing techinque, prhlt or ncsr
+
 htrsh_imgtxtenh_regmask="no";                # Whether to use a region-based processing mask
 htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.1"; # Options for imgtxtenh tool
 htrsh_imglineclean_opts="-V0 -m 99%";        # Options for imglineclean tool
@@ -185,8 +187,10 @@ htrsh_run_parallel () {(
       echo "  command: 1) if an argument is '{*}' elements are given as arguments in that";
       echo "  position, 2) if an argument is '{@}' elements are given in a file and";
       echo "  '{@}' is replaced by the file path, 3) if an argument is '{<}' elements";
-      echo "  are given as a named pipe, and 4) if no special argument is provided";
-      echo "  the elements are given through stdin.";
+      echo "  are given through a named pipe, and 4) if no special argument is provided";
+      echo "  the elements are given through stdin. Only when processing one element at a";
+      echo "  time: '{.}' without extension, '{/}' without path, '{//}' only path, and";
+      echo "  '{/.}' without path and extension.";
       echo "Usage: $FN [OPTIONS] COMMAND ARG1 ARG2 ... [('{@}'|'{*}'|'{<}') ... '{#}' ... '{%}'] ...";
       echo "Options:";
       echo " -T THREADS   Concurrent threads, either an int>0, list {id1},{id2},...";
@@ -458,6 +462,17 @@ htrsh_run_parallel () {(
     if [ "$LIST" != "" ]; then
       LISTP=$( readlist );
       [ "$LISTP" = "" ] && return 0;
+      if [ "$NUMELEM" = 1 ]; then
+        CMD=("${CMD[@]//\{\*\}/$LISTP}");
+        local MLISTP=$(echo "$LISTP" | sed 's|\.[^.]*$||');
+        CMD=("${CMD[@]//\{\.\}/$MLISTP}"); # {.} no extension
+        MLISTP=$(echo "$LISTP" | sed 's|.*/||');
+        CMD=("${CMD[@]//\{\/\}/$MLISTP}"); # {/} no path
+        MLISTP=$(echo "$LISTP" | sed 's|/[^/]*$||');
+        CMD=("${CMD[@]//\{\/\/\}/$MLISTP}"); # {//} only path
+        MLISTP=$(echo "$LISTP" | sed 's|.*/||; s|\.[^.]*$||;');
+        CMD=("${CMD[@]//\{\/\.\}/$MLISTP}"); # {/.} no path and extension
+      fi
     fi
     echo "THREAD:$THREAD:$NUMP starting" >> "$TMP/state";
     { if [ "$ARGPOS" != 0 ]; then
@@ -1380,8 +1395,20 @@ htrsh_pageimg_clean () {
   [ "$INRES" != "" ] && INRES="-d $INRES";
 
   ### Enhance image ###
-  if [ "$htrsh_imgtxtenh_regmask" != "yes" ]; then
+  local RC="0";
+  if [ "$htrsh_imgclean" = "ncsr" ]; then
+    EnhanceGray "$IMFILE" "$OUTDIR/$IMBASE.EnhanceGray.$IMEXT" 0 &&
+    binarization "$OUTDIR/$IMBASE.EnhanceGray.$IMEXT" "$OUTDIR/$IMBASE.png" 1;
+    RC="$?";
+    rm -r "$OUTDIR/$IMBASE.EnhanceGray.$IMEXT";
+
+  elif [ "$htrsh_imgclean" != "prhlt" ]; then
+    echo "$FN: error: unexpected preprocessing type: $htrsh_imgclean" 1>&2;
+    return 1;
+
+  elif [ "$htrsh_imgtxtenh_regmask" != "yes" ]; then
     imgtxtenh $htrsh_imgtxtenh_opts $INRES "$IMFILE" "$OUTDIR/$IMBASE.png" 2>&1;
+    RC="$?";
 
   else
     local IXPATH="";
@@ -1404,9 +1431,10 @@ htrsh_pageimg_clean () {
         -alpha copy "'$IMFILE'" +swap \
         -compose copy-opacity -composite miff:- \
       | imgtxtenh $htrsh_imgtxtenh_opts $INRES - "$OUTDIR/$IMBASE.png" 2>&1;
+    RC="$?";
   fi
 
-  [ "$?" != 0 ] &&
+  [ "$RC" != 0 ] &&
     echo "$FN: error: problems enhancing image: $IMFILE" 1>&2 &&
     return 1;
 
