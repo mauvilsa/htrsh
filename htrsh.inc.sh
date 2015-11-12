@@ -47,6 +47,8 @@ htrsh_dotmatrix_H="32";    # Height of normalized frame in px
 htrsh_dotmatrix_mom="yes"; # Whether to add moments to features
 
 htrsh_align_chars="no";             # Whether to align at a character level
+htrsh_aling_dilradi="0";            # Dilation radius in mm for contours
+htrsh_align_contour="yes";          # Whether to compute contours from the image
 htrsh_align_isect="yes";            # Whether to intersect parallelograms with line contour
 htrsh_align_prefer_baselines="yes"; # Whether to always generate contours from baselines
 htrsh_align_addtext="yes";          # Whether to add TextEquiv to word and glyph nodes
@@ -54,6 +56,8 @@ htrsh_align_addtext="yes";          # Whether to add TextEquiv to word and glyph
 htrsh_hmm_states="6"; # Number of HMM states (excluding special initial and final)
 htrsh_hmm_nummix="4"; # Number of Gaussian mixture components per state
 htrsh_hmm_iter="4";   # Number of training iterations
+htrsh_hmm_type="char";
+#htrsh_hmm_type="overlap";
 
 htrsh_HTK_HERest_opts="-m 2";      # Options for HERest tool
 htrsh_HTK_HCompV_opts="-f 0.1 -m"; # Options for HCompV tool
@@ -609,7 +613,7 @@ htrsh_pagexml_textequiv () {
         s|  *$||;
         s|   *| |g;
         ' \
-    | awk -F'\t' -v FORMAT=$FORMAT -v SPECIAL=<( echo "$htrsh_special_chars" ) '
+    | awk -F'\t' -v FORMAT=$FORMAT -v TYPE="$htrsh_hmm_type" -v SPECIAL=<( echo "$htrsh_special_chars" ) '
         BEGIN {
           if( FORMAT == "tab" )
             OFS=" ";
@@ -638,28 +642,30 @@ htrsh_pagexml_textequiv () {
           else if( FORMAT == "mlf-chars" ) {
             printf("\"*/%s.lab\"\n",$1);
             printf("@\n");
+            cprev = "@";
             N = split($2,txt,"");
             for( n=1; n<=N; n++ ) {
-              if( txt[n] in SCHAR ) {
+              c = "";
+              if( txt[n] in SCHAR )
                 for( m=1; m<=NSPECIAL; m++ ) {
                   w = SWORD[m];
                   if( w == substr($2,n,length(w)) ) {
-                    printf( "%s\n", SMARK[m] );
+                    c = SMARK[m];
                     n += length(w)-1;
                     break;
                   }
                 }
-                if( m <= NSPECIAL )
-                  continue;
-              }
-              if( txt[n] == " " )
-                printf( "@\n" );
-              else if( match(txt[n],"[.0-9]") )
-                printf( "\"%s\"\n", txt[n] );
-              else
-                printf("%s\n",txt[n]);
+              if( c == "" )
+                c = txt[n] == " " ? "@" : txt[n] ;
+              if( TYPE == "overlap" )
+                printf( ( match(cprev,/^[.0-9]/) ? "\"%s%s\"\n" : "%s%s\n" ), cprev, c );
+              printf( ( match(c,/^[.0-9]/) ? "\"%s\"\n" : "%s\n" ), c );
+              cprev = c;
             }
-            printf("@\n");
+            c = "@";
+            if( TYPE == "overlap" )
+              printf( ( match(cprev,/^[.0-9]/) ? "\"%s%s\"\n" : "%s%s\n" ), cprev, c );
+            printf( ( match(c,/^[.0-9]/) ? "\"%s\"\n" : "%s\n" ), c );
             printf(".\n");
           }
         }';
@@ -2257,8 +2263,9 @@ htrsh_pageimg_extract_linefeats () {
     [ "$PBASE" != "" ] && FEATS=$( echo "$FEATS"; echo "${ff}.fea"; );
 
     ### Remove temporal files ###
+    #rm "${ff}_clean.png";
     [ "$htrsh_keeptmp" -lt 1 ] &&
-      rm -f "${ff}.png" "${ff}_clean.png" "${ff}_fea.png";
+      rm -f "${ff}.png" "${ff}_fea.png";
     [ "$htrsh_keeptmp" -lt 2 ] &&
       rm -f "${ff}_affine.png" "${ff}_affine.mat";
     [ "$htrsh_keeptmp" -lt 3 ] &&
@@ -3091,7 +3098,7 @@ htrsh_pagexml_insertalign_lines () {
 
   #local TE=$(($(date +%s%N)/1000000)); echo "time 0: $((TE-TS)) ms" 1>&2; TS="$TE";
 
-  [ "$htrsh_align_isect" = "yes" ] &&
+  ( [ "$htrsh_align_contour" = "yes" ] || [ "$htrsh_align_isect" = "yes" ] ) &&
     local size=$(xmlstarlet sel -t -v //@imageWidth -o x -v //@imageHeight "$XML");
 
   cmd="xmlstarlet ed -P";
@@ -3103,8 +3110,13 @@ htrsh_pagexml_insertalign_lines () {
 
     cmd="$cmd -d '//*[@id=\"$id\"]/_:Word'";
 
-    [ "$htrsh_align_isect" = "yes" ] &&
-      local contour=$(xmlstarlet sel -t -v '//*[@id="'$id'"]/_:Coords/@points' "$XML");
+    local LIMG LGEO contour;
+    if [ "$htrsh_align_contour" = "yes" ]; then
+      LIMG="$XMLDIR/$IMBASE."$(xmlstarlet sel -t -v "//*[@id='$id']/../@id" "$XML")".${id}_clean.png";
+      LGEO=( $(identify -format "%w %h %X %Y %x %U" "$LIMG" | sed 's|+||g') );
+    elif [ "$htrsh_align_isect" = "yes" ]; then
+      contour=$(xmlstarlet sel -t -v '//*[@id="'$id'"]/_:Coords/@points' "$XML");
+    fi
 
     local align=$(echo "$aligns" | sed -n "/^$id /{ s|^$id ||; p; }");
     [ "$align" = "" ] && continue;
@@ -3131,7 +3143,19 @@ htrsh_pagexml_insertalign_lines () {
       fi
       #TE=$(($(date +%s%N)/1000000)); echo "time 3: $((TE-TS)) ms" 1>&2; TS="$TE";
 
-      if [ "$htrsh_align_isect" = "yes" ]; then
+      if [ "$htrsh_align_contour" = "yes" ]; then
+        local cpts=$( echo $pts \
+                 | awk -F'[, ]' -v oX=${LGEO[2]} -v oY=${LGEO[3]} '
+                     { for( n=1; n<NF; n+=2 )
+                         printf( " %s,%s", $n-oX, $(n+1)-oY );
+                     }' );
+        cpts=$( convert -fill black -stroke black -size ${LGEO[0]}x${LGEO[1]} \
+                   xc:white -draw "polyline$cpts" "$LIMG" -compose lighten -composite \
+                   -page $size+${LGEO[2]}+${LGEO[3]} -units ${LGEO[5]} -density ${LGEO[4]} miff:- \
+                 | imgccomp -V0 -NJS -A 0.1 -D $htrsh_aling_dilradi -R 2,2,2,2 - );
+        [ "$cpts" != "" ] && pts="$cpts";
+
+      elif [ "$htrsh_align_isect" = "yes" ]; then
         local AWK_ISECT='
           BEGIN {
             printf( "convert -fill white -stroke white" );
@@ -3162,8 +3186,8 @@ htrsh_pagexml_insertalign_lines () {
               echo "$contour";
             } | awk -F'[ ,]' -v sz=$size "$AWK_ISECT" ) \
             | imgccomp -V0 -JS - );
-        local wpts="$pts";
       fi
+      local wpts="$pts";
 
       #TE=$(($(date +%s%N)/1000000)); echo "time 4: $((TE-TS)) ms" 1>&2; TS="$TE";
 
