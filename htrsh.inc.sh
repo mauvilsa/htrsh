@@ -1046,6 +1046,10 @@ htrsh_pageimg_clean () {
     RC="$?";
     rm -r "$OUTDIR/$IMBASE.EnhanceGray.$IMEXT";
 
+  elif [ "$htrsh_imgclean" = "ncsr_b" ]; then
+    binarization "$IMFILE" "$OUTDIR/$IMBASE.png" 1;
+    RC="$?";
+
   elif [ "$htrsh_imgclean" != "prhlt" ]; then
     echo "$FN: error: unexpected preprocessing type: $htrsh_imgclean" 1>&2;
     return 1;
