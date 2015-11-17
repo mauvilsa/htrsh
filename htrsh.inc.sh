@@ -30,7 +30,7 @@ htrsh_xpath_coords='_:Coords[@points and @points!="0,0 0,0"]';
 
 htrsh_imgclean="prhlt"; # Image preprocessing techinque, prhlt or ncsr
 
-htrsh_imgtxtenh_regmask="no";                # Whether to use a region-based processing mask
+htrsh_imgtxtenh_regmask="yes";               # Whether to use a region-based processing mask
 htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.1"; # Options for imgtxtenh tool
 htrsh_imglineclean_opts="-V0 -m 99%";        # Options for imglineclean tool
 
@@ -1042,12 +1042,12 @@ htrsh_pageimg_clean () {
   local RC="0";
   if [ "$htrsh_imgclean" = "ncsr" ]; then
     EnhanceGray "$IMFILE" "$OUTDIR/$IMBASE.EnhanceGray.$IMEXT" 0 &&
-    binarization "$OUTDIR/$IMBASE.EnhanceGray.$IMEXT" "$OUTDIR/$IMBASE.png" 1;
+    binarization "$OUTDIR/$IMBASE.EnhanceGray.$IMEXT" "$OUTDIR/$IMBASE.png" 2;
     RC="$?";
     rm -r "$OUTDIR/$IMBASE.EnhanceGray.$IMEXT";
 
   elif [ "$htrsh_imgclean" = "ncsr_b" ]; then
-    binarization "$IMFILE" "$OUTDIR/$IMBASE.png" 1;
+    binarization "$IMFILE" "$OUTDIR/$IMBASE.png" 2;
     RC="$?";
 
   elif [ "$htrsh_imgclean" != "prhlt" ]; then
@@ -1060,21 +1060,21 @@ htrsh_pageimg_clean () {
 
   else
     local IXPATH="";
-    [ $(echo "$htrsh_xpath_regions" | grep -F '[' | wc -l) = 1 ] &&
-      IXPATH=$(echo "$XPATH" | sed 's|\[\([^[]*\)]|[not(\1)]|');
+    [ $(echo "$htrsh_xpath_regions" | grep -F '[' | wc -l) != 0 ] &&
+      IXPATH=$(echo "$htrsh_xpath_regions" | sed 's|\[\([^[]*\)]|[not(\1)]|');
 
-    local textreg=$(xmlstarlet sel -t -m "$htrsh_xpath_regions/_:Coords" -v @points -n \
-                      "$XML" 2>/dev/null \
-                      | awk '{printf(" -draw \"polygon %s\"",$0)}');
+    local textreg=$( xmlstarlet sel -t -m "$htrsh_xpath_regions/_:Coords[@points]" \
+                       -o ' -fill "gray(' -v '256-position()' -o ')"' \
+                       -o ' -stroke "gray(' -v '256-position()' -o ')"' \
+                       -o ' -draw "polygon ' -v @points -o '"' "$XML"
+                       2>/dev/null );
     local othreg="";
     [ "$IXPATH" != "" ] &&
-      othreg=$(xmlstarlet sel -t -m "$IXPATH/_:Coords" -v @points -n \
-                     "$XML" 2>/dev/null \
-                     | awk '{printf(" -draw \"polygon %s\"",$0)}');
+      othreg=$( xmlstarlet sel -t -m "$IXPATH/_:Coords[@points]" \
+                  -o ' -draw "polygon ' -v @points -o '"' "$XML" 2>/dev/null );
 
     ### Create mask and enhance selected text regions ###
-    eval convert -size $IMSIZE xc:black \
-        -fill white -stroke white $textreg \
+    eval convert -size $IMSIZE xc:black +antialias $textreg \
         -fill black -stroke black $othreg \
         -alpha copy "'$IMFILE'" +swap \
         -compose copy-opacity -composite miff:- \
@@ -2792,7 +2792,7 @@ htrsh_pagexml_insertalign_lines () {
                          printf( " %s,%s", $n-oX, $(n+1)-oY );
                      }' );
         cpts=$( convert -fill black -stroke black -size ${LGEO[0]}x${LGEO[1]} \
-                   xc:white -draw "polyline$cpts" "$LIMG" -compose lighten -composite \
+                   xc:white +antialias -draw "polyline$cpts" "$LIMG" -compose lighten -composite \
                    -page $size+${LGEO[2]}+${LGEO[3]} -units ${LGEO[5]} -density ${LGEO[4]} miff:- \
                  | imgccomp -V0 -NJS -A 0.1 -D $htrsh_aling_dilradi -R 2,2,2,2 - );
         [ "$cpts" != "" ] && pts="$cpts";
@@ -2800,7 +2800,7 @@ htrsh_pagexml_insertalign_lines () {
       elif [ "$htrsh_align_isect" = "yes" ]; then
         local AWK_ISECT='
           BEGIN {
-            printf( "convert -fill white -stroke white" );
+            printf( "convert -fill white -stroke white +antialias" );
           }
           { if( NR == 1 ) {
               mn_x=$1; mx_x=$1;
