@@ -237,7 +237,7 @@ htrsh_pagexml_textequiv () {
   fi
 
   [ $(xmlstarlet sel -t -v "count($XPATH)" "$XML") = 0 ] &&
-    echo "$FN: error: zero nodes match xpath $XPATH on file: $XML" 1>&2 &&
+    echo "$FN: error: zero matches for xpath $XPATH on file: $XML" 1>&2 &&
     return 1;
 
   paste \
