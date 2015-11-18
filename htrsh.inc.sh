@@ -9,13 +9,13 @@
 ##
 
 [ "${BASH_SOURCE[0]}" = "$0" ] && 
-  echo "htrsh.inc.sh: error: script intended to be sourced, try: . \$(which htrsh.inc.sh)" 1>&2 &&
+  echo "htrsh.inc.sh: error: script intended for sourcing, try: . htrsh.inc.sh" 1>&2 &&
   exit 1;
 [ "$(type -t htrsh_version)" = "function" ] &&
   echo "htrsh.inc.sh: warning: library already loaded, to reload first use htrsh_unload" 1>&2 &&
   return 0;
 
-. $(which run_parallel.inc.sh);
+. run_parallel.inc.sh;
 
 #-----------------------#
 # Default configuration #
@@ -23,12 +23,12 @@
 
 htrsh_keeptmp="0";
 
-htrsh_xpath_regions='//_:TextRegion';    # XPATH for selecting Page regions to process
-htrsh_xpath_lines='_:TextLine[_:Coords and _:TextEquiv/_:Unicode and _:TextEquiv/_:Unicode != ""]';
-htrsh_xpath_quads='_:Coords[../_:TextLine/_:TextEquiv/_:Unicode and ../_:TextLine/_:TextEquiv/_:Unicode != ""]';
+htrsh_xpath_regions='//_:TextRegion';
+htrsh_xpath_lines='_:TextLine';
 htrsh_xpath_coords='_:Coords[@points and @points!="0,0 0,0"]';
+htrsh_xpath_textequiv='_:TextEquiv[_:Unicode and _:Unicode != ""]/_:Unicode';
 
-htrsh_imgclean="prhlt"; # Image preprocessing techinque, prhlt or ncsr
+htrsh_imgclean="prhlt"; # Image preprocessing technique, prhlt or ncsr
 
 htrsh_imgtxtenh_regmask="yes";               # Whether to use a region-based processing mask
 htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.1"; # Options for imgtxtenh tool
@@ -39,17 +39,17 @@ htrsh_feat_deslant="yes"; # Whether to correct slant of the text
 htrsh_feat_padding="1.0"; # Left and right white padding in mm for line images
 htrsh_feat_contour="yes"; # Whether to compute connected components contours
 htrsh_feat_dilradi="0.5"; # Dilation radius in mm for contours
-htrsh_feat_normxheight="18"; # Normalize x-height to a fixed number of pixels
+htrsh_feat_normxheight="18"; # Normalize x-height (if in Page) to a fixed number of pixels
 
 htrsh_feat="dotmatrix";    # Type of features to extract
-htrsh_dotmatrix_shift="2"; # Sliding window shift in px, should be with respect to x-height
-htrsh_dotmatrix_win="20";  # Sliding window width in px, should be with respect to x-height
+htrsh_dotmatrix_shift="2"; # Sliding window shift in px @todo make it with respect to x-height
+htrsh_dotmatrix_win="20";  # Sliding window width in px @todo make it with respect to x-height
 htrsh_dotmatrix_W="8";     # Width of normalized frame in px
 htrsh_dotmatrix_H="32";    # Height of normalized frame in px
 htrsh_dotmatrix_mom="yes"; # Whether to add moments to features
 
 htrsh_align_chars="no";             # Whether to align at a character level
-htrsh_aling_dilradi="0";            # Dilation radius in mm for contours
+htrsh_align_dilradi="0";            # Dilation radius in mm for contours
 htrsh_align_contour="yes";          # Whether to compute contours from the image
 htrsh_align_isect="yes";            # Whether to intersect parallelograms with line contour
 htrsh_align_prefer_baselines="yes"; # Whether to always generate contours from baselines
@@ -225,14 +225,14 @@ htrsh_pagexml_textequiv () {
   local XPATH IDop;
   local PRINT=( -v . -n );
   if [ "$SRC" = "regions" ]; then
-    XPATH="$htrsh_xpath_regions/_:TextEquiv/_:Unicode[. != '']";
+    XPATH="$htrsh_xpath_regions/$htrsh_xpath_textequiv";
     IDop=( -o "$PG." -v ../../@id );
   elif [ "$SRC" = "words" ]; then
-    XPATH="$htrsh_xpath_regions/_:TextLine[_:Word/_:TextEquiv/_:Unicode != '']";
-    PRINT=( -m "_:Word/_:TextEquiv/_:Unicode[. != '']" -o " " -v . -b -n );
+    XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines[_:Word/$htrsh_xpath_textequiv]";
+    PRINT=( -m "_:Word/$htrsh_xpath_textequiv" -o " " -v . -b -n );
     IDop=( -o "$PG." -v ../@id -o . -v @id );
   else
-    XPATH="$htrsh_xpath_regions/_:TextLine/_:TextEquiv/_:Unicode[. != '']";
+    XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_textequiv";
     IDop=( -o "$PG." -v ../../../@id -o . -v ../../@id );
   fi
 
@@ -1063,14 +1063,14 @@ htrsh_pageimg_clean () {
     [ $(echo "$htrsh_xpath_regions" | grep -F '[' | wc -l) != 0 ] &&
       IXPATH=$(echo "$htrsh_xpath_regions" | sed 's|\[\([^[]*\)]|[not(\1)]|');
 
-    local textreg=$( xmlstarlet sel -t -m "$htrsh_xpath_regions/_:Coords[@points]" \
+    local textreg=$( xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_coords" \
                        -o ' -fill "gray(' -v '256-position()' -o ')"' \
                        -o ' -stroke "gray(' -v '256-position()' -o ')"' \
                        -o ' -draw "polygon ' -v @points -o '"' "$XML"
                        2>/dev/null );
     local othreg="";
     [ "$IXPATH" != "" ] &&
-      othreg=$( xmlstarlet sel -t -m "$IXPATH/_:Coords[@points]" \
+      othreg=$( xmlstarlet sel -t -m "$IXPATH/$htrsh_xpath_coords" \
                   -o ' -draw "polygon ' -v @points -o '"' "$XML" 2>/dev/null );
 
     ### Create mask and enhance selected text regions ###
@@ -1136,7 +1136,7 @@ htrsh_pageimg_quadborderclean () {
   local IMH=$(echo "$IMSIZE" | sed 's|.*x||');
 
   ### Get quadrilaterals ###
-  local QUADs=$(xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_quads" -v @points -n "$XML");
+  local QUADs=$(xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_coords" -v @points -n "$XML");
   local N=$(echo "$QUADs" | wc -l);
 
   local comps="";
@@ -1240,7 +1240,8 @@ htrsh_pageimg_extract_lines () {
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
-  local NUMLINES=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_coords)" "$XML");
+  local XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_coords";
+  local NUMLINES=$(xmlstarlet sel -t -v "count($XPATH)" "$XML");
 
   if [ "$NUMLINES" = 0 ]; then
     echo "$FN: error: zero lines have coordinates for extraction: $XML" 1>&2;
@@ -1255,7 +1256,7 @@ htrsh_pageimg_extract_lines () {
       IMRES="";
     fi
 
-    xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines/_:Coords" \
+    xmlstarlet sel -t -m "$XPATH" \
         -o "$base." -v ../../@id -o "." -v ../@id -o ".png " -v @points -n "$XML" \
       | imgpolycrop $IMRES "$IMFILE";
 
@@ -1423,7 +1424,7 @@ htrsh_feats_catregions () {
 
   local FBASE=$(echo "$FEATDIR/$IMBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
 
-  xmlstarlet sel -t -m "$htrsh_xpath_regions/_:TextLine/_:Coords" \
+  xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_coords" \
       -o "$FBASE." -v ../../@id -o "." -v ../@id -o ".fea" -n "$XML" \
     | xargs ls >/dev/null;
   [ "$?" != 0 ] &&
@@ -1431,10 +1432,10 @@ htrsh_feats_catregions () {
     return 1;
 
   local id;
-  for id in $(xmlstarlet sel -t -m "$htrsh_xpath_regions[_:TextLine/_:Coords]" -v @id -n "$XML"); do
+  for id in $(xmlstarlet sel -t -m "$htrsh_xpath_regions[$htrsh_xpath_lines/$htrsh_xpath_coords]" -v @id -n "$XML"); do
     local ff="";
     local f;
-    for f in $(xmlstarlet sel -t -m "//*[@id=\"$id\"]/_:TextLine[_:Coords]" -o "$FBASE.$id." -v @id -o ".fea" -n "$XML"); do
+    for f in $(xmlstarlet sel -t -m "//*[@id=\"$id\"]/$htrsh_xpath_lines[$htrsh_xpath_coords]" -o "$FBASE.$id." -v @id -o ".fea" -n "$XML"); do
       if [ "$ff" = "" ]; then
         ff="'$f'";
       else
@@ -2570,6 +2571,7 @@ htrsh_fix_rec_mlf_quotes () {
 ##
 ## Function that replaces special HMM model names with corresponding characters
 ##
+# @todo should modify this so that the replacement is only in TextEquiv/Unicode, not all the XML
 htrsh_fix_rec_names () {
   local FN="htrsh_fix_rec_names";
   if [ $# -lt 1 ]; then
@@ -2794,7 +2796,7 @@ htrsh_pagexml_insertalign_lines () {
         cpts=$( convert -fill black -stroke black -size ${LGEO[0]}x${LGEO[1]} \
                    xc:white +antialias -draw "polyline$cpts" "$LIMG" -compose lighten -composite \
                    -page $size+${LGEO[2]}+${LGEO[3]} -units ${LGEO[5]} -density ${LGEO[4]} miff:- \
-                 | imgccomp -V0 -NJS -A 0.1 -D $htrsh_aling_dilradi -R 2,2,2,2 - );
+                 | imgccomp -V0 -NJS -A 0.1 -D $htrsh_align_dilradi -R 2,2,2,2 - );
         [ "$cpts" != "" ] && pts="$cpts";
 
       elif [ "$htrsh_align_isect" = "yes" ]; then
@@ -2941,6 +2943,7 @@ htrsh_pageimg_forcealign_lines () {
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
   local B=$(echo "$XMLBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
+  echo "$FN: aligning $B" 1>&2;
 
   ### Create MLF from XML ###
   { echo '#!MLF!#'; htrsh_pagexml_textequiv "$XML" -f mlf-chars; } > "$TMPDIR/$B.mlf";
@@ -2964,7 +2967,34 @@ htrsh_pageimg_forcealign_lines () {
   [ "$?" != 0 ] &&
     return 1;
 
-  htrsh_fix_rec_names "$XMLOUT";
+  local missing=$(
+          { sed 's|.*\.\([^.]\+\)\.fea$|\1|' "$FEATLST";
+            sed -n '
+              /\/'"$IMBASE"'\.[^.]\+\.[^.]\+\.rec"$/ {
+                s|.*\.\([^.]\+\)\.rec"$|\1|;
+                p;
+              }' "$TMPDIR/${B}_aligned.mlf";
+          } | sort | uniq -u );
+
+  if [ "$missing" != "" ]; then
+    echo "$FN: error: unaligned lines: $B $(echo $missing)" 1>&2;
+    local ed=();
+    local id;
+    for id in $missing; do
+      local line=$(htrsh_xpath_lines="*[@id='$id']" htrsh_pagexml_textequiv "$XML");
+      for w in $(seq 1 $(echo "$line" | awk '{print NF}')); do
+        local ww=$(echo "$line" | awk '{printf("%s",$'$w')}');
+        ed=( "${ed[@]}" -s "//*[@id='$id']" -t elem -n TMPNODE );
+        ed=( "${ed[@]}" -i //TMPNODE -t attr -n id -v ${id}_w$(printf %.2d $w) );
+        ed=( "${ed[@]}" -s //TMPNODE -t elem -n TextEquiv );
+        ed=( "${ed[@]}" -s //TMPNODE/TextEquiv -t elem -n Unicode -v "$ww" );
+        ed=( "${ed[@]}" -r //TMPNODE -v Word );
+      done
+    done
+    xmlstarlet ed --inplace "${ed[@]}" "$XMLOUT";
+  fi
+
+  htrsh_fix_rec_names "$XMLOUT"; # @todo move this inside htrsh_pagexml_insertalign_lines?
 
   [ "$htrsh_keeptmp" -lt 1 ] &&
     rm -f "$TMPDIR/$B.mlf" "$TMPDIR/${B}_aligned.mlf";
@@ -3060,9 +3090,9 @@ htrsh_pageimg_forcealign () {
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
-  local RCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/_:TextEquiv/_:Unicode)" "$XML");
+  local RCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/$htrsh_xpath_textequiv)" "$XML");
   #local RCNT="0";
-  local LCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/$htrsh_xpath_lines/_:TextEquiv/_:Unicode)" "$XML");
+  local LCNT=$(xmlstarlet sel -t -v "count($htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_textequiv)" "$XML");
   [ "$RCNT" = 0 ] && [ "$LCNT" = 0 ] &&
     echo "$FN: error: no TextEquiv/Unicode nodes for processing: $XML" 1>&2 &&
     return 1;
@@ -3083,11 +3113,11 @@ htrsh_pageimg_forcealign () {
 
   ### Generate contours from baselines ###
   if [ $(xmlstarlet sel -t -v \
-           "count($htrsh_xpath_regions/_:TextLine/_:Baseline)" \
+           "count($htrsh_xpath_regions/$htrsh_xpath_lines/_:Baseline)" \
            "$XML") -gt 0 ] && (
        [ "$htrsh_align_prefer_baselines" = "yes" ] ||
        [ $(xmlstarlet sel -t -v \
-             "count($htrsh_xpath_regions/_:TextLine/$htrsh_xpath_coords)" \
+             "count($htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_coords)" \
              "$XML") = 0 ] ); then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating line contours from baselines ...";
     page_format_generate_contour -a 75 -d 25 \
