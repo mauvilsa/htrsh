@@ -112,7 +112,7 @@ htrsh_sed_translit_vowels='
 
 htrsh_valschema="yes";
 htrsh_pagexsd="http://mvillegas.info/xsd/2013-07-15/pagecontent.xsd";
-[ "$USER" = "mvillegas" ] &&
+( [ "$USER" = "mvillegas" ] || [ "$USER" = "mauvilsa" ] ) &&
   htrsh_pagexsd="$HOME/work/prog/mvsh/HTR/xsd/pagecontent+.xsd";
 
 htrsh_realpath="readlink -f";
