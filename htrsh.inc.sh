@@ -410,7 +410,7 @@ htrsh_pageimg_info () {
       IMRES=$(
         identify -format "%x %y %U" "$IMFILE" \
           | awk '
-              { if( NF == 4 ) {
+              { if( NF > 3 ) {
                   $2 = $3;
                   $3 = $4;
                 }
