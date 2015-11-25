@@ -163,7 +163,7 @@ htrsh_check_req () {
   done
 
   htrsh_version;
-  for cmd in imgtxtenh imglineclean imgpageborder imgccomp; do
+  for cmd in imgtxtenh imglineclean imgccomp; do
     $cmd --version;
   done
   { printf "xmlstarlet "; xmlstarlet --version | head -n 1;
