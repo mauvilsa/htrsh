@@ -146,18 +146,19 @@ htrsh_unload () {
 ##
 htrsh_check_req () {
   local FN="htrsh_check_req";
+  local RC="0";
   local cmd;
-  for cmd in xmlstarlet convert octave HVite dotmatrix imgtxtenh imglineclean imgccomp imgpolycrop imageSlant imageSlope page_format_generate_contour; do
+  for cmd in xmlstarlet convert octave HVite dotmatrix imgtxtenh imglineclean imgccomp imgpolycrop imageSlant page_format_generate_contour; do
     local c=$(which $cmd 2>/dev/null | sed '/^alias /d; s|^\t||');
-    [ ! -e "$c" ] &&
+    [ ! -e "$c" ] && RC="1" &&
       echo "$FN: WARNING: unable to find command: $cmd" 1>&2;
   done
 
-  [ $(dotmatrix -h 2>&1 | grep '\--htk' | wc -l) = 0 ] &&
+  [ $(dotmatrix -h 2>&1 | grep '\--htk' | wc -l) = 0 ] && RC="1" &&
     echo "$FN: WARNING: a dotmatrix with --htk option is required" 1>&2;
 
   for cmd in readhtk writehtk; do
-    [ $(octave -q --eval "which $cmd" | wc -l) = 0 ] &&
+    [ $(octave -q --eval "which $cmd" | wc -l) = 0 ] && RC="1" &&
       echo "$FN: WARNING: unable to find octave command: $cmd" 1>&2;
   done
 
@@ -171,7 +172,7 @@ htrsh_check_req () {
     HVite -V | grep HVite | cat;
   } 1>&2;
 
-  return 0;
+  return $RC;
 }
 
 
@@ -180,7 +181,7 @@ htrsh_check_req () {
 #---------------------------------#
 
 ##
-## Function that prints to stdout the TextEquiv from an XML Page file supporting several formats
+## Function that prints to stdout the TextEquiv from an XML Page file
 ##
 htrsh_pagexml_textequiv () {
   local FN="htrsh_pagexml_textequiv";
@@ -189,7 +190,7 @@ htrsh_pagexml_textequiv () {
   local FILTER="cat";
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
-      echo "Description: Prints to stdout the TextEquiv from an XML Page file supporting several formats";
+      echo "Description: Prints to stdout the TextEquiv from an XML Page file";
       echo "Usage: $FN XMLFILE [ Options ]";
       echo "Options:";
       echo " -s SOURCE    Source of TextEquiv, either 'regions', 'lines' or 'words' (def.=$SRC)";
@@ -1791,11 +1792,11 @@ htrsh_pageimg_extract_linefeats () {
     local slope="";
     local slant="";
     [ "$htrsh_feat_deslope" = "yes" ] &&
-      slope=$(imageSlope -i ${ff}_clean.png -o ${ff}_deslope.png -v 1 -s 10000 2>&1 \
-               | sed -n '/slope medio:/{s|.* ||;p;}');
-      #slope=$(convert ${ff}_clean.png +repage -flatten \
-      #         -deskew 40% -print '%[deskew:angle]\n' \
-      #         -trim +repage ${ff}_deslope.png);
+      slope=$(convert ${ff}_clean.png +repage -flatten \
+               -deskew 40% -print '%[deskew:angle]\n' \
+               -trim +repage ${ff}_deslope.png);
+      #slope=$(imageSlope -i ${ff}_clean.png -o ${ff}_deslope.png -v 1 -s 10000 2>&1 \
+      #         | sed -n '/slope medio:/{s|.* ||;p;}');
 
     [ "$htrsh_feat_deslant" = "yes" ] &&
       slant=$(imageSlant -v 1 -g -i ${ff}_deslope.png -o ${ff}_deslant.png 2>&1 \
