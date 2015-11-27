@@ -162,15 +162,17 @@ htrsh_check_req () {
       echo "$FN: WARNING: unable to find octave command: $cmd" 1>&2;
   done
 
-  htrsh_version;
-  for cmd in imgtxtenh imglineclean imgccomp; do
-    $cmd --version;
-  done
-  { printf "xmlstarlet "; xmlstarlet --version | head -n 1;
-    convert --version | sed -n '1{ s|^Version: ||; p; }';
-    octave -q --version | head -n 1;
-    HVite -V | grep HVite | cat;
-  } 1>&2;
+  if [ "$RC" = 0 ]; then
+    htrsh_version;
+    for cmd in imgtxtenh imglineclean imgccomp; do
+      $cmd --version;
+    done
+    { printf "xmlstarlet "; xmlstarlet --version;
+      convert --version | sed -n '1{ s|^Version: ||; p; }';
+      octave -q --version | head -n 1;
+      HVite -V | grep HVite | cat;
+    } 1>&2;
+  fi
 
   return $RC;
 }
@@ -247,7 +249,7 @@ htrsh_pagexml_textequiv () {
       <( cat "$XML" \
            | tr '\t\n' '  ' \
            | xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" "${PRINT[@]}" \
-           | eval $FILTER ) \
+           | $FILTER ) \
     | sed '
         s|\t  *|\t|;
         s|  *$||;
@@ -604,7 +606,7 @@ htrsh_pagexml_resize () {
 
 </xsl:stylesheet>';
 
-  xmlstarlet tr <( echo "$XSLT" ) < /dev/stdin;
+  xmlstarlet tr <( echo "$XSLT" );
 }
 
 ##
@@ -661,7 +663,7 @@ htrsh_pagexml_round () {
 
 </xsl:stylesheet>';
 
-  xmlstarlet tr <( echo "$XSLT" ) < /dev/stdin;
+  xmlstarlet tr <( echo "$XSLT" );
 }
 
 ##
@@ -678,10 +680,11 @@ htrsh_pagexml_sort_words () {
     return 1;
   fi
 
-  local XML=$(cat /dev/stdin);
+  local XML=$(cat);
 
-  local SORTVALS=$(
-    xmlstarlet sel -t -m '//_:TextLine[_:Word]' -v @id -o " " -v 'count(_:Word)' -m _:Word -o " | " -v @id -o " " -v _:Coords/@points -b -n <( echo "$XML" ) \
+  local SORTVALS=( $(
+    xmlstarlet sel -t -m '//_:TextLine[_:Word]' -v @id -o " " -v 'count(_:Word)' \
+        -m _:Word -o " | " -v @id -o " " -v _:Coords/@points -b -n <( echo "$XML" ) \
       | sed 's|,[0-9]*||g' \
       | awk '
           { printf( "%s %s", $1, $2 );
@@ -709,13 +712,12 @@ htrsh_pagexml_sort_words () {
               for( n=6; n<=NF; n+=2 )
                 if( $n <= $(n-2) )
                   break;
-              if( n <= NF ) {
-                printf( " -i '"'"'//*[@id=\"%s\"]'"'"' -t attr -n wordsort -v true", $1 );
+              if( n <= NF )
                 for( n=3; n<=NF; n+=2 )
-                  printf( " -i '"'"'//*[@id=\"%s\"]'"'"' -t attr -n sortval -v %s", $n, $(n+1) );
-              }
+                  printf( " -i //_:Word[@id=\"%s\"] -t attr -n sortval -v %s", $n, $(n+1) );
             }
-          }' );
+          }'
+    ) );
 
   local XSLT='<?xml version="1.0"?>
 <xsl:stylesheet
@@ -733,7 +735,7 @@ htrsh_pagexml_sort_words () {
     </xsl:copy>
   </xsl:template>
 
-  <xsl:template match="//_:TextLine[@wordsort]">
+  <xsl:template match="//_:TextLine[_:Word/@sortval]">
     <xsl:copy>
       <xsl:apply-templates select="@* | node()[not(self::_:Word) and not(self::_:TextEquiv)]" />
       <xsl:apply-templates select="_:Word">
@@ -744,13 +746,13 @@ htrsh_pagexml_sort_words () {
   </xsl:template>
 </xsl:stylesheet>';
 
-  if [ "$SORTVALS" = "" ]; then
+  if [ "${#SORTVALS[@]}" = 0 ]; then
     echo "$XML";
   else
     echo "$XML" \
-      | eval xmlstarlet ed $SORTVALS \
+      | xmlstarlet ed "${SORTVALS[@]}" \
       | xmlstarlet tr <( echo "$XSLT" ) \
-      | xmlstarlet ed -d //@wordsort -d //@sortval;
+      | xmlstarlet ed -d //@sortval;
   fi
 }
 
@@ -796,13 +798,14 @@ htrsh_pagexml_sort_lines () {
   </xsl:template>
 </xsl:stylesheet>';
 
-  xmlstarlet tr <( echo "$XSLT" ) < /dev/stdin;
+  xmlstarlet tr <( echo "$XSLT" );
 }
 
 ##
 ## Function that sorts TextRegions in an XML Page file
 ## (based ONLY on the minimum Y coordinate of the region Coords)
 ##
+# @todo reimplement like the word sort
 htrsh_pagexml_sort_regions () {
   local FN="htrsh_pagexml_sort_regions";
   if [ $# != 0 ]; then
@@ -843,7 +846,7 @@ htrsh_pagexml_sort_regions () {
 
 </xsl:stylesheet>';
 
-  saxonb-xslt -s:- -xsl:<( echo "$XSLT" ) < /dev/stdin;
+  saxonb-xslt -s:- -xsl:<( echo "$XSLT" );
 }
 
 ##
@@ -916,7 +919,7 @@ htrsh_pagexml_relabel () {
 
 </xsl:stylesheet>';
 
-  xmlstarlet tr <( echo "$XSLT1" ) < /dev/stdin \
+  xmlstarlet tr <( echo "$XSLT1" ) \
     | xmlstarlet tr <( echo "$XSLT2" );
 }
 
@@ -936,14 +939,14 @@ htrsh_pagexml_fpgram2points () {
   ### Parse input arguments ###
   local XML="$1";
 
-  local xmledit=();
+  local xmledit=( ed -d //@dummyattr );
   local id;
   for id in $(xmlstarlet sel -t -m '//_:TextLine/_:Coords[@fpgram]' -v ../@id -n "$XML"); do
     xmledit+=( -d "//_:TextLine[@id='$id']/_:Coords/@points" );
     xmledit+=( -r "//_:TextLine[@id='$id']/_:Coords/@fpgram" -v points );
   done
 
-  xmlstarlet ed "${xmledit[@]}" "$XML";
+  xmlstarlet "${xmledit[@]}" "$XML";
 }
 
 ##
@@ -983,7 +986,7 @@ htrsh_pagexml_rm_textequiv_newlines () {
 
 </xsl:stylesheet>';
 
-  xmlstarlet tr <( echo "$XSLT" ) < /dev/stdin;
+  xmlstarlet tr <( echo "$XSLT" );
 }
 
 
@@ -1043,8 +1046,10 @@ htrsh_pageimg_clean () {
   ### Enhance image ###
   local RC="0";
   if [ "$htrsh_clean_type" = "line" ]; then
-    convert "$IMFILE" -units PixelsPerCentimeter -density $(echo "$INRES" | sed 's|.* ||') "$OUTDIR/$IMBASE.png";
-    RC="$?";
+    #convert "$IMFILE" -units PixelsPerCentimeter -density $(echo "$INRES" | sed 's|.* ||') "$OUTDIR/$IMBASE.png";
+    #RC="$?";
+    cp -p "$XML" "$IMFILE" "$OUTDIR";
+    return 0;
 
   elif [ "$htrsh_imgclean" = "ncsr" ]; then
     EnhanceGray "$IMFILE" "$OUTDIR/$IMBASE.EnhanceGray.$IMEXT" 0 &&
@@ -1065,25 +1070,22 @@ htrsh_pageimg_clean () {
     RC="$?";
 
   else
-    local IXPATH="";
-    [ $(echo "$htrsh_xpath_regions" | grep -F '[' | wc -l) != 0 ] &&
-      IXPATH=$(echo "$htrsh_xpath_regions" | sed 's|\[\([^[]*\)]|[not(\1)]|');
-
-    local textreg=$( xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_coords" \
-                       -o ' -fill "gray(' -v '256-position()' -o ')"' \
-                       -o ' -stroke "gray(' -v '256-position()' -o ')"' \
-                       -o ' -draw "polygon ' -v @points -o '"' "$XML"
-                       2>/dev/null );
-    local othreg="";
-    [ "$IXPATH" != "" ] &&
-      othreg=$( xmlstarlet sel -t -m "$IXPATH/$htrsh_xpath_coords" \
-                  -o ' -draw "polygon ' -v @points -o '"' "$XML" 2>/dev/null );
+    local drawreg=( $( xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_coords" \
+                         -o ' -fill gray(' -v '256-position()' -o ')' \
+                         -o ' -stroke gray(' -v '256-position()' -o ')' \
+                         -o ' -draw polygon_' -v 'translate(@points," ","_")' "$XML"
+                         2>/dev/null ) );
+    if [ $(echo "$htrsh_xpath_regions" | grep -F '[' | wc -l) != 0 ]; then
+      local IXPATH=$(echo "$htrsh_xpath_regions" | sed 's|\[\([^[]*\)]|[not(\1)]|');
+      drawreg+=( -fill black -stroke black );
+      drawreg+=( $( xmlstarlet sel -t -m "$IXPATH/$htrsh_xpath_coords" \
+                      -o ' -draw polygon_' -v 'translate(@points," ","_")' "$XML" \
+                      2>/dev/null ) );
+    fi
 
     ### Create mask and enhance selected text regions ###
-    eval convert -size $IMSIZE xc:black +antialias $textreg \
-        -fill black -stroke black $othreg \
-        -alpha copy "'$IMFILE'" +swap \
-        -compose copy-opacity -composite miff:- \
+    convert -size $IMSIZE xc:black +antialias "${drawreg[@]//_/ }" \
+        -alpha copy "$IMFILE" +swap -compose copy-opacity -composite miff:- \
       | imgtxtenh $htrsh_imgtxtenh_opts $INRES - "$OUTDIR/$IMBASE.png" 2>&1;
     RC="$?";
   fi
@@ -1095,8 +1097,6 @@ htrsh_pageimg_clean () {
   ### Create new XML with image in current directory and PNG extension ###
   xmlstarlet ed -P -u //@imageFilename -v "$IMBASE.png" "$XML" \
     > "$OUTDIR/$XMLBASE.xml";
-
-  return 0;
 }
 
 ##
@@ -1442,7 +1442,7 @@ htrsh_feats_catregions () {
   for id in $(xmlstarlet sel -t -m "$htrsh_xpath_regions[$htrsh_xpath_lines/$htrsh_xpath_coords]" -v @id -n "$XML"); do
     local ff=();
     local f;
-    for f in $(xmlstarlet sel -t -m "//*[@id=\"$id\"]/$htrsh_xpath_lines[$htrsh_xpath_coords]" -o "$FBASE.$id." -v @id -o ".fea" -n "$XML"); do
+    for f in $(xmlstarlet sel -t -m "//*[@id='$id']/$htrsh_xpath_lines[$htrsh_xpath_coords]" -o "$FBASE.$id." -v @id -o ".fea" -n "$XML"); do
       ff+=( "$f" );
     done
     HCopy "${ff[@]}" "$FBASE.$id.fea";
@@ -1700,11 +1700,8 @@ htrsh_feats_htk_to_kaldi () {
     return 1;
   fi
 
-  cat /dev/stdin \
-    | sed '
-        s|^\([^/]*\)\.fea$|\1 \1.fea|;
-        s|^\(.*/\)\([^/]*\)\.fea$|\2 \1\2.fea|;
-        ' \
+  sed 's|^\([^/]*\)\.fea$|\1 \1.fea|;
+       s|^\(.*/\)\([^/]*\)\.fea$|\2 \1\2.fea|;' \
     | copy-feats --htk-in scp:- ark,scp:$1.ark,$1.scp;
 
   return $?;
@@ -1761,7 +1758,7 @@ htrsh_pageimg_extract_linefeats () {
   local LINEIMGS=$(htrsh_pageimg_extract_lines "$XML" -d "$OUTDIR");
   ( [ "$?" != 0 ] || [ "$LINEIMGS" = "" ] ) && return 1;
 
-  local xmledit=();
+  local xmledit=( ed );
   local FEATS="";
 
   ### Process each line ###
@@ -1898,7 +1895,7 @@ htrsh_pageimg_extract_linefeats () {
 
     local FEATOP="";
     if [ "$htrsh_feat_normxheight" != "" ]; then
-      FEATOP=$(xmlstarlet sel -t -v "//*[@id=\"$id\"]/@custom" "$XML" 2>/dev/null \
+      FEATOP=$(xmlstarlet sel -t -v "//*[@id='$id']/@custom" "$XML" 2>/dev/null \
         | sed -n '/x-height:/ { s|.*x-height:\([^;]*\).*|\1|; s|px$||; p; }' );
       [ "$FEATOP" != "" ] && FEATOP="-xh $FEATOP";
     fi
@@ -1934,19 +1931,19 @@ htrsh_pageimg_extract_linefeats () {
   fi
 
   ### Generate new XML Page file ###
-  xmlstarlet ed -P "${xmledit[@]}" "$XML" > "$XMLOUT";
+  xmlstarlet "${xmledit[@]}" "$XML" > "$XMLOUT";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems generating XML file: $XMLOUT" 1>&2 &&
     return 1;
 
   if [ "$htrsh_feat_contour" = "yes" ] && [ "$REPLC" = "yes" ]; then
-    xmledit=();
+    xmledit=( ed --inplace );
     local id;
     for id in $(xmlstarlet sel -t -m '//*/_:Coords[@fcontour]' -v ../@id -n "$XMLOUT"); do
       xmledit+=( -d "//*[@id='${id}']/_:Coords/@points" );
       xmledit+=( -r "//*[@id='${id}']/_:Coords/@fcontour" -v points );
     done
-    xmlstarlet ed --inplace "${xmledit[@]}" "$XMLOUT";
+    xmlstarlet "${xmledit[@]}" "$XMLOUT";
   fi
 
   return 0;
@@ -2062,19 +2059,19 @@ htrsh_langmodel_train () {
 
   ### Tokenize training text ###
   cat "$TXT" \
-    | eval $TOKENIZER \
+    | $TOKENIZER \
     > "$OUTDIR/text_tokenized.txt";
 
   ### Create dictionary ###
   paste \
       <( cat "$OUTDIR/text_tokenized.txt" \
-           | eval $CANONIZER \
+           | $CANONIZER \
            | tee "$OUTDIR/text_canonized.txt" \
            | tr ' ' '\n' ) \
       <( cat "$OUTDIR/text_tokenized.txt" \
            | tr ' ' '\n' ) \
       <( cat "$OUTDIR/text_tokenized.txt" \
-           | eval $DIPLOMATIZER \
+           | $DIPLOMATIZER \
            | tr ' ' '\n' ) \
     | gawk -v SPECIAL=<( echo "$htrsh_special_chars" ) "$GAWK_CREATE_DIC" \
     | LC_ALL=C.UTF-8 sort \
@@ -2749,7 +2746,7 @@ htrsh_pagexml_insertalign_lines () {
   ( [ "$htrsh_align_contour" = "yes" ] || [ "$htrsh_align_isect" = "yes" ] ) &&
     local size=$(xmlstarlet sel -t -v //@imageWidth -o x -v //@imageHeight "$XML");
 
-  local xmledit=();
+  local xmledit=( ed );
 
   local n=0;
   for id in $ids; do
@@ -2798,9 +2795,10 @@ htrsh_pagexml_insertalign_lines () {
                          printf( " %s,%s", $n-oX, $(n+1)-oY );
                      }' );
         cpts=$( convert -fill black -stroke black -size ${LGEO[0]}x${LGEO[1]} \
-                   xc:white +antialias -draw "polyline$cpts" "$LIMG" -compose lighten -composite \
-                   -page $size+${LGEO[2]}+${LGEO[3]} -units ${LGEO[5]} -density ${LGEO[4]} miff:- \
-                 | imgccomp -V0 -NJS -A 0.1 -D $htrsh_align_dilradi -R 2,2,2,2 - 2>/dev/null );
+                    xc:white +antialias -draw "polygon$cpts" "$LIMG" \
+                    -compose lighten -composite -page $size+${LGEO[2]}+${LGEO[3]} \
+                    -units ${LGEO[5]} -density ${LGEO[4]} miff:- \
+                  | imgccomp -V0 -NJS -A 0.1 -D $htrsh_align_dilradi -R 2,2,2,2 - 2>/dev/null );
         [ "$cpts" != "" ] && pts="$cpts";
 
       elif [ "$htrsh_align_isect" = "yes" ]; then
@@ -2820,20 +2818,19 @@ htrsh_pagexml_insertalign_lines () {
               w = mx_x-mn_x+1;
               h = mx_y-mn_y+1;
             }
-            printf( " \\( -size %dx%d xc:black -draw \"polyline", w, h );
+            printf( " ( -size %dx%d xc:black -draw polygon", w, h );
             for( n=1; n<=NF; n+=2 )
-              printf( " %d,%d", $n-mn_x, $(n+1)-mn_y );
-            printf( "\" \\)" );
+              printf( "_%d,%d", $n-mn_x, $(n+1)-mn_y );
+            printf( " )" );
           }
           END {
-            printf( " -compose darken -composite -page %s+%d+%d miff:-\n", sz, mn_x, mn_y );
+            printf( " -compose darken -composite -page %s+%d+%d miff:-", sz, mn_x, mn_y );
           }';
-        pts=$(
-          eval $(
-            { echo "$pts";
-              echo "$contour";
-            } | awk -F'[ ,]' -v sz=$size "$AWK_ISECT" ) \
-            | imgccomp -V0 -JS - );
+        local polydraw=( $(
+          { echo "$pts";
+            echo "$contour";
+          } | awk -F'[ ,]' -v sz=$size "$AWK_ISECT" ) );
+        pts=$( "${polydraw[@]//_/ }" | imgccomp -V0 -JS - );
       fi
       local wpts="$pts";
 
@@ -2852,14 +2849,14 @@ htrsh_pagexml_insertalign_lines () {
         for c in $(seq $pS $pE); do
           local gg=$(printf %.2d $g);
           local pts=$(echo "$coords" | sed -n "${c}p");
-          [ "$htrsh_align_isect" = "yes" ] &&
-            pts=$(
-              eval $(
-                { echo "$pts";
-                  echo "$wpts";
-                } | awk -F'[ ,]' -v sz=$size "$AWK_ISECT" ) \
-                | imgccomp -V0 -JS - );
+          if [ "$htrsh_align_isect" = "yes" ]; then
+            local polydraw=( $(
+              { echo "$pts";
+                echo "$wpts";
+              } | awk -F'[ ,]' -v sz=$size "$AWK_ISECT" ) );
+            pts=$( "${polydraw[@]//_/ }" | imgccomp -V0 -JS - );
             # @todo character polygons overlap slightly, possible solution: reduce width of parallelograms by 1 pixel in each side
+          fi
 
           xmledit+=( -s "//*[@id='${id}_w${ww}']" -t elem -n TMPNODE );
           xmledit+=( -i //TMPNODE -t attr -n id -v "${id}_w${ww}_g${gg}" );
@@ -2891,7 +2888,7 @@ htrsh_pagexml_insertalign_lines () {
 
   ### Create new XML including alignments ###
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): edit XML ..." 1>&2;
-  xmlstarlet ed "${xmledit[@]}" "$XML";
+  xmlstarlet "${xmledit[@]}" "$XML";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems creating XML file: $XMLOUT" 1>&2 &&
     return 1;
@@ -2982,7 +2979,7 @@ htrsh_pageimg_forcealign_lines () {
 
   if [ "$missing" != "" ]; then
     echo "$FN: error: unaligned lines: $B $(echo $missing)" 1>&2;
-    local xmledit=();
+    local xmledit=( ed --inplace );
     local id;
     for id in $missing; do
       local line=$(htrsh_xpath_lines="*[@id='$id']" htrsh_pagexml_textequiv "$XML");
@@ -2995,7 +2992,7 @@ htrsh_pageimg_forcealign_lines () {
         xmledit+=( -r //TMPNODE -v Word );
       done
     done
-    xmlstarlet ed --inplace "${xmledit[@]}" "$XMLOUT";
+    xmlstarlet "${xmledit[@]}" "$XMLOUT";
   fi
 
   htrsh_fix_rec_names "$XMLOUT"; # @todo move this inside htrsh_pagexml_insertalign_lines?
@@ -3105,7 +3102,7 @@ htrsh_pageimg_forcealign () {
   [ "$WGCNT" != "0 0" ] &&
     echo "$FN: warning: input already contains Word and/or Glyph information: $XML" 1>&2;
 
-  local AREG=(); [ "$LCNT" = 0 ] && AREG=( -s regions );
+  local AREG=( -s lines ); [ "$LCNT" = 0 ] && AREG[1]="regions";
 
   local B=$(echo "$XMLBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
 
@@ -3190,7 +3187,7 @@ htrsh_pageimg_forcealign () {
     [ "$?" != 0 ] && return 1;
   fi | sed '/^$/d';
 
-  [ "${#AREG[@]}" != 0 ] &&
+  [ "${AREG[1]}" = "regions" ] &&
     htrsh_feats_catregions "$TMPDIR/${XMLBASE}_feats.xml" "$TMPDIR" > $TMPDIR/${B}_feats.lst;
 
   ### Train HMMs model for this single page ###
@@ -3252,7 +3249,7 @@ htrsh_pageimg_forcealign () {
 
   ### Do forced alignment using model ###
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): doing forced alignment ...";
-  if [ "${#AREG[@]}" != 0 ]; then
+  if [ "${AREG[1]}" = "regions" ]; then
     cp "$TMPDIR/${XMLBASE}_feats.xml" "$TMPDIR/${XMLBASE}_align.xml";
     local id;
     for id in $(xmlstarlet sel -t -m "$htrsh_xpath_regions" -v @id -n "$XML"); do
