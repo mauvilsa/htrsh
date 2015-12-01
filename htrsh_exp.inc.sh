@@ -23,11 +23,12 @@ htrsh_hvite_beam="-n 15 1"; # Beam search parameters
 htrsh_exp_hvite_gsf="0 3 5 10 20 30 50"; # List of Grammar Scale Factors for HLRescore
 htrsh_exp_hvite_wip="50 30 20 10 5 0 -5 -10 -20 -30 -50 -70 -90 -110"; # List of Word Insertion Penalties for HLRescore
 
-htrsh_exp_partial=""; # Run experiment until step: feats, 
+htrsh_exp_partial=""; # Run experiment until step: feats, lang, hmm
 
 ##
 ## Perform/continue a cross-validation HTR experiment
 ##
+# @todo Train mlf decoding dictionary should depend on parameters to allow experimentation with other HMM structures
 htrsh_exp_htr_cv () {(
   FN="htrsh_exp_htr_cv";
 
@@ -105,7 +106,7 @@ htrsh_exp_htr_cv () {(
     rmdir "$FDIR/tmp";
     gzip -n "$FDIR/orig/"*.xml;
 
-    TE=$(($(date +%s%N)/1000000)); echo "$FN: $FEATNAME features: time $((TE-TS)) ms";
+    TE=$(($(date +%s%N)/1000000)); echo "$FN: computing $FEATNAME features: time $((TE-TS)) ms";
   fi
 
 
@@ -278,7 +279,7 @@ htrsh_exp_htr_cv () {(
 
     rm "$EXPDIR/models/$DATASET/lang/pages.txt";
 
-    TE=$(($(date +%s%N)/1000000)); echo "$FN: language models: time $((TE-TS)) ms";
+    TE=$(($(date +%s%N)/1000000)); echo "$FN: training language models: time $((TE-TS)) ms";
   fi
 
 
@@ -287,11 +288,6 @@ htrsh_exp_htr_cv () {(
     echo "$FN: creating ground truth files";
 
     mkdir -p "$EXPDIR/groundtruth/$DATASET";
-    { echo '#!MLF!#';
-      for f in "$EXPDIR/data/$DATASET/"*.xml; do
-        htrsh_pagexml_textequiv "$f" -f mlf-chars -F "$htrsh_tokenizer";
-      done
-    } > "$EXPDIR/groundtruth/$DATASET/pages_train.mlf";
     { echo '#!MLF!#';
       for f in "$EXPDIR/data/$DATASET/"*.xml; do
         htrsh_pagexml_textequiv "$f" -f mlf-words -F "$htrsh_tokenizer";
@@ -303,18 +299,29 @@ htrsh_exp_htr_cv () {(
 
   ### Train HMM models ###
   for htrsh_hmm_states in $STATES; do
+    MDIR="$EXPDIR/models/$DATASET/${htrsh_hmm_type}_hmm_s$htrsh_hmm_states";
+
+    if [ ! -e "$MDIR/pages_train.mlf" ]; then
+      mkdir -p "$MDIR";
+      { echo '#!MLF!#';
+        for f in "$EXPDIR/data/$DATASET/"*.xml; do
+          htrsh_pagexml_textequiv "$f" -f mlf-chars -F "$htrsh_tokenizer";
+        done
+      } > "$MDIR/pages_train.mlf";
+    fi
+
     for p in $PARTS; do
-      MDIR="$EXPDIR/models/$DATASET/hmm_s$htrsh_hmm_states/$FEATNAME/part$p";
+      MDIR="$EXPDIR/models/$DATASET/${htrsh_hmm_type}_hmm_s$htrsh_hmm_states/$FEATNAME/part$p";
       [ -d "$MDIR" ] &&
         continue;
-      echo "$FN: computing HMM models for partition $p";
+      echo "$FN: training HMMs for partition $p";
       TS=$(($(date +%s%N)/1000000));
 
       mkdir -p "$MDIR";
       { sed "s|^|$EXPDIR/feats/$DATASET/$FEATNAME/pca_part$p/|;" "$EXPDIR/lists/$DATASET/feats_train_part$p.lst" \
           | xargs ls -f \
           > "$MDIR/feats_train_part$p.lst";
-        htrsh_hmm_train "$MDIR/feats_train_part$p.lst" "$EXPDIR/groundtruth/$DATASET/pages_train.mlf" \
+        htrsh_hmm_train "$MDIR/feats_train_part$p.lst" "$MDIR/../../pages_train.mlf" \
           -d "$MDIR" -T $THREADS;
       } &> "$MDIR/train.log";
       gzip -n "$MDIR/train.log";
@@ -324,7 +331,7 @@ htrsh_exp_htr_cv () {(
       done
       rm "$MDIR/feats_train_part$p.lst";
 
-      TE=$(($(date +%s%N)/1000000)); echo "$FN: computing HMM models for partition $p: time $((TE-TS)) ms";
+      TE=$(($(date +%s%N)/1000000)); echo "$FN: training HMMs for partition $p: time $((TE-TS)) ms";
     done
   done
 
@@ -349,7 +356,7 @@ htrsh_exp_htr_cv () {(
 
           { LM="$EXPDIR/models/$DATASET/lang/part$p/langmodel_2-gram.lat.gz";
             DIC="$EXPDIR/models/$DATASET/lang/part$p/dictionary.txt";
-            HMM="$EXPDIR/models/$DATASET/hmm_s$states/$FEATNAME/part$p/Macros_hmm_$gauss.gz";
+            HMM="$EXPDIR/models/$DATASET/${htrsh_hmm_type}_hmm_s$states/$FEATNAME/part$p/Macros_hmm_$gauss.gz";
             HMMLST=$(zcat $HMM | sed -n '/^~h/{s|^~h "||;s|"$||;p;}');
 
             sed "s|^|$EXPDIR/feats/$DATASET/$FEATNAME/pca_part$p/|;" "$EXPDIR/lists/$DATASET/feats_part$p.lst" \
@@ -367,7 +374,7 @@ htrsh_exp_htr_cv () {(
 
           } &>> "$DDIR/hvite.log";
 
-          TE=$(($(date +%s%N)/1000000)); echo "$FN: word-graphs for parameters $param and partition $p: time $((TE-TS)) ms";
+          TE=$(($(date +%s%N)/1000000)); echo "$FN: computing word-graphs for parameters $param and partition $p: time $((TE-TS)) ms";
         done
       fi
 

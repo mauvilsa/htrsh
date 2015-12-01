@@ -68,9 +68,9 @@ htrsh_HTK_HHEd_opts="";            # Options for HHEd tool
 htrsh_HTK_HVite_opts="";           # Options for HVite tool
 
 htrsh_HTK_config='
-HMMDEFFILTER   = "zcat $"
+HMMDEFFILTER   = "gzip -dc $"
 HMMDEFOFILTER  = "gzip > $"
-HNETFILTER     = "zcat $"
+HNETFILTER     = "gzip -dc $"
 HNETOFILTER    = "gzip > $"
 NONUMESCAPES   = T
 STARTWORD      = "<s>"
@@ -164,6 +164,7 @@ htrsh_check_req () {
 
   if [ "$RC" = 0 ]; then
     htrsh_version;
+    run_parallel_version;
     for cmd in imgtxtenh imglineclean imgccomp; do
       $cmd --version;
     done
@@ -333,7 +334,7 @@ htrsh_mlf_to_tab () {
         printf("\n");
       else if( $0 != "#!MLF!#" ) {
         if( NF==1 && ( match($1,/\.lab"$/) || match($1,/\.rec"$/) ) )
-          printf( "%s", gensub( /^".*\/(.+)\.[lr][ae][bc]"$/, "\\1", "", $1 ) );
+          printf( "%s", gensub( /^".*\/(.+)\.[lr][ae][bc]"$/, "\\1", 1, $1 ) );
         else {
           if( NF > 1 )
             $1 = $3;
@@ -921,6 +922,44 @@ htrsh_pagexml_relabel () {
 
   xmlstarlet tr <( echo "$XSLT1" ) \
     | xmlstarlet tr <( echo "$XSLT2" );
+}
+
+##
+## Function that replaces Coords polygons by bounding boxes
+##
+htrsh_pagexml_points2bbox () {
+  local FN="htrsh_pagexml_points2bbox";
+  if [ $# != 0 ]; then
+    { echo "$FN: Error: Incorrect input arguments";
+      echo "Description: Replaces Coords polygons by bounding boxes";
+      echo "Usage: $FN < XMLIN";
+    } 1>&2;
+    return 1;
+  fi
+
+  local XML=$(cat);
+
+  local xmledit=( $(
+    xmlstarlet sel -t -m '//_:Coords[@points]' -v ../@id -o " " \
+        -v 'translate(@points,","," ")' -n <( echo "$XML" ) \
+      | awk '
+          { if( NF > 5 ) {
+              mn_x = mx_x = $2;
+              mn_y = mx_y = $3;
+              for( n=4; n<NF; n+=2 ) {
+                mn_x = mn_x > $n ? $n : mn_x ;
+                mx_x = mx_x < $n ? $n : mx_x ;
+                mn_y = mn_y > $(n+1) ? $(n+1) : mn_y ;
+                mx_y = mx_y < $(n+1) ? $(n+1) : mx_y ;
+              }
+              printf( " -u //_:Coords[../@id=\"%s\"]/@points", $1 );
+              printf( " -v %s,%s;%s,%s;%s,%s;%s,%s", mn_x,mn_y, mx_x,mn_y, mx_x,mx_y, mn_x,mx_y );
+            }
+          }'
+    ) );
+
+  echo "$XML" \
+    | xmlstarlet ed "${xmledit[@]//;/ }";
 }
 
 ##
@@ -2036,12 +2075,16 @@ htrsh_langmodel_train () {
           printf( "\"%s\"\t[%s]\t%s\t", wcanonic, variant, vprob );
           utxt = variant_models[canonic][variant];
           N = split( utxt, txt, "" );
+          cprev = "@";
           for( n=1; n<=N; n++ ) {
             printf( n==1 ? "" : " " );
             if( txt[n] in SCHAR ) {
               for( m=1; m<=NSPECIAL; m++ ) {
                 w = SWORD[m];
                 if( w == substr(utxt,n,length(w)) ) {
+                  if( TYPE == "overlap" )
+                    printf( "%s%s ", cprev, SMARK[m] );
+                  cprev = SMARK[m];
                   printf( "%s", SMARK[m] );
                   n += length(w)-1;
                   break;
@@ -2050,8 +2093,13 @@ htrsh_langmodel_train () {
               if( m <= NSPECIAL )
                 continue;
             }
+            if( TYPE == "overlap" )
+              printf( "%s%s ", cprev, txt[n] );
+            cprev = txt[n];
             printf( "%s", txt[n] );
           }
+          if( TYPE == "overlap" )
+            printf( " %s@", cprev );
           printf( " @\n" );
         }
       }
@@ -2073,7 +2121,7 @@ htrsh_langmodel_train () {
       <( cat "$OUTDIR/text_tokenized.txt" \
            | $DIPLOMATIZER \
            | tr ' ' '\n' ) \
-    | gawk -v SPECIAL=<( echo "$htrsh_special_chars" ) "$GAWK_CREATE_DIC" \
+    | gawk -v TYPE="$htrsh_hmm_type" -v SPECIAL=<( echo "$htrsh_special_chars" ) "$GAWK_CREATE_DIC" \
     | LC_ALL=C.UTF-8 sort \
     > "$OUTDIR/dictionary.txt";
 
@@ -2383,8 +2431,8 @@ htrsh_hmm_train () {
         -S "$FEATLST" -M "$OUTDIR" "$OUTDIR/proto" 1>&2;
 
       local GLOBAL=$(< "$OUTDIR/vFloors");
-      local MEAN=$(zcat "$OUTDIR/proto" | sed -n '/<MEAN>/{N;s|.*\n||;p;q;}');
-      local VARIANCE=$(zcat "$OUTDIR/proto" | sed -n '/<VARIANCE>/{N;s|.*\n||;N;p;q;}');
+      local MEAN=$(gzip -dc "$OUTDIR/proto" | sed -n '/<MEAN>/{N;s|.*\n||;p;q;}');
+      local VARIANCE=$(gzip -dc "$OUTDIR/proto" | sed -n '/<VARIANCE>/{N;s|.*\n||;N;p;q;}');
 
       htrsh_hmm_proto "$DIMS" "$htrsh_hmm_states" -n "$HMMLST" \
           -g "$GLOBAL" -m "$MEAN" -v "$VARIANCE" \
@@ -2559,7 +2607,7 @@ htrsh_fix_rec_mlf_quotes () {
   gawk '
     { if( NF >= 3 ) {
         if( match($3,/^\x27.*\x27$/) )
-          $3 = gensub( /^\x27(.*)\x27$/, "\\1", "", $3 );
+          $3 = gensub( /^\x27(.*)\x27$/, "\\1", 1, $3 );
         if( ! match($3,/^".+"$/) )
           $3 = ("\"" gensub( /\x22/, "\\\\\x22", "g", $3 ) "\"");
       }
@@ -2623,7 +2671,7 @@ htrsh_mlf_prepalign () {
         else
           printf( "%s %s @\n", PE, PE );
         if( match( $3, /^".*"$/ ) )
-          $3 = gensub( /\\"/, "\"", "g", gensub( /^"(.+)"$/, "\\1", "", $3 ) );
+          $3 = gensub( /\\"/, "\"", "g", gensub( /^"(.+)"$/, "\\1", 1, $3 ) );
      }
      print;
    }' "$1";
@@ -2675,7 +2723,7 @@ htrsh_pagexml_insertalign_lines () {
               ids[$0] = "";
             else {
               if( match( $0, /\.rec"$/ ) )
-                id = gensub(/.*\.([^.]+)\.rec"$/, "\\1", "", $0 );
+                id = gensub(/.*\.([^.]+)\.rec"$/, "\\1", 1, $0 );
               else if( $0 != "." && id in ids ) {
                 NF = 3;
                 $2 = sprintf( "%.0f", $2/100000-1 );
@@ -2953,7 +3001,7 @@ htrsh_pageimg_forcealign_lines () {
     return 1;
 
   ### Create auxiliary files: HMM list and dictionary ###
-  local HMMLST=$(zcat "$MODEL" | sed -n '/^~h "/{ s|^~h "||; s|"$||; p; }');
+  local HMMLST=$(gzip -dc "$MODEL" | sed -n '/^~h "/{ s|^~h "||; s|"$||; p; }');
   local DIC=$(echo "$HMMLST" | awk '{printf("\"%s\" [%s] 1.0 %s\n",$1,$1,$1)}');
 
   ### Do forced alignment with HVite ###
@@ -3077,13 +3125,12 @@ htrsh_pageimg_forcealign () {
   if [ -d "$TMPDIR" ]; then
     echo -n "$FN: temporal directory ($TMPDIR) already exists, current contents will be deleted, continue? " 1>&2;
     local RMTMP="";
-    read RMTMP;
-    if [ "${RMTMP:0:1}" = "y" ]; then
-      rm -r "$TMPDIR";
-    else
-      echo "$FN: aborting ..." 1>&2;
+    read -n 1 RMTMP;
+    [ "${RMTMP:0:1}" = "y" ] &&
+      echo "$FN: aborting ..." 1>&2 &&
       return 1;
-    fi
+    rm -r "$TMPDIR";
+    echo 1>&2;
   fi
 
   ### Check page ###
@@ -3177,7 +3224,7 @@ htrsh_pageimg_forcealign () {
     PBASE="$TMPDIR/pcab.mat.gz";
     htrsh_feats_pca "$TMPDIR/${B}_feats.lst" "$PBASE" -e 1:4 -r 24;
     [ "$?" != 0 ] && return 1;
-  fi | sed '/^$/d';
+  fi #| sed '/^$/d';
   if [ "$PBASE" != "" ]; then
     [ ! -e "$PBASE" ] &&
       echo "$FN: error: projection base file not found: $PBASE" 1>&2 &&
@@ -3213,7 +3260,7 @@ htrsh_pageimg_forcealign () {
               | sed '/^"\*\/.*"$/d; /^\.$/d; s|^"\(.*\)"|\1|;' \
               | sort -u);
     CHARCHECK=$(
-      zcat "$MODEL" \
+      gzip -dc "$MODEL" \
         | sed -n '/^~h ".*"$/ { s|^~h "\(.*\)"$|\1|; p; }' \
         | awk '
             { if( FILENAME == "-" )
@@ -3231,11 +3278,11 @@ htrsh_pageimg_forcealign () {
       HCompV $htrsh_HTK_HCompV_opts -C <( echo "$htrsh_HTK_config" ) \
         -S "$TMPDIR/${B}_feats.lst" -M "$TMPDIR" "$TMPDIR/proto" 1>&2;
 
-      local MEAN=$(zcat "$TMPDIR/proto" | sed -n '/<MEAN>/{N;s|.*\n||;p;q;}');
-      local VARIANCE=$(zcat "$TMPDIR/proto" | sed -n '/<VARIANCE>/{N;s|.*\n||;N;p;q;}');
+      local MEAN=$(gzip -dc "$TMPDIR/proto" | sed -n '/<MEAN>/{N;s|.*\n||;p;q;}');
+      local VARIANCE=$(gzip -dc "$TMPDIR/proto" | sed -n '/<VARIANCE>/{N;s|.*\n||;N;p;q;}');
       local NEWMODEL="$TMPDIR"/$(echo "$MODEL" | sed 's|.*/||');
 
-      { zcat "$MODEL";
+      { gzip -dc "$MODEL";
         htrsh_hmm_proto "$DIMS" "$htrsh_hmm_states" -n "$CHARCHECK" \
           -g off -m "$MEAN" -v "$VARIANCE";
       } | gzip \
