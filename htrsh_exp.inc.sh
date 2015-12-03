@@ -28,7 +28,7 @@ htrsh_exp_partial=""; # Run experiment until step: feats, lang, hmm
 ##
 ## Perform/continue a cross-validation HTR experiment
 ##
-# @todo Train mlf decoding dictionary should depend on parameters to allow experimentation with other HMM structures
+# @todo Train mlf (done) and decoding dictionary should depend on parameters to allow experimentation with other HMM structures
 htrsh_exp_htr_cv () {(
   FN="htrsh_exp_htr_cv";
 

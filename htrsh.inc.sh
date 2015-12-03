@@ -50,7 +50,7 @@ htrsh_dotmatrix_H="32";    # Height of normalized frame in px
 htrsh_dotmatrix_mom="yes"; # Whether to add moments to features
 
 htrsh_align_chars="no";             # Whether to align at a character level
-htrsh_align_dilradi="0";            # Dilation radius in mm for contours
+htrsh_align_dilradi="0.5";          # Dilation radius in mm for contours
 htrsh_align_contour="yes";          # Whether to compute contours from the image
 htrsh_align_isect="yes";            # Whether to intersect parallelograms with line contour
 htrsh_align_prefer_baselines="yes"; # Whether to always generate contours from baselines
@@ -2142,7 +2142,8 @@ htrsh_langmodel_train () {
   HBuild -n "$OUTDIR/langmodel_${ORDER}-gram.arpa" -s "<s>" "</s>" \
     "$OUTDIR/dictionary.txt" "$OUTDIR/langmodel_${ORDER}-gram.lat";
 
-  rm "$OUTDIR/vocabulary.txt";
+  [ "$htrsh_keeptmp" -lt 1 ] &&
+    rm "$OUTDIR/vocabulary.txt";
 
   return 0;
 }
@@ -2794,14 +2795,12 @@ htrsh_pagexml_insertalign_lines () {
   ( [ "$htrsh_align_contour" = "yes" ] || [ "$htrsh_align_isect" = "yes" ] ) &&
     local size=$(xmlstarlet sel -t -v //@imageWidth -o x -v //@imageHeight "$XML");
 
-  local xmledit=( ed );
-
   local n=0;
   for id in $ids; do
     n=$((n+1));
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): alignments for line $n (id=$id) ..." 1>&2;
 
-    xmledit+=( -d "//*[@id='$id']/_:Word" );
+    local xmledit=( -d "//*[@id='$id']/_:Word" );
 
     local LIMG LGEO contour;
     if [ "$htrsh_align_contour" = "yes" ]; then
@@ -2932,14 +2931,12 @@ htrsh_pagexml_insertalign_lines () {
     done
 
     xmledit+=( -m "//*[@id='$id']/_:TextEquiv" "//*[@id='$id']" );
-  done
 
-  ### Create new XML including alignments ###
-  echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): edit XML ..." 1>&2;
-  xmlstarlet "${xmledit[@]}" "$XML";
-  [ "$?" != 0 ] &&
-    echo "$FN: error: problems creating XML file: $XMLOUT" 1>&2 &&
-    return 1;
+    xmlstarlet ed --inplace "${xmledit[@]}" "$XML";
+    [ "$?" != 0 ] &&
+      echo "$FN: error: problems creating XML file: $XMLOUT" 1>&2 &&
+      return 1;
+  done
 
   return 0;
 }
@@ -2953,7 +2950,7 @@ htrsh_pageimg_forcealign_lines () {
   if [ $# -lt 4 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Does a forced alignment at a line level for a given XML Page, feature list and model";
-      echo "Usage: $FN XMLIN FEATLST MODEL XMLOUT [ Options ]";
+      echo "Usage: $FN XML FEATLST MODEL [ Options ]";
       echo "Options:";
       echo " -d TMPDIR    Directory for temporal files (def.=$TMPDIR)";
     } 1>&2;
@@ -2964,8 +2961,7 @@ htrsh_pageimg_forcealign_lines () {
   local XML="$1";
   local FEATLST="$2";
   local MODEL="$3";
-  local XMLOUT="$4";
-  shift 4;
+  shift 3;
   while [ $# -gt 0 ]; do
     if [ "$1" = "-d" ]; then
       TMPDIR="$2";
@@ -3011,8 +3007,7 @@ htrsh_pageimg_forcealign_lines () {
     return 1;
 
   ### Insert alignment information in XML ###
-  htrsh_pagexml_insertalign_lines "$XML" "$TMPDIR/${B}_aligned.mlf" \
-    > "$XMLOUT";
+  htrsh_pagexml_insertalign_lines "$XML" "$TMPDIR/${B}_aligned.mlf";
   [ "$?" != 0 ] &&
     return 1;
 
@@ -3040,10 +3035,10 @@ htrsh_pageimg_forcealign_lines () {
         xmledit+=( -r //TMPNODE -v Word );
       done
     done
-    xmlstarlet "${xmledit[@]}" "$XMLOUT";
+    xmlstarlet "${xmledit[@]}" "$XML";
   fi
 
-  htrsh_fix_rec_names "$XMLOUT"; # @todo move this inside htrsh_pagexml_insertalign_lines?
+  htrsh_fix_rec_names "$XML"; # @todo move this inside htrsh_pagexml_insertalign_lines?
 
   [ "$htrsh_keeptmp" -lt 1 ] &&
     rm -f "$TMPDIR/$B.mlf" "$TMPDIR/${B}_aligned.mlf";
@@ -3311,13 +3306,14 @@ htrsh_pageimg_forcealign () {
     done
     cp -p "$TMPDIR/${XMLBASE}_align.xml" "$XMLOUT";
   else
+    cp "$TMPDIR/${XMLBASE}_feats.xml" "$TMPDIR/${XMLBASE}_align.xml";
     htrsh_pageimg_forcealign_lines \
-      "$TMPDIR/${XMLBASE}_feats.xml" "$TMPDIR/${B}_feats.lst" "$MODEL" \
-      "$XMLOUT" -d "$TMPDIR" \
+      "$TMPDIR/${XMLBASE}_align.xml" "$TMPDIR/${B}_feats.lst" "$MODEL" -d "$TMPDIR" \
       > "$TMPDIR/${XMLBASE}_forcealign.log";
     [ "$?" != 0 ] &&
       echo "$FN: error: more info might be in file $TMPDIR/${XMLBASE}_forcealign.log" 1>&2 &&
       return 1;
+    mv "$TMPDIR/${XMLBASE}_align.xml" "$XMLOUT";
   fi 2>&1;
 
   [ "$KEEPTMP" != "yes" ] && rm -r "$TMPDIR";
