@@ -3121,8 +3121,8 @@ htrsh_pageimg_forcealign () {
     echo -n "$FN: temporal directory ($TMPDIR) already exists, current contents will be deleted, continue? " 1>&2;
     local RMTMP="";
     read -n 1 RMTMP;
-    [ "${RMTMP:0:1}" = "y" ] &&
-      echo "$FN: aborting ..." 1>&2 &&
+    [ "${RMTMP:0:1}" != "y" ] &&
+      printf "\n$FN: aborting ...\n" 1>&2 &&
       return 1;
     rm -r "$TMPDIR";
     echo 1>&2;
