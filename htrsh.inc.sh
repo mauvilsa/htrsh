@@ -144,8 +144,8 @@ htrsh_unload () {
 ##
 ## Function that checks that all required commands are available
 ##
-htrsh_check_req () {
-  local FN="htrsh_check_req";
+htrsh_check_dependencies () {
+  local FN="htrsh_check_dependencies";
   local RC="0";
   local cmd;
   for cmd in xmlstarlet convert octave HVite dotmatrix imgtxtenh imglineclean imgccomp imgpolycrop imageSlant page_format_generate_contour; do
