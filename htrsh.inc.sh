@@ -1752,7 +1752,7 @@ htrsh_feats_htk_to_kaldi () {
 htrsh_pageimg_extract_linefeats () {
   local FN="htrsh_pageimg_extract_linefeats";
   local OUTDIR=".";
-  local FEATLST="$OUTDIR/feats.lst";
+  local FEATLST="/dev/null";
   local PBASE="";
   local REPLC="yes";
   if [ $# -lt 2 ]; then
