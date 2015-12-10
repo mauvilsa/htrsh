@@ -40,7 +40,7 @@ htrsh_hmm_train_kaldi () {
       echo "Options:";
       echo " -d OUTDIR    Directory for output models and temporary files (def.=$OUTDIR)";
       #echo " -P PROTO     Use PROTO as initialization prototype (def.=false)";
-      echo " -fb (yes|no) Whether to train using forward-backwards instead of viterbi (def.=$FB)";
+      echo " -fb (yes|no) Whether to train using forward-backward instead of viterbi (def.=$FB)";
       echo " -k (yes|no)  Whether to keep models per iteration, including initialization (def.=$KEEPITERS)";
       echo " -m (yes|no)  Whether to keep features table and train graphs (def.=$KEEPMISC)";
       echo " -r (yes|no)  Whether to resume previous training, looks for models per iteration (def.=$RESUME)";

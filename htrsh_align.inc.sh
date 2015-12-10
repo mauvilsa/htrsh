@@ -1,4 +1,3 @@
-#!/bin/bash
 
 #htrsh_align_wordsplit="no"; # Whether to split words when aligning regions
 htrsh_align_wordsplit="yes";
@@ -9,18 +8,16 @@ htrsh_align_words="yes";
 htrsh_hmm_software="htk";
 
 #htrsh_hmm_iter="10";
-htrsh_keeptmp="1";
+#htrsh_keeptmp="1";
 #htrsh_imglineclean_opts="-m 99% -b 0";
 #htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.5"; #htrsh_align_isect="no"; # Alc
 #htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.2"; # Zwettl
 
 #htrsh_feat_deslant="no";
 
-htrsh_xpath_lines='_:TextLine[_:Coords]';
+#htrsh_xpath_lines='_:TextLine[_:Coords]';
 
-htrsh_pagexsd="/home/mvillegas/work/prog/mvsh/HTR/xsd/pagecontent+.xsd";
-
-htrsh_feat_contour=$htrsh_align_isect;
+#htrsh_feat_contour=$htrsh_align_isect;
 
 
 #-------------------------------------#
@@ -28,15 +25,228 @@ htrsh_feat_contour=$htrsh_align_isect;
 #-------------------------------------#
 
 ##
+## Function that does a forced alignment at a region level for a given XML Page, model and directory to find the features
+##
+htrsh_pageimg_forcealign_regions () {
+  local FN="htrsh_pageimg_forcealign_regions";
+  local TMPDIR=".";
+  if [ $# -lt 3 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Does a forced alignment at a region level for a given XML Page, model and directory to find the features";
+      echo "Usage: $FN XML FEATDIR MODEL [ Options ]";
+      echo "Options:";
+      echo " -d TMPDIR    Directory for temporal files (def.=$TMPDIR)";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local XML="$1";
+  local FEATDIR="$2";
+  local MODEL="$3";
+  shift 3;
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "-d" ]; then
+      TMPDIR="$2";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
+    shift 2;
+  done
+
+  if [ ! -e "$XML" ]; then
+    echo "$FN: error: Page XML file not found: $XML" 1>&2;
+    return 1;
+  elif [ ! -e "$FEATDIR" ]; then
+    echo "$FN: error: features directory not found: $FEATDIR" 1>&2;
+    return 1;
+  elif [ ! -e "$MODEL" ]; then
+    echo "$FN: error: model file not found: $MODEL" 1>&2;
+    return 1;
+  fi
+
+  ### Check XML file and image ###
+  local $htrsh_infovars;
+  htrsh_pageimg_info "$XML";
+  [ "$?" != 0 ] && return 1;
+  local B=$(echo "$XMLBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
+  echo "$FN: aligning $B" 1>&2;
+
+  ### Check feature files ###
+  local pIFS="$IFS";
+  local IFS=$'\n';
+  local FBASE="$FEATDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
+  local FEATLST=( $( xmlstarlet sel -t -m "$htrsh_xpath_regions[$htrsh_xpath_lines/$htrsh_xpath_coords]" -o "$FBASE." -v @id -o ".fea" -n "$XML" ) );
+  IFS="$pIFS";
+
+  ls "${FEATLST[@]}" "${FEATLST[@]//.fea/.nfea}" >/dev/null;
+  [ "$?" != 0 ] &&
+    echo "$FN: error: some .fea or .nfea files not found" 1>&2 &&
+    return 1;
+
+  ### Create MLF from XML ###
+  { echo '#!MLF!#'; htrsh_pagexml_textequiv "$XML" -f mlf-chars -s regions; } > "$TMPDIR/$B.mlf";
+  [ "$?" != 0 ] &&
+    echo "$FN: error: problems creating MLF file: $XML" 1>&2 &&
+    return 1;
+
+  ### Create auxiliary files: HMM list and dictionary ###
+  local HMMLST=$(gzip -dc "$MODEL" | sed -n '/^~h "/{ s|^~h "||; s|"$||; p; }');
+  local DIC=$(echo "$HMMLST" | awk '{printf("\"%s\" [%s] 1.0 %s\n",$1,$1,$1)}');
+
+  ### Do forced alignment with HVite ###
+  printf "%s\n" "${FEATLST[@]}" > "$TMPDIR/$B.lst";
+  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$TMPDIR/$B.lst" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
+  [ "$?" != 0 ] &&
+    echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
+    return 1;
+
+  echo '#!MLF!#' > "$TMPDIR/${B}_line_aligned.mlf";
+
+  local f;
+  for f in "${FEATLST[@]}"; do
+    local ff=$(echo $f | sed 's|.*/||; s|\.fea$||;');
+
+    local align=$(
+      sed -n '
+        /\/'${ff}'\.rec"$/{
+          :loop;
+          N;
+          /\n\.$/!b loop;
+          s|^[^\n]*\n||;
+          s|\n\.$||;
+          p; q;
+        }' "$TMPDIR/${B}_aligned.mlf" \
+        | awk '
+            { NF = 3;
+              $2 = sprintf( "%.0f", $2/100000-1 ); # -1 since MLF ends at N not N-1
+              $1 = sprintf( "%.0f", $1==0 ? 0 : $1/100000-1 );
+              print;
+            }' );
+
+    local frames=$(sed 's|.* ||' "$FEATDIR/$ff.nfea" | tr '\n' ',' | sed 's|,$||');
+    local a=$(echo "$align" | sed 's|^[^ ]* ||; s| .*||; $!s|$|,|;' | tr -d '\n');
+
+    ### Get alignments per line ###
+    align=$( octave -q -H --eval "
+        frames = [ $frames ];
+        cframes = cumsum(frames)-1;
+        cframes = [ 0 cframes(1:end-1); cframes ]';
+
+        a = [ $a ];
+        a = [ 0 a(1:end-1); a ]';
+
+        al = zeros(size(a));
+        frame = zeros(size(a,1),1);
+
+        for n = 1:length(frames)
+          sel = sum( a>=cframes(n,1) & a<=cframes(n,2), 2 );
+          for m = find(sel==1)'
+            if a(m,1) < cframes(n,1) && a(m,2)-cframes(n,1) >= cframes(n,1)-a(m,1)
+              sel(m) = 2;
+            elseif a(m,2) > cframes(n,2) && cframes(n,2)-a(m,1) >= a(m,2)-cframes(n,2)
+              sel(m) = 2;
+            end
+          end
+          sel = sel == 2;
+          frame(sel) = n;
+
+          al(sel,:) = a(sel,:)-cframes(n,1);
+        end
+
+        prev = [ 1 , 0 ];
+        for k = 1:length(frame)
+          if frame(k) == 0
+            frame(k) = prev(1);
+            al(k,:) = [ prev(2) , prev(2) ];
+          end
+          printf( '%d %d %d\n', frame(k), al(k,1), al(k,2) );
+          prev = [ frame(k) , al(k,2) ];
+        end" \
+      | paste -d " " - <( echo "$align" | awk '{print $NF}' ) );
+
+    ### Ouput alignments in MLF format ###
+    echo "$align" \
+      | awk -v base="$ff" -v wordsplit="$htrsh_align_wordsplit" '
+          { if( FILENAME != "-" ) {
+              id[FNR] = $1;
+              nframes[FNR] = $2;
+            }
+            else {
+              ln[FNR] = $1;
+              rs[FNR] = $2;
+              re[FNR] = $3;
+              txt[FNR] = $4;
+              N = FNR;
+            }
+          }
+          END {
+            if( wordsplit != "yes" )
+              for( n=2; n<=N; n++ )
+                if( ( ln[n] != ln[n-1] ) &&
+                    ! ( txt[n]=="@" || txt[n-1]=="@" ) ) {
+                  pS = n-1; while( pS > 1  && txt[pS-1] != "@" ) pS --;
+                  pF = n-1; while( pF < NR && txt[pF+1] != "@" ) pF ++;
+                  if( n - pS >= pF - n + 1 )
+                    for( m=n; m<=pF; m++ ) {
+                      ln[m] = ln[n-1];
+                      rs[m] = re[m] = re[n-1];
+                    }
+                  else
+                    for( m=pS; m<=n-1; m++ ) {
+                      ln[m] = ln[n];
+                      rs[m] = re[m] = rs[n];
+                    }
+                }
+
+            for( n=1; n<=N; n++ ) {
+              pe = e;
+              s = rs[n] > nframes[ln[n]] ? nframes[ln[n]]-1 : rs[n] ;
+              e = re[n] > nframes[ln[n]] ? nframes[ln[n]]-1 : re[n] ;
+              s = s <= 0 ? 0 : (1+s)*100000 ;
+              e = e <= 0 ? 0 : (1+e)*100000 ;
+              if( ln[n-1] != ln[n] ) {
+                if( ln[n] > 1 ) {
+                  if( txt[n-1] != "@" )
+                    printf( "%.0f %.0f @\n", pe, pe );
+                  printf( ".\n" );
+                }
+                printf( "\"*/%s.%s.rec\"\n", base, id[ln[n]] );
+                if( txt[n] != "@" )
+                  printf( "0 %.0f @\n", s );
+              }
+              printf( "%.0f %.0f %s\n", s, e, txt[n] );
+            }
+            if( n > 1 )
+              printf( ".\n" );
+          }' "$FEATDIR/$ff.nfea" - \
+      >> "$TMPDIR/${B}_line_aligned.mlf";
+  done
+
+  htrsh_pagexml_insertalign_lines "$XML" "$TMPDIR/${B}_line_aligned.mlf";
+  [ "$?" != 0 ] &&
+    return 1;
+
+  htrsh_fix_rec_names "$XML";
+
+  [ "$htrsh_keeptmp" -lt 1 ] &&
+    rm -f "$TMPDIR/$B.mlf" "$TMPDIR/$B.lst" "$TMPDIR/${B}_aligned.mlf" "$TMPDIR/${B}_line_aligned.mlf";
+
+  return 0;
+}
+
+
+##
 ## Function that does a forced alignment for a region given an XML Page file, model and directory to find the features
 ##
-htrsh_pageimg_forcealign_region () {
-  local FN="htrsh_pageimg_forcealign_region";
+htrsh_pageimg_forcealign_region_old () {
+  local FN="htrsh_pageimg_forcealign_region_old";
   local TMPDIR=".";
   if [ $# -lt 5 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Does a forced alignment for a region given an XML Page file, model and directory to find the features";
-      echo "Usage: $FN XMLIN REGID FEATDIR MODEL XMLOUT [ Options ]";
+      echo "Usage: $FN XMLIN REGID FEATDIR MODEL [ Options ]";
       echo "Options:";
       echo " -d TMPDIR    Directory for temporary files (def.=$TMPDIR)";
     } 1>&2;
@@ -48,8 +258,7 @@ htrsh_pageimg_forcealign_region () {
   local REGID="$2";
   local FEATDIR="$3";
   local MODEL="$4";
-  local XMLOUT="$5";
-  shift 5;
+  shift 4;
   while [ $# -gt 0 ]; do
     if [ "$1" = "-d" ]; then
       TMPDIR="$2";
@@ -100,23 +309,23 @@ htrsh_pageimg_forcealign_region () {
     return 1;
   fi
 
-  { echo '#!MLF!#'; htrsh_pagexml_textequiv "$XML" -f mlf-chars -r yes; } > "$TMPDIR/$XMLBASE.mlf";
+  { echo '#!MLF!#'; htrsh_pagexml_textequiv "$XML" -f mlf-chars -s regions; } > "$TMPDIR/$B.mlf";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems creating MLF file: $XML" 1>&2 &&
     return 1;
 
   ### Create auxiliary files: HMM list and dictionary ###
-  local HMMLST=$(zcat "$MODEL" | sed -n '/^~h "/{ s|^~h "||; s|"$||; p; }');
+  local HMMLST=$(gzip -dc "$MODEL" | sed -n '/^~h "/{ s|^~h "||; s|"$||; p; }');
   local DIC=$(echo "$HMMLST" | awk '{printf("\"%s\" [%s] 1.0 %s\n",$1,$1,$1)}');
 
   ### Do forced alignment with HVite ###
-  echo "$FBASE.$REGID.fea" > "$TMPDIR/fea.lst";
-  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$TMPDIR/fea.lst" -m -I "$TMPDIR/$XMLBASE.mlf" -i "$TMPDIR/${XMLBASE}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
+  echo "$FBASE.$REGID.fea" > "$TMPDIR/$B.lst";
+  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$TMPDIR/$B.lst" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
   [ "$?" != 0 ] &&
     echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
     return 1;
 
-  #htrsh_fix_rec_utf8 "$MODEL" "$TMPDIR/${XMLBASE}_aligned.mlf";
+  #htrsh_fix_rec_utf8 "$MODEL" "$TMPDIR/${B}_aligned.mlf";
 
 
   elif [ "$htrsh_hmm_software" = "kaldi" ]; then
@@ -147,7 +356,7 @@ htrsh_pageimg_forcealign_region () {
     if [ $(file "$FSTS" | grep gzip | wc -l) = 0 ]; then
       FSTS="ark:$FSTS";
     else
-      FSTS="ark:zcat $FSTS |";
+      FSTS="ark:gzip -dc $FSTS |";
     fi
 
     ls "$FEATDIR/$XMLBASE.$REGID.fea" \
@@ -258,12 +467,12 @@ htrsh_pageimg_forcealign_region () {
           /^"/!s|"|{dquote}|g;
           s|'"'"'|{quote}|g;
           ' \
-      > "$TMPDIR/${XMLBASE}_aligned.mlf";
+      > "$TMPDIR/${B}_aligned.mlf";
 
     #sed -n '1p; /\/'$XMLBASE.$REGID'.rec"$/{ :loop; N; /\n\.$/!b loop; p; };' align.mlf \
     #  | awk '{if(NF==3){$1=100000*$1;$2=100000*$2;}print;}' \
     #  | sed "s|'|{quote}|g" \
-    #  > "$TMPDIR/${XMLBASE}_aligned.mlf";
+    #  > "$TMPDIR/${B}_aligned.mlf";
 
 
 if false; then
@@ -335,7 +544,7 @@ fi
 
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating Page XML with alignments ..." 1>&2;
 
-  local ff=$(sed -n '/\.rec"$/{ s|.*/||; s|\.rec"||; p; }' "$TMPDIR/${XMLBASE}_aligned.mlf");
+  local ff=$(sed -n '/\.rec"$/{ s|.*/||; s|\.rec"||; p; }' "$TMPDIR/${B}_aligned.mlf");
 
   local align=$(
       sed -n '
@@ -346,7 +555,7 @@ fi
           s|^[^\n]*\n||;
           s|\n\.$||;
           p; q;
-        }' "$TMPDIR/${XMLBASE}_aligned.mlf" \
+        }' "$TMPDIR/${B}_aligned.mlf" \
         | awk '
             { $1 = $1==0 ? 0 : $1/100000-1 ;
               $2 = $2/100000-1 ;
@@ -417,7 +626,7 @@ fi
             coords(k,5), coords(k,6),
             coords(k,7), coords(k,8) );
         end" \
-      | octave -q \
+      | octave -q -H \
       | paste -d " " - <( echo "$align" | awk '{print $NF}' )
       #| tee "$TMPDIR/var_align.m" \
     );
@@ -461,7 +670,7 @@ fi
   fi
 
   ### Prepare command to add alignments to XML ###
-  local cmd="xmlstarlet ed";
+  local cmd="xmlstarlet ed --inplace";
   cmd="$cmd -d '//*[@id=\"$REGID\"]/*/_:Word' -d '//*[@id=\"$REGID\"]/*/_:Glyph'";
 
   local id contour;
@@ -612,15 +821,15 @@ fi
 
   ### Create new XML including alignments ###
   #echo eval $cmd "$XML" > "$TMPDIR/var_cmd.txt";
-  eval $cmd "$XML" > "$XMLOUT";
+  eval $cmd "$XML";
   [ "$?" != 0 ] &&
-    echo "$FN: error: problems creating XML file: $XMLOUT" 1>&2 &&
+    echo "$FN: error: problems editing XML file: $XML" 1>&2 &&
     return 1;
 
-  htrsh_fix_rec_names "$XMLOUT";
+  htrsh_fix_rec_names "$XML";
 
   [ "$htrsh_keeptmp" -lt 1 ] &&
-    rm -f "$TMPDIR/$XMLBASE.mlf" "$TMPDIR/${XMLBASE}_aligned.mlf";
+    rm -f "$TMPDIR/$B.mlf" "$TMPDIR/${B}_aligned.mlf";
 
   return 0;
 }

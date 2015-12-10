@@ -94,7 +94,7 @@ htrsh_exp_htr_cv () {(
 
       htrsh_xpath_lines="_:TextLine[$htrsh_xpath_textequiv]" \
         htrsh_pageimg_extract_linefeats "$FDIR/orig/$ff.xml" "$FDIR/orig/${ff}_feats.xml" \
-          -d "$FDIR/orig" -l /dev/null;
+          -d "$FDIR/orig";
       mv "$FDIR/orig/${ff}_feats.xml" "$FDIR/orig/$ff.xml";
     }
 

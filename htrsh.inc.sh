@@ -55,6 +55,8 @@ htrsh_align_contour="yes";          # Whether to compute contours from the image
 htrsh_align_isect="yes";            # Whether to intersect parallelograms with line contour
 htrsh_align_prefer_baselines="yes"; # Whether to always generate contours from baselines
 htrsh_align_addtext="yes";          # Whether to add TextEquiv to word and glyph nodes
+htrsh_align_words="yes";            # Whether to align at a word level when aligning regions
+htrsh_align_wordsplit="no";         # Whether to split words when aligning regions
 
 htrsh_hmm_states="6"; # Number of HMM states (excluding special initial and final)
 htrsh_hmm_nummix="4"; # Number of Gaussian mixture components per state
@@ -158,7 +160,7 @@ htrsh_check_dependencies () {
     echo "$FN: WARNING: a dotmatrix with --htk option is required" 1>&2;
 
   for cmd in readhtk writehtk; do
-    [ $(octave -q --eval "which $cmd" | wc -l) = 0 ] && RC="1" &&
+    [ $(octave -q -H --eval "which $cmd" | wc -l) = 0 ] && RC="1" &&
       echo "$FN: WARNING: unable to find octave command: $cmd" 1>&2;
   done
 
@@ -1432,15 +1434,17 @@ htrsh_extract_feats () {
 ##
 ## Function that concatenates line features for regions defined in an XML Page file
 ##
-htrsh_feats_catregions () {
+htrsh_feats_catregions () {(
   local FN="htrsh_feats_catregions";
-  local FEATLST="/dev/stdout";
+  local FEATLST="/dev/null";
+  local RMORIG="yes";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Concatenates line features for regions defined in an XML Page file";
       echo "Usage: $FN XML FEATDIR [ Options ]";
       echo "Options:";
       echo " -l FEATLST  Output list of features to file (def.=$FEATLST)";
+      echo " -r (yes|no) Whether to remove original features (def.=$RMORIG)";
     } 1>&2;
     return 1;
   fi
@@ -1452,6 +1456,8 @@ htrsh_feats_catregions () {
   while [ $# -gt 0 ]; do
     if [ "$1" = "-l" ]; then
       FEATLST="$2";
+    elif [ "$1" = "-r" ]; then
+      RMORIG="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -1474,23 +1480,32 @@ htrsh_feats_catregions () {
       -o "$FBASE." -v ../../@id -o "." -v ../@id -o ".fea" -n "$XML" \
     | xargs ls >/dev/null;
   [ "$?" != 0 ] &&
-    echo "$FN: error: some line features files not found" 1>&2 &&
+    echo "$FN: error: some line feature files not found" 1>&2 &&
     return 1;
 
-  local id;
-  for id in $(xmlstarlet sel -t -m "$htrsh_xpath_regions[$htrsh_xpath_lines/$htrsh_xpath_coords]" -v @id -n "$XML"); do
-    local ff=();
-    local f;
-    for f in $(xmlstarlet sel -t -m "//*[@id='$id']/$htrsh_xpath_lines[$htrsh_xpath_coords]" -o "$FBASE.$id." -v @id -o ".fea" -n "$XML"); do
-      ff+=( "$f" );
-    done
-    HCopy "${ff[@]}" "$FBASE.$id.fea";
+  local IFS=$'\n';
+  local id feats f;
+  for id in $( xmlstarlet sel -t -m "$htrsh_xpath_regions[$htrsh_xpath_lines/$htrsh_xpath_coords]" -v @id -n "$XML" ); do
+    feats=( $( xmlstarlet sel -t -m "//*[@id='$id']/$htrsh_xpath_lines[$htrsh_xpath_coords]" -o "$FBASE.$id." -v @id -o ".fea" -n "$XML" | sed '2,$ s|^|+\n|' ) );
+
+    HCopy "${feats[@]}" "$FBASE.$id.fea";
 
     echo "$FBASE.$id.fea" >> "$FEATLST";
+
+    feats=( $( xmlstarlet sel -t -m "//*[@id='$id']/$htrsh_xpath_lines[$htrsh_xpath_coords]" -o "$FBASE.$id." -v @id -o ".fea" -n "$XML" ) );
+
+    for f in "${feats[@]}"; do
+      echo \
+        $( echo "$f" | sed 's|.*\.\([^.][^.]*\)\.fea$|\1|' ) \
+        $( HList -h -z "$f" | sed -n '/Num Samples:/{ s|.*Num Samples: *||; s| .*||; p; }' );
+    done > "$FBASE.$id.nfea";
+
+    [ "$RMORIG" = "yes" ] &&
+      rm "${feats[@]}";
   done
 
   return 0;
-}
+)}
 
 ##
 ## Function that computes a PCA base for a given list of HTK features
@@ -2497,7 +2512,7 @@ htrsh_hmm_train () {
             return 1;
         fi
 
-        local TE=$(($(date +%s%N)/1000000)); echo "$FN: time g=2^$((g-1)) i=$i: $((TE-TS)) ms" 1>&2; TS="$TE";
+        local TE=$(($(date +%s%N)/1000000)); echo "$FN: time g=$g i=$i: $((TE-TS)) ms" 1>&2; TS="$TE";
 
         [ "$KEEPITERS" = "yes" ] &&
           cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g${gg}_i$i.gz";
@@ -2947,10 +2962,10 @@ htrsh_pagexml_insertalign_lines () {
 htrsh_pageimg_forcealign_lines () {
   local FN="htrsh_pageimg_forcealign_lines";
   local TMPDIR=".";
-  if [ $# -lt 4 ]; then
+  if [ $# -lt 3 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Does a forced alignment at a line level for a given XML Page, feature list and model";
-      echo "Usage: $FN XML FEATLST MODEL [ Options ]";
+      echo "Usage: $FN XML FEATDIR MODEL [ Options ]";
       echo "Options:";
       echo " -d TMPDIR    Directory for temporal files (def.=$TMPDIR)";
     } 1>&2;
@@ -2959,7 +2974,7 @@ htrsh_pageimg_forcealign_lines () {
 
   ### Parse input arguments ###
   local XML="$1";
-  local FEATLST="$2";
+  local FEATDIR="$2";
   local MODEL="$3";
   shift 3;
   while [ $# -gt 0 ]; do
@@ -2975,8 +2990,8 @@ htrsh_pageimg_forcealign_lines () {
   if [ ! -e "$XML" ]; then
     echo "$FN: error: Page XML file not found: $XML" 1>&2;
     return 1;
-  elif [ ! -e "$FEATLST" ]; then
-    echo "$FN: error: feature list not found: $FEATLST" 1>&2;
+  elif [ ! -e "$FEATDIR" ]; then
+    echo "$FN: error: features directory not found: $FEATDIR" 1>&2;
     return 1;
   elif [ ! -e "$MODEL" ]; then
     echo "$FN: error: model file not found: $MODEL" 1>&2;
@@ -2990,6 +3005,18 @@ htrsh_pageimg_forcealign_lines () {
   local B=$(echo "$XMLBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
   echo "$FN: aligning $B" 1>&2;
 
+  ### Check feature files ###
+  local pIFS="$IFS";
+  local IFS=$'\n';
+  local FBASE="$FEATDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
+  local FEATLST=( $( xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines[$htrsh_xpath_coords]" -o "$FBASE." -v ../@id -o . -v @id -o ".fea" -n "$XML" ) );
+  IFS="$pIFS";
+
+  ls "${FEATLST[@]}" >/dev/null;
+  [ "$?" != 0 ] &&
+    echo "$FN: error: some .fea files not found" 1>&2 &&
+    return 1;
+
   ### Create MLF from XML ###
   { echo '#!MLF!#'; htrsh_pagexml_textequiv "$XML" -f mlf-chars; } > "$TMPDIR/$B.mlf";
   [ "$?" != 0 ] &&
@@ -3001,7 +3028,8 @@ htrsh_pageimg_forcealign_lines () {
   local DIC=$(echo "$HMMLST" | awk '{printf("\"%s\" [%s] 1.0 %s\n",$1,$1,$1)}');
 
   ### Do forced alignment with HVite ###
-  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$FEATLST" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
+  printf "%s\n" "${FEATLST[@]}" > "$TMPDIR/$B.lst";
+  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$TMPDIR/$B.lst" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
   [ "$?" != 0 ] &&
     echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
     return 1;
@@ -3012,7 +3040,7 @@ htrsh_pageimg_forcealign_lines () {
     return 1;
 
   local missing=$(
-          { sed 's|.*\.\([^.]\+\)\.fea$|\1|' "$FEATLST";
+          { sed 's|.*\.\([^.]\+\)\.fea$|\1|' "$TMPDIR/$B.lst";
             sed -n '
               /\/'"$IMBASE"'\.[^.]\+\.[^.]\+\.rec"$/ {
                 s|.*\.\([^.]\+\)\.rec"$|\1|;
@@ -3041,7 +3069,7 @@ htrsh_pageimg_forcealign_lines () {
   htrsh_fix_rec_names "$XML"; # @todo move this inside htrsh_pagexml_insertalign_lines?
 
   [ "$htrsh_keeptmp" -lt 1 ] &&
-    rm -f "$TMPDIR/$B.mlf" "$TMPDIR/${B}_aligned.mlf";
+    rm -f "$TMPDIR/$B.mlf" "$TMPDIR/$B.lst" "$TMPDIR/${B}_aligned.mlf";
 
   return 0;
 }
@@ -3230,7 +3258,7 @@ htrsh_pageimg_forcealign () {
   fi | sed '/^$/d';
 
   [ "${AREG[1]}" = "regions" ] &&
-    htrsh_feats_catregions "$TMPDIR/${XMLBASE}_feats.xml" "$TMPDIR" > $TMPDIR/${B}_feats.lst;
+    htrsh_feats_catregions "$TMPDIR/${XMLBASE}_feats.xml" "$TMPDIR" -l $TMPDIR/${B}_feats.lst;
 
   ### Train HMMs model for this single page ###
   if [ "$MODEL" = "" ]; then
@@ -3291,30 +3319,16 @@ htrsh_pageimg_forcealign () {
 
   ### Do forced alignment using model ###
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): doing forced alignment ...";
-  if [ "${AREG[1]}" = "regions" ]; then
-    cp "$TMPDIR/${XMLBASE}_feats.xml" "$TMPDIR/${XMLBASE}_align.xml";
-    local id;
-    for id in $(xmlstarlet sel -t -m "$htrsh_xpath_regions" -v @id -n "$XML"); do
-      echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): aligning region $id";
-      htrsh_pageimg_forcealign_region "$TMPDIR/${XMLBASE}_align.xml" "$id" \
-        "$TMPDIR" "$MODEL" "$TMPDIR/${XMLBASE}_align-.xml" -d "$TMPDIR" \
-        >> "$TMPDIR/${XMLBASE}_forcealign.log";
-      [ "$?" != 0 ] &&
-        echo "$FN: error: more info might be in file $TMPDIR/${XMLBASE}_forcealign.log" 1>&2 &&
-        return 1;
-      mv "$TMPDIR/${XMLBASE}_align-.xml" "$TMPDIR/${XMLBASE}_align.xml";
-    done
-    cp -p "$TMPDIR/${XMLBASE}_align.xml" "$XMLOUT";
-  else
-    cp "$TMPDIR/${XMLBASE}_feats.xml" "$TMPDIR/${XMLBASE}_align.xml";
-    htrsh_pageimg_forcealign_lines \
-      "$TMPDIR/${XMLBASE}_align.xml" "$TMPDIR/${B}_feats.lst" "$MODEL" -d "$TMPDIR" \
-      > "$TMPDIR/${XMLBASE}_forcealign.log";
-    [ "$?" != 0 ] &&
-      echo "$FN: error: more info might be in file $TMPDIR/${XMLBASE}_forcealign.log" 1>&2 &&
-      return 1;
-    mv "$TMPDIR/${XMLBASE}_align.xml" "$XMLOUT";
-  fi 2>&1;
+  cp "$TMPDIR/${XMLBASE}_feats.xml" "$TMPDIR/${XMLBASE}_align.xml";
+  local forcealign="htrsh_pageimg_forcealign_lines";
+  [ "${AREG[1]}" = "regions" ] &&
+    forcealign="htrsh_pageimg_forcealign_regions";
+  $forcealign "$TMPDIR/${XMLBASE}_align.xml" "$TMPDIR" "$MODEL" -d "$TMPDIR" \
+    > "$TMPDIR/${XMLBASE}_forcealign.log";
+  [ "$?" != 0 ] &&
+    echo "$FN: error: more info might be in file $TMPDIR/${XMLBASE}_forcealign.log" 1>&2 &&
+    return 1;
+  mv "$TMPDIR/${XMLBASE}_align.xml" "$XMLOUT";
 
   [ "$KEEPTMP" != "yes" ] && rm -r "$TMPDIR";
 
