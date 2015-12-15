@@ -52,7 +52,7 @@ htrsh_exp_htr_cv () {(
 
   ### General checks ###
   echo '$Revision$$Date$' \
-    | sed 's|^$Revision:|htrsh_exp: revision|; s| (.*|)|; s|[$][$]Date: |(|;' 1>&2;
+    | sed 's|^$Revision:|htrsh_exp: revision|; s| (.*|)|; s|[$][$]Date: |(|;';
   htrsh_check_dependencies 2>&1;
   if [ "$?" != 0 ]; then
     echo "$FN: error: unmet dependencies" 1>&2;

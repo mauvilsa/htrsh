@@ -2640,7 +2640,14 @@ htrsh_hvite_parallel () {
   local FEATLST="";
   local MLF="";
   while [ $# -gt 0 ]; do
-    CMD+=( "$1" );
+    if [ -p "$1" ]; then
+      ### Pipes fail within run_parallel in CentOS bash 4.1.2(1)-release ###
+      local num=$(ls "$TMP/pipe"* 2>/dev/null | wc -l);
+      cat "$1" > "$TMP/pipe$num";
+      CMD+=( "$TMP/pipe$num" );
+    else
+      CMD+=( "$1" );
+    fi
     if [ "$1" = "-S" ]; then
       FEATLST="$2";
       CMD+=( "{@}" );
