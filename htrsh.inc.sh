@@ -186,6 +186,51 @@ htrsh_check_dependencies () {
 #---------------------------------#
 
 ##
+## Function that sets TextEquiv/Unicode in an XML Page
+##
+htrsh_pagexml_set_textequiv () {
+  local FN="htrsh_pagexml_set_textequiv";
+  if [ $# -lt 3 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Sets TextEquiv/Unicode in an XML Page";
+      echo "Usage: $FN XML ID TEXT [ ID2 TEXT2 ... ]";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local XML="$1";
+  shift;
+
+  ### Check XML file ###
+  local $htrsh_infovars;
+  htrsh_pageimg_info "$XML" noimg;
+  [ "$?" != 0 ] && return 1;
+
+  local ids=();
+  local idmatch=( xmlstarlet sel -t );
+  local xmledit=( xmlstarlet ed --inplace );
+
+  while [ $# -gt 0 ]; do
+    ids+=( "$1" );
+    idmatch+=( -m "//*[@id='$1']" -v @id -n );
+    xmledit+=( -d "//*[@id='$1']/_:TextEquiv" );
+    xmledit+=( -s "//*[@id='$1']" -t elem -n TMPNODE );
+    xmledit+=( -s //TMPNODE -t elem -n Unicode -v "$2" );
+    xmledit+=( -r //TMPNODE -v TextEquiv );
+    shift 2;
+  done
+
+  ids=$( { printf "%s\n" "${ids[@]}"; "${idmatch[@]}" "$XML"; } \
+           | sort | uniq -u | tr '\n' ',' );
+  [ "$ids" != "" ] &&
+    echo "$FN: error: some IDs not found ($ids): $XML" 1>&2 &&
+    return 1;
+
+  "${xmledit[@]}" "$XML";
+}
+
+##
 ## Function that prints to stdout the TextEquiv from an XML Page file
 ##
 htrsh_pagexml_textequiv () {
@@ -922,8 +967,38 @@ htrsh_pagexml_relabel () {
 
 </xsl:stylesheet>';
 
+  local XSLT3='<?xml version="1.0"?>
+<xsl:stylesheet
+  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  xmlns:_="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  version="1.0">
+
+  <xsl:output method="xml" indent="yes" encoding="utf-8" omit-xml-declaration="no"/>
+
+  <xsl:template match="@* | node()">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()"/>
+    </xsl:copy>
+  </xsl:template>
+
+  <xsl:template match="//_:TextRegion/_:TextLine/_:Word">
+    <xsl:variable name="pid" select="../@id"/>
+    <xsl:copy>
+      <xsl:attribute name="id">
+        <xsl:value-of select="concat(../@id,&quot;_w&quot;)"/>
+        <xsl:number count="//_:TextRegion/_:TextLine/_:Word"/>
+      </xsl:attribute>
+      <xsl:apply-templates select="@*[local-name() != '"'id'"'] | node()" />
+    </xsl:copy>
+  </xsl:template>
+
+</xsl:stylesheet>';
+
   xmlstarlet tr <( echo "$XSLT1" ) \
-    | xmlstarlet tr <( echo "$XSLT2" );
+    | xmlstarlet tr <( echo "$XSLT2" ) \
+    | xmlstarlet tr <( echo "$XSLT3" );
 }
 
 ##
@@ -941,8 +1016,8 @@ htrsh_pagexml_points2bbox () {
 
   local XML=$(cat);
 
-  local xmledit=( $(
-    xmlstarlet sel -t -m '//_:Coords[@points]' -v ../@id -o " " \
+  local xmledit=( -d //@dummyattr $(
+    xmlstarlet sel -t -m "//$htrsh_xpath_coords" -v ../@id -o " " \
         -v 'translate(@points,","," ")' -n <( echo "$XML" ) \
       | awk '
           { if( NF > 5 ) {
@@ -2720,7 +2795,7 @@ htrsh_pagexml_insertalign_lines () {
     return 1;
   fi
 
-  ### Check XML file and image ###
+  ### Check XML file ###
   local $htrsh_infovars;
   htrsh_pageimg_info "$XML" noimg;
   [ "$?" != 0 ] && return 1;
@@ -3058,10 +3133,13 @@ htrsh_pageimg_forcealign_lines () {
         local ww=$(echo "$line" | awk '{printf("%s",$'$w')}');
         xmledit+=( -s "//*[@id='$id']" -t elem -n TMPNODE );
         xmledit+=( -i //TMPNODE -t attr -n id -v ${id}_w$(printf %.2d $w) );
+        xmledit+=( -s //TMPNODE -t elem -n Coords );
+        xmledit+=( -i //TMPNODE/Coords -t attr -n points -v "0,0 0,0" );
         xmledit+=( -s //TMPNODE -t elem -n TextEquiv );
         xmledit+=( -s //TMPNODE/TextEquiv -t elem -n Unicode -v "$ww" );
         xmledit+=( -r //TMPNODE -v Word );
       done
+      xmledit+=( -m "//*[@id='$id']/_:TextEquiv" "//*[@id='$id']" );
     done
     xmlstarlet "${xmledit[@]}" "$XML";
   fi

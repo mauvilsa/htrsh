@@ -51,7 +51,7 @@ htrsh_exp_htr_cv () {(
 
 
   ### General checks ###
-  htrsh_check_req 2>&1;
+  htrsh_check_dependencies 2>&1;
   if [ "$?" != 0 ]; then
     echo "$FN: error: unmet dependencies" 1>&2;
     return 1;
