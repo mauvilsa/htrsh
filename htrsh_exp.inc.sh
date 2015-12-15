@@ -51,6 +51,8 @@ htrsh_exp_htr_cv () {(
 
 
   ### General checks ###
+  echo '$Revision$$Date$' \
+    | sed 's|^$Revision:|htrsh_exp: revision|; s| (.*|)|; s|[$][$]Date: |(|;' 1>&2;
   htrsh_check_dependencies 2>&1;
   if [ "$?" != 0 ]; then
     echo "$FN: error: unmet dependencies" 1>&2;
@@ -365,8 +367,9 @@ htrsh_exp_htr_cv () {(
             DIC="$EXPDIR/models/$DATASET/lang/part$p/dictionary.txt";
             HMM="$EXPDIR/models/$DATASET/${htrsh_hmm_type}_hmm_s$states/$FEATNAME/part$p/Macros_hmm_$gauss.gz";
             HMMLST=$(zcat $HMM | sed -n '/^~h/{s|^~h "||;s|"$||;p;}');
+            LISTSET="feats_part$p.lst"; [ "$htrsh_exp_cvparts" = 1 ] && LISTSET="feats_train_part$p.lst";
 
-            sed "s|^|$EXPDIR/feats/$DATASET/$FEATNAME/pca_part$p/|;" "$EXPDIR/lists/$DATASET/feats_part$p.lst" \
+            sed "s|^|$EXPDIR/feats/$DATASET/$FEATNAME/pca_part$p/|;" "$EXPDIR/lists/$DATASET/$LISTSET" \
               | xargs ls -f \
               > "$DDIR/feats_part$p.lst";
 
@@ -412,10 +415,11 @@ htrsh_exp_htr_cv () {(
         ### Rescore for given GSF and WIP ###
         if [ ! -e "$DDIR/${param}_part$p.mlf.gz" ]; then
           local DIC="$EXPDIR/models/$DATASET/lang/part$p/dictionary.txt";
+          local LISTSET="feats_part$p.lst"; [ "$htrsh_exp_cvparts" = 1 ] && LISTSET="feats_train_part$p.lst";
 
           [ ! -e "$DDIR/part$p.lst" ] &&
             sed "s|^|$EXPDIR/decode/$DATASET/$FEATNAME/lat_$wg/|; s|\.fea\$|.lat.gz|;" \
-                "$EXPDIR/lists/$DATASET/feats_part$p.lst" \
+                "$EXPDIR/lists/$DATASET/$LISTSET" \
               | xargs ls -f \
               | sed 's|\.gz$||' \
               > "$DDIR/part$p.lst";
