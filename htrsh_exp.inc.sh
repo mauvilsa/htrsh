@@ -134,12 +134,17 @@ htrsh_exp_htr_cv () {(
     done
     cat "$EXPDIR/lists/$DATASET/feats_part"*.lst > "$EXPDIR/lists/$DATASET/feats.lst";
 
+    if [ "$htrsh_exp_cvparts" = 1 ]; then
+      mv "$EXPDIR/lists/$DATASET/feats_part0.lst" "$EXPDIR/lists/$DATASET/feats_train_part0.lst";
+      > "$EXPDIR/lists/$DATASET/feats_part0.lst";
+    else
     for p in $PARTS; do
       cat "$EXPDIR/lists/$DATASET/feats_part$p.lst" "$EXPDIR/lists/$DATASET/feats_part"*.lst \
         | sort \
         | uniq -u \
         > "$EXPDIR/lists/$DATASET/feats_train_part$p.lst";
     done
+    fi
   fi
 
   ### Project features with PCA for each CV partition ###
@@ -148,7 +153,7 @@ htrsh_exp_htr_cv () {(
       FDIR="$EXPDIR/feats/$DATASET/$FEATNAME/pca_part$p";
       [ -e "$FDIR" ] &&
         continue;
-      if [ "$htrsh_feat_pcabase" = "single" ]; then
+      if [ "$htrsh_feat_pcabase" = "single" ] && [ "$p" != 0 ]; then
         ln -s pca_part0 "$FDIR";
         continue;
       fi
@@ -161,7 +166,7 @@ htrsh_exp_htr_cv () {(
           | xargs ls -f \
           > "$FDIR/feats_train_part$p.lst";
         sed "s|^|$EXPDIR/feats/$DATASET/$FEATNAME/orig/|" "$EXPDIR/lists/$DATASET/feats_part$p.lst" \
-          | xargs ls -f \
+          | xargs --no-run-if-empty ls -f \
           > "$FDIR/feats_part$p.lst";
 
         ### Compute PCA ###
@@ -221,6 +226,7 @@ htrsh_exp_htr_cv () {(
       gzip -n "$MDIR"/text_* "$MDIR"/langmodel_*;
     done
 
+    if [ "$htrsh_exp_cvparts" != 1 ]; then
     ### Compute OOV and ROOV ###
     echo "# OOV ROOV OOV_canonic ROOV_canonic" > "$EXPDIR/models/$DATASET/oov.txt";
     for p in $PARTS; do
@@ -255,6 +261,7 @@ htrsh_exp_htr_cv () {(
       rm voc.txt voc_canonic.txt;
       rm gnd.txt gnd_canonic.txt;
     done >> "$EXPDIR/models/$DATASET/oov.txt";
+    fi
 
     #awk '{ if($1!="#") { PARTS++; for(n=1;n<=NF;n++) s[n]+=$n; } } END { for(n=1;n<=NF;n++) printf("%.1f\n",s[n]/PARTS) }' "$EXPDIR/models/$DATASET/oov.txt";
 

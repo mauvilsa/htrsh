@@ -1553,7 +1553,7 @@ htrsh_feats_catregions () {(
 
   xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_coords" \
       -o "$FBASE." -v ../../@id -o "." -v ../@id -o ".fea" -n "$XML" \
-    | xargs ls >/dev/null;
+    | xargs --no-run-if-empty ls >/dev/null;
   [ "$?" != 0 ] &&
     echo "$FN: error: some line feature files not found" 1>&2 &&
     return 1;
@@ -1627,7 +1627,7 @@ htrsh_feats_pca () {(
   if [ ! -e "$FEATLST" ]; then
     echo "$FN: error: feature list not found: $FEATLST" 1>&2;
     return 1;
-  elif [ $(wc -l < "$FEATLST") != $(xargs ls < "$FEATLST" | wc -l) ]; then
+  elif [ $(wc -l < "$FEATLST") != $(xargs --no-run-if-empty ls < "$FEATLST" | wc -l) ]; then
     echo "$FN: error: some files in list not found: $FEATLST" 1>&2;
     return 1;
   fi
