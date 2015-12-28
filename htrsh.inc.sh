@@ -25,6 +25,7 @@ htrsh_keeptmp="0";
 
 htrsh_xpath_regions='//_:TextRegion';
 htrsh_xpath_lines='_:TextLine';
+htrsh_xpath_words='_:Word';
 htrsh_xpath_coords='_:Coords[@points and @points!="0,0 0,0"]';
 htrsh_xpath_textequiv='_:TextEquiv[_:Unicode and _:Unicode != ""]/_:Unicode';
 
@@ -67,7 +68,7 @@ htrsh_hmm_type="char";
 htrsh_HTK_HERest_opts="-m 2";      # Options for HERest tool
 htrsh_HTK_HCompV_opts="-f 0.1 -m"; # Options for HCompV tool
 htrsh_HTK_HHEd_opts="";            # Options for HHEd tool
-htrsh_HTK_HVite_opts="";           # Options for HVite tool
+htrsh_HTK_HVite_align_opts="";     # Options for HVite tool for alignments
 
 htrsh_HTK_config='
 HMMDEFFILTER   = "gzip -dc $"
@@ -93,10 +94,10 @@ _ {_}
 ';
 
 htrsh_sed_tokenize_simplest='
-  s|$\.|$*|g;
+  #s|$\.|$*|g;
   s|\([.,:;!¡?¿+\x27´`"“”„|(){}[—–_]\)| \1 |g;
   s|\x5D| ] |g;
-  s|$\*|$.|g;
+  #s|$\*|$.|g;
   s|\([0-9]\)| \1 |g;
   s|^  *||;
   s|  *$||;
@@ -280,8 +281,8 @@ htrsh_pagexml_textequiv () {
     XPATH="$htrsh_xpath_regions/$htrsh_xpath_textequiv";
     IDop=( -o "$PG." -v ../../@id );
   elif [ "$SRC" = "words" ]; then
-    XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines[_:Word/$htrsh_xpath_textequiv]";
-    PRINT=( -m "_:Word/$htrsh_xpath_textequiv" -o " " -v . -b -n );
+    XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines[$htrsh_xpath_words/$htrsh_xpath_textequiv]";
+    PRINT=( -m "htrsh_xpath_words/$htrsh_xpath_textequiv" -o " " -v . -b -n );
     IDop=( -o "$PG." -v ../@id -o . -v @id );
   else
     XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_textequiv";
@@ -1020,7 +1021,7 @@ htrsh_pagexml_points2bbox () {
     xmlstarlet sel -t -m "//$htrsh_xpath_coords" -v ../@id -o " " \
         -v 'translate(@points,","," ")' -n <( echo "$XML" ) \
       | awk '
-          { if( NF > 5 ) {
+          { if( NF >= 5 ) {
               mn_x = mx_x = $2;
               mn_y = mx_y = $3;
               for( n=4; n<NF; n+=2 ) {
@@ -3111,7 +3112,7 @@ htrsh_pageimg_forcealign_lines () {
 
   ### Do forced alignment with HVite ###
   printf "%s\n" "${FEATLST[@]}" > "$TMPDIR/$B.lst";
-  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$TMPDIR/$B.lst" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
+  HVite $htrsh_HTK_HVite_align_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$TMPDIR/$B.lst" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
   [ "$?" != 0 ] &&
     echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
     return 1;

@@ -1,6 +1,4 @@
 
-
-
 htrsh_exp_dataset="";  # Name of dataset
 htrsh_exp_cvparts="4"; # Number of cross-validation partitions
 
@@ -11,19 +9,37 @@ htrsh_run_tmpdir="/tmp"; # Directory for temporal files
 
 htrsh_feat_imgres="";  # If set, resize pages to given resolution in dpi
 htrsh_feat_pcabase=""; # If set, use provided PCA base
+#htrsh_feat_pcabase="single"; # Compute and use PCA from 1st partition training
 htrsh_feat_pcaopts="-e 1:4 -r 24"; # Options for PCA computation
 
-htrsh_tokenizer="cat"; # Pipe command for tokenization
-htrsh_canonizer="cat"; # Pipe command for canonization
+htrsh_tokenizer="cat";    # Pipe command for tokenization
+htrsh_canonizer="cat";    # Pipe command for canonization
+htrsh_diplomatizer="cat"; # Pipe command for diplomatization
 
-htrsh_hvite_gsf="10"; # Grammar Scale Factor used to compute word graphs
-htrsh_hvite_wip="0";  # Word Insertion Penalty used to compute word graphs
-htrsh_hvite_beam="-n 15 1"; # Beam search parameters
+htrsh_decode_gsf="10"; # Grammar Scale Factor used to compute word graphs
+htrsh_decode_wip="0";  # Word Insertion Penalty used to compute word graphs
+htrsh_HTK_HVite_decode_opts="-n 15 1"; # Parameters for HVite when decoding
 
-htrsh_exp_hvite_gsf="0 3 5 10 20 30 50"; # List of Grammar Scale Factors for HLRescore
-htrsh_exp_hvite_wip="50 30 20 10 5 0 -5 -10 -20 -30 -50 -70 -90 -110"; # List of Word Insertion Penalties for HLRescore
+htrsh_exp_decode_gsf="0 3 5 10 20 30 50"; # List of Grammar Scale Factors to vary
+htrsh_exp_decode_wip="50 30 20 10 5 0 -5 -10 -20 -30 -50 -70 -90 -110"; # List of Word Insertion Penalties to vary
 
 htrsh_exp_partial=""; # Run experiment until step: feats, lang, hmm
+
+
+##
+## Check for deprecated configuration
+##
+htrsh_exp_check_deprecated () {
+  if ( [ ! -z ${htrsh_hvite_gsf+x} ] ||
+       [ ! -z ${htrsh_hvite_wip+x} ] ||
+       [ ! -z ${htrsh_hvite_beam+x} ] ||
+       [ ! -z ${htrsh_exp_hvite_gsf+x} ] ||
+       [ ! -z ${htrsh_exp_hvite_wip+x} ] ); then
+    echo "$FN: error: deprecated variable detected" 1>&2;
+    return 1;
+  fi
+  return 0;
+}
 
 ##
 ## Perform/continue a cross-validation HTR experiment
@@ -51,8 +67,7 @@ htrsh_exp_htr_cv () {(
 
 
   ### General checks ###
-  echo '$Revision$$Date$' \
-    | sed 's|^$Revision:|htrsh_exp: revision|; s| (.*|)|; s|[$][$]Date: |(|;';
+  htrsh_exp_check_deprecated; [ "$?" != 0 ] && return 1;
   htrsh_check_dependencies 2>&1;
   if [ "$?" != 0 ]; then
     echo "$FN: error: unmet dependencies" 1>&2;
@@ -65,6 +80,8 @@ htrsh_exp_htr_cv () {(
     echo "$FN: error: expected xml files in dataset directory: data/$DATASET" 1>&2;
     return 1;
   fi
+  echo '$Revision$$Date$' \
+    | sed 's|^$Revision:|htrsh_exp: revision|; s| (.*|)|; s|[$][$]Date: |(|;';
 
   mkdir -p "$TMPDIR";
   cd "$TMPDIR";
@@ -224,13 +241,14 @@ htrsh_exp_htr_cv () {(
         | sed 's|^[^ ]* ||' \
         | htrsh_langmodel_train - -d "$MDIR" \
             -T "$htrsh_tokenizer" \
-            -C "$htrsh_canonizer";
+            -C "$htrsh_canonizer" \
+            -D "$htrsh_diplomatizer";
       gzip -n "$MDIR"/text_* "$MDIR"/langmodel_*;
     done
 
     if [ "$htrsh_exp_cvparts" != 1 ]; then
     ### Compute OOV and ROOV ###
-    echo "# OOV ROOV OOV_canonic ROOV_canonic" > "$EXPDIR/models/$DATASET/oov.txt";
+    echo "# OOV ROOV OOV_canonic ROOV_canonic OOV_diplom ROOV_diplom" > "$EXPDIR/models/$DATASET/oov.txt";
     for p in $PARTS; do
       MDIR="$EXPDIR/models/$DATASET/lang/part$p";
       awk '{print $2}' "$MDIR/dictionary.txt" \
@@ -242,6 +260,11 @@ htrsh_exp_htr_cv () {(
         | "$htrsh_canonizer" \
         | sort -u \
         > voc_canonic.txt;
+      awk '{print $2}' "$MDIR/dictionary.txt" \
+        | sed 's|^\[||; s|]$||; /^$/d;' \
+        | "$htrsh_diplomatizer" \
+        | sort -u \
+        > voc_diplomatic.txt;
 
       sed 's|\.fea$||' "$EXPDIR/lists/$DATASET/feats_part$p.lst" \
         | awk '
@@ -256,12 +279,17 @@ htrsh_exp_htr_cv () {(
         | "$htrsh_canonizer" \
         > gnd_canonic.txt;
 
+      cat gnd.txt \
+        | "$htrsh_diplomatizer" \
+        > gnd_diplomatic.txt;
+
       echo \
         $( oov.py -n voc.txt -t gnd.txt | awk '{printf(" %s %s",$7,$16)}' ) \
-        $( oov.py -n voc_canonic.txt -t gnd_canonic.txt | awk '{printf(" %s %s",$7,$16)}' );
+        $( oov.py -n voc_canonic.txt -t gnd_canonic.txt | awk '{printf(" %s %s",$7,$16)}' ) \
+        $( oov.py -n voc_diplomatic.txt -t gnd_diplomatic.txt | awk '{printf(" %s %s",$7,$16)}' );
 
-      rm voc.txt voc_canonic.txt;
-      rm gnd.txt gnd_canonic.txt;
+      rm voc.txt voc_canonic.txt voc_diplomatic.txt;
+      rm gnd.txt gnd_canonic.txt gnd_diplomatic.txt;
     done >> "$EXPDIR/models/$DATASET/oov.txt";
     fi
 
@@ -282,7 +310,7 @@ htrsh_exp_htr_cv () {(
                 print;
             }' - "$EXPDIR/models/$DATASET/lang/pages.txt" \
         | sed 's|^[^ ]* ||' \
-        | ngram -lm <( zcat "$EXPDIR/models/$DATASET/lang/part$p/langmodel_2-gram.arpa.gz" ) -ppl - \
+        | ngram -lm <( gzip -dc "$EXPDIR/models/$DATASET/lang/part$p/langmodel_2-gram.arpa.gz" ) -ppl - \
         | sed 'N; s|^file -: ||; s|\n| |;';
     done > "$EXPDIR/models/$DATASET/ppl.txt";
 
@@ -292,7 +320,7 @@ htrsh_exp_htr_cv () {(
   fi
 
 
-  ### Create MLFs for training and test ###
+  ### Create MLF for test ###
   if [ ! -d "$EXPDIR/groundtruth/$DATASET" ]; then
     echo "$FN: creating ground truth files";
 
@@ -313,8 +341,9 @@ htrsh_exp_htr_cv () {(
     if [ ! -e "$MDIR/pages_train.mlf" ]; then
       mkdir -p "$MDIR";
       { echo '#!MLF!#';
+        tokenizer_and_diplomatizer () { "$htrsh_tokenizer" | "$htrsh_diplomatizer"; }
         for f in "$EXPDIR/data/$DATASET/"*.xml; do
-          htrsh_pagexml_textequiv "$f" -f mlf-chars -F "$htrsh_tokenizer";
+          htrsh_pagexml_textequiv "$f" -f mlf-chars -F tokenizer_and_diplomatizer;
         done
       } > "$MDIR/pages_train.mlf";
     fi
@@ -350,7 +379,7 @@ htrsh_exp_htr_cv () {(
   for states in $STATES; do
     for gauss in $htrsh_hmm_nummix; do # @todo not being varied in training
       gauss="g0${gauss}_i0${htrsh_hmm_iter}"; # @todo improve this
-      param="s${states}_${gauss}_gsf${htrsh_hvite_gsf}_wip${htrsh_hvite_wip}";
+      param="s${states}_${gauss}_gsf${htrsh_decode_gsf}_wip${htrsh_decode_wip}";
       DDIR="$EXPDIR/decode/$DATASET/$FEATNAME/lat_$param";
 
       mkdir -p "$DDIR";
@@ -366,7 +395,7 @@ htrsh_exp_htr_cv () {(
           { LM="$EXPDIR/models/$DATASET/lang/part$p/langmodel_2-gram.lat.gz";
             DIC="$EXPDIR/models/$DATASET/lang/part$p/dictionary.txt";
             HMM="$EXPDIR/models/$DATASET/${htrsh_hmm_type}_hmm_s$states/$FEATNAME/part$p/Macros_hmm_$gauss.gz";
-            HMMLST=$(zcat $HMM | sed -n '/^~h/{s|^~h "||;s|"$||;p;}');
+            HMMLST=$(gzip -dc "$HMM" | sed -n '/^~h/{s|^~h "||;s|"$||;p;}');
             LISTSET="feats_part$p.lst"; [ "$htrsh_exp_cvparts" = 1 ] && LISTSET="feats_train_part$p.lst";
 
             sed "s|^|$EXPDIR/feats/$DATASET/$FEATNAME/pca_part$p/|;" "$EXPDIR/lists/$DATASET/$LISTSET" \
@@ -374,8 +403,8 @@ htrsh_exp_htr_cv () {(
               > "$DDIR/feats_part$p.lst";
 
             htrsh_hvite_parallel $THREADS HVite -C <( echo "$htrsh_HTK_config" ) \
-              $htrsh_hvite_beam -z lat.gz -q ABtvalr \
-              -s $htrsh_hvite_gsf -p $htrsh_hvite_wip -H "$HMM" \
+              $htrsh_HTK_HVite_decode_opts -z lat.gz -q ABtvalr \
+              -s $htrsh_decode_gsf -p $htrsh_decode_wip -H "$HMM" \
               -S "$DDIR/feats_part$p.lst" -i "$DDIR/part$p.mlf" -l "$DDIR" \
               -w "$LM" "$DIC" <( echo "$HMMLST" );
 
@@ -393,7 +422,7 @@ htrsh_exp_htr_cv () {(
          [ $(ls "$DDIR/"part*.mlf 2>/dev/null | wc -l) = 0 ] &&
          [ $(ls "$DDIR/"part*.mlf.gz | wc -l) = "$htrsh_exp_cvparts" ]; then
         #echo "$FN: creating $DDIR/$param.mlf.gz";
-        zcat "$DDIR"/part*.mlf.gz \
+        gzip -dc "$DDIR"/part*.mlf.gz \
           | htrsh_fix_rec_mlf_quotes - \
           | sed '1p; /^#!MLF!#/d; s|^".*/feats/.*/|"*/|; s|^".*/decode/.*/|"*/|;' \
           | gzip \
@@ -401,7 +430,7 @@ htrsh_exp_htr_cv () {(
       fi
 
       ### Use word-graphs to decode for different parameters ###
-      wg="s${states}_${gauss}_gsf${htrsh_hvite_gsf}_wip${htrsh_hvite_wip}";
+      wg="s${states}_${gauss}_gsf${htrsh_decode_gsf}_wip${htrsh_decode_wip}";
       DDIR="$EXPDIR/decode/$DATASET/$FEATNAME/rescore_$wg";
 
       mkdir -p "$DDIR";
@@ -435,7 +464,7 @@ htrsh_exp_htr_cv () {(
         if [ ! -e "$DDIR/$param.mlf.gz" ] &&
            [ $(ls "$DDIR/"${param}_part*.mlf 2>/dev/null | wc -l) = 0 ] &&
            [ $(ls "$DDIR/"${param}_part*.mlf.gz | wc -l) = $htrsh_exp_cvparts ]; then
-          zcat "$DDIR/"${param}_part*.mlf.gz \
+          gzip -dc "$DDIR/"${param}_part*.mlf.gz \
             | htrsh_fix_rec_mlf_quotes - \
             | sed '1p; /^#!MLF!#/d; s|^".*/decode/.*/|"*/|;' \
             | gawk '
@@ -453,13 +482,13 @@ htrsh_exp_htr_cv () {(
       }
 
       ### Parallel rescoring ###
-      if [ $(( $(echo $htrsh_exp_hvite_gsf | wc -w)*$(echo $htrsh_exp_hvite_wip | wc -w) )) != $(ls "$DDIR/"*.mlf.gz 2>/dev/null | grep -v _part | wc -l) ]; then
+      if [ $(( $(echo $htrsh_exp_decode_gsf | wc -w)*$(echo $htrsh_exp_decode_wip | wc -w) )) != $(ls "$DDIR/"*.mlf.gz 2>/dev/null | grep -v _part | wc -l) ]; then
         echo "$FN: computing rescores for parameters $param";
         TS=$(($(date +%s%N)/1000000));
         awk '
           BEGIN {
-            nGSF = split( "'"$htrsh_exp_hvite_gsf"'", GSF );
-            nWIP = split( "'"$htrsh_exp_hvite_wip"'", WIP );
+            nGSF = split( "'"$htrsh_exp_decode_gsf"'", GSF );
+            nWIP = split( "'"$htrsh_exp_decode_wip"'", WIP );
             nPARTS = split( "'"$(echo $PARTS)"'", PARTS );
             for ( g=1; g<=nGSF; g++ )
               for ( w=1; w<=nWIP; w++ )
@@ -471,12 +500,12 @@ htrsh_exp_htr_cv () {(
 
 
       ### Compute evaluation measures: WER and CER ###
-      wg="s${states}_${gauss}_gsf${htrsh_hvite_gsf}_wip${htrsh_hvite_wip}";
+      wg="s${states}_${gauss}_gsf${htrsh_decode_gsf}_wip${htrsh_decode_wip}";
       DDIR="$EXPDIR/decode/$DATASET/$FEATNAME/rescore_$wg";
 
       [ -e "$DDIR.txt" ] &&
         continue;
-      [ $(( $(echo $htrsh_exp_hvite_gsf | wc -w)*$(echo $htrsh_exp_hvite_wip | wc -w) )) != $(ls "$DDIR/"*.mlf.gz 2>/dev/null | grep -v _part | wc -l) ] &&
+      [ $(( $(echo $htrsh_exp_decode_gsf | wc -w)*$(echo $htrsh_exp_decode_wip | wc -w) )) != $(ls "$DDIR/"*.mlf.gz 2>/dev/null | grep -v _part | wc -l) ] &&
         continue;
 
       echo "$FN: computing evaluation measures for parameters $param";
@@ -484,30 +513,40 @@ htrsh_exp_htr_cv () {(
       for f in $(ls "$DDIR"/*.mlf.gz | grep -v _part); do
         htrsh_mlf_to_tasas \
             "$EXPDIR/groundtruth/$DATASET/pages_test.mlf" \
-            <( zcat "$f" ) \
+            <( gzip -dc "$f" ) \
           > "$DDIR/evaluate_${wg}_wer.txt";
         htrsh_mlf_to_tasas \
             "$EXPDIR/groundtruth/$DATASET/pages_test.mlf" \
-            <( zcat "$f" ) \
+            <( gzip -dc "$f" ) \
             -c yes \
           > "$DDIR/evaluate_${wg}_cer.txt";
-        #htrsh_mlf_to_tasas \
-        #    <( "$htrsh_canonizer" < "$EXPDIR/groundtruth/$DATASET/pages_test.mlf" ) \
-        #    <( zcat "$f" | "$htrsh_canonizer" ) \
-        #  > "$DDIR/evaluate_${wg}_canonic_wer.txt";
+        htrsh_mlf_to_tasas \
+            <( "$htrsh_canonizer" < "$EXPDIR/groundtruth/$DATASET/pages_test.mlf" ) \
+            <( gzip -dc "$f" | "$htrsh_canonizer" ) \
+          > "$DDIR/evaluate_${wg}_canonic_wer.txt";
+        htrsh_mlf_to_tasas \
+            <( "$htrsh_diplomatizer" < "$EXPDIR/groundtruth/$DATASET/pages_test.mlf" ) \
+            <( gzip -dc "$f" | "$htrsh_diplomatizer" ) \
+          > "$DDIR/evaluate_${wg}_diplomatic_wer.txt";
+        htrsh_mlf_to_tasas \
+            <( "$htrsh_diplomatizer" < "$EXPDIR/groundtruth/$DATASET/pages_test.mlf" ) \
+            <( gzip -dc "$f" | "$htrsh_diplomatizer" ) \
+            -c yes \
+          > "$DDIR/evaluate_${wg}_diplomatic_cer.txt";
 
         echo \
           $( tasas "$DDIR/evaluate_${wg}_wer.txt" -ie -s " " -f "|" ) \
           $( tasas "$DDIR/evaluate_${wg}_cer.txt" -ie -s " " -f "|" ) \
-          - \
+          $( tasas "$DDIR/evaluate_${wg}_canonic_wer.txt" -ie -s " " -f "|" ) \
+          $( tasas "$DDIR/evaluate_${wg}_diplomatic_wer.txt" -ie -s " " -f "|" ) \
+          $( tasas "$DDIR/evaluate_${wg}_diplomatic_cer.txt" -ie -s " " -f "|" ) \
           $( echo "$f" | sed 's|.*/decode/||;s|\.mlf\.gz||;' );
-          #$( tasas "$DDIR"/evaluate_${wg}_canonic_wer.txt -ie -s " " -f "|" ) \
 
         rm -f "$DDIR"/evaluate_${wg}_{w,c}er.txt "$DDIR/"evaluate_${wg}_canonic_{w,c}er.txt;
       done > "$DDIR.txt";
       TE=$(($(date +%s%N)/1000000)); echo "$FN: evaluation measures parameters $param: time $((TE-TS)) ms";
 
-      #[ $(( $(echo $htrsh_exp_hvite_gsf | wc -w)*$(echo $htrsh_exp_hvite_wip | wc -w) )) = $(cat $DDIR.txt | wc -l) ] &&
+      #[ $(( $(echo $htrsh_exp_decode_gsf | wc -w)*$(echo $htrsh_exp_decode_wip | wc -w) )) = $(cat $DDIR.txt | wc -l) ] &&
       #  rm "$EXPDIR/decode/$DATASET/$FEATNAME/lat_$param/"*.lat.gz;
     done
   done
@@ -546,9 +585,7 @@ htrsh_randsplit () {
   local NLIST=$(wc -l < "$LIST");
 
   cat "$LIST" \
-    | awk '{ printf( "%s %s\n", rand(), $0 ); }' \
-    | sort \
-    | sed 's|^[^ ]* ||' \
+    | sort -R \
     | awk '
         BEGIN {
           fact = '$NLIST'/'$PARTS';
