@@ -2201,6 +2201,7 @@ htrsh_langmodel_train () {
     | $TOKENIZER \
     > "$OUTDIR/text_tokenized.txt";
 
+  # @todo check that number of tokens is the same for paste, if not return failure
   ### Create dictionary ###
   paste \
       <( cat "$OUTDIR/text_tokenized.txt" \

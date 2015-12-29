@@ -510,6 +510,7 @@ htrsh_exp_htr_cv () {(
 
       echo "$FN: computing evaluation measures for parameters $param";
       TS=$(($(date +%s%N)/1000000));
+      echo "# WER CER WER_canonic CER_canonic WER_diplom CER_diplom" > "$DDIR.txt";
       for f in $(ls "$DDIR"/*.mlf.gz | grep -v _part); do
         htrsh_mlf_to_tasas \
             "$EXPDIR/groundtruth/$DATASET/pages_test.mlf" \
@@ -525,6 +526,11 @@ htrsh_exp_htr_cv () {(
             <( gzip -dc "$f" | "$htrsh_canonizer" ) \
           > "$DDIR/evaluate_${wg}_canonic_wer.txt";
         htrsh_mlf_to_tasas \
+            <( "$htrsh_canonizer" < "$EXPDIR/groundtruth/$DATASET/pages_test.mlf" ) \
+            <( gzip -dc "$f" | "$htrsh_canonizer" ) \
+            -c yes \
+          > "$DDIR/evaluate_${wg}_canonic_cer.txt";
+        htrsh_mlf_to_tasas \
             <( "$htrsh_diplomatizer" < "$EXPDIR/groundtruth/$DATASET/pages_test.mlf" ) \
             <( gzip -dc "$f" | "$htrsh_diplomatizer" ) \
           > "$DDIR/evaluate_${wg}_diplomatic_wer.txt";
@@ -538,12 +544,13 @@ htrsh_exp_htr_cv () {(
           $( tasas "$DDIR/evaluate_${wg}_wer.txt" -ie -s " " -f "|" ) \
           $( tasas "$DDIR/evaluate_${wg}_cer.txt" -ie -s " " -f "|" ) \
           $( tasas "$DDIR/evaluate_${wg}_canonic_wer.txt" -ie -s " " -f "|" ) \
+          $( tasas "$DDIR/evaluate_${wg}_canonic_cer.txt" -ie -s " " -f "|" ) \
           $( tasas "$DDIR/evaluate_${wg}_diplomatic_wer.txt" -ie -s " " -f "|" ) \
           $( tasas "$DDIR/evaluate_${wg}_diplomatic_cer.txt" -ie -s " " -f "|" ) \
           $( echo "$f" | sed 's|.*/decode/||;s|\.mlf\.gz||;' );
 
-        rm -f "$DDIR"/evaluate_${wg}_{w,c}er.txt "$DDIR/"evaluate_${wg}_canonic_{w,c}er.txt;
-      done > "$DDIR.txt";
+        rm -f "$DDIR"/evaluate_${wg}_{,canonic_,diplomatic_}{w,c}er.txt;
+      done >> "$DDIR.txt";
       TE=$(($(date +%s%N)/1000000)); echo "$FN: evaluation measures parameters $param: time $((TE-TS)) ms";
 
       #[ $(( $(echo $htrsh_exp_decode_gsf | wc -w)*$(echo $htrsh_exp_decode_wip | wc -w) )) = $(cat $DDIR.txt | wc -l) ] &&
