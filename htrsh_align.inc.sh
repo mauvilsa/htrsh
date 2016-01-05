@@ -97,7 +97,7 @@ htrsh_pageimg_forcealign_regions () {
 
   ### Do forced alignment with HVite ###
   printf "%s\n" "${FEATLST[@]}" > "$TMPDIR/$B.lst";
-  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$TMPDIR/$B.lst" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
+  HVite $htrsh_HTK_HVite_align_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$TMPDIR/$B.lst" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
   [ "$?" != 0 ] &&
     echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
     return 1;
@@ -320,7 +320,7 @@ htrsh_pageimg_forcealign_region_old () {
 
   ### Do forced alignment with HVite ###
   echo "$FBASE.$REGID.fea" > "$TMPDIR/$B.lst";
-  HVite $htrsh_HTK_HVite_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$TMPDIR/$B.lst" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
+  HVite $htrsh_HTK_HVite_align_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$TMPDIR/$B.lst" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
   [ "$?" != 0 ] &&
     echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
     return 1;

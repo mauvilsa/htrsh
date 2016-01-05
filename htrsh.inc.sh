@@ -282,11 +282,17 @@ htrsh_pagexml_textequiv () {
     IDop=( -o "$PG." -v ../../@id );
   elif [ "$SRC" = "words" ]; then
     XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines[$htrsh_xpath_words/$htrsh_xpath_textequiv]";
-    PRINT=( -m "htrsh_xpath_words/$htrsh_xpath_textequiv" -o " " -v . -b -n );
+    PRINT=( -m "$htrsh_xpath_words/$htrsh_xpath_textequiv" -o " " -v . -b -n );
     IDop=( -o "$PG." -v ../@id -o . -v @id );
-  else
+  elif [ "$SRC" = "solo-words" ]; then
+    XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_words/$htrsh_xpath_textequiv";
+    IDop=( -o "$PG." -v ../../../../@id -o . -v ../../../@id -o . -v ../../@id );
+  elif [ "$SRC" = "lines" ]; then
     XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_textequiv";
     IDop=( -o "$PG." -v ../../../@id -o . -v ../../@id );
+  else
+    echo "$FN: error: unexpected source type: $SRC" 1>&2;
+    return 1;
   fi
 
   [ $(xmlstarlet sel -t -v "count($XPATH)" "$XML") = 0 ] &&
@@ -1333,6 +1339,7 @@ htrsh_pageimg_extract_lines () {
   local FN="htrsh_pageimg_extract_lines";
   local OUTDIR=".";
   local IMFILE="";
+  local SRC="lines";
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Extracts lines from an image given its XML Page file";
@@ -1352,6 +1359,8 @@ htrsh_pageimg_extract_lines () {
       OUTDIR="$2";
     elif [ "$1" = "-i" ]; then
       IMFILE="$2";
+    elif [ "$1" = "-s" ]; then
+      SRC="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -1364,30 +1373,30 @@ htrsh_pageimg_extract_lines () {
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
+  local BASE=$(echo "$OUTDIR/$IMBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
   local XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_coords";
-  local NUMLINES=$(xmlstarlet sel -t -v "count($XPATH)" "$XML");
+  local IDop=( -o "$BASE." -v ../../@id -o "." -v ../@id );
+  if [ "$SRC" = "solo-words" ]; then
+    XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_words/$htrsh_xpath_coords";
+    IDop=( -o "$BASE." -v ../../../@id -o . -v ../../@id -o . -v ../@id );
+  fi
 
-  if [ "$NUMLINES" = 0 ]; then
-    echo "$FN: error: zero lines have coordinates for extraction: $XML" 1>&2;
+  [ $(xmlstarlet sel -t -v "count($XPATH)" "$XML") = 0 ] &&
+    echo "$FN: error: zero lines have coordinates for extraction: $XML" 1>&2 &&
     return 1;
 
+  if [ "$RESSRC" = "xml" ]; then
+    IMRES="-d $IMRES";
   else
-    local base=$(echo "$OUTDIR/$IMBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
-
-    if [ "$RESSRC" = "xml" ]; then
-      IMRES="-d $IMRES";
-    else
-      IMRES="";
-    fi
-
-    xmlstarlet sel -t -m "$XPATH" \
-        -o "$base." -v ../../@id -o "." -v ../@id -o ".png " -v @points -n "$XML" \
-      | imgpolycrop $IMRES "$IMFILE";
-
-    [ "$?" != 0 ] &&
-      echo "$FN: error: line image extraction failed" 1>&2 &&
-      return 1;
+    IMRES="";
   fi
+
+  xmlstarlet sel -t -m "$XPATH" "${IDop[@]}" -o ".png " -v @points -n "$XML" \
+    | imgpolycrop $IMRES "$IMFILE";
+
+  [ "$?" != 0 ] &&
+    echo "$FN: error: line image extraction failed" 1>&2 &&
+    return 1;
 
   return 0;
 }
@@ -1846,6 +1855,7 @@ htrsh_pageimg_extract_linefeats () {
   local FEATLST="/dev/null";
   local PBASE="";
   local REPLC="yes";
+  local SRC="lines";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Extracts line features from an image given its XML Page file";
@@ -1872,6 +1882,8 @@ htrsh_pageimg_extract_linefeats () {
       PBASE="-b $2";
     elif [ "$1" = "-c" ]; then
       REPLC="$2";
+    elif [ "$1" = "-s" ]; then
+      SRC="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -1885,7 +1897,7 @@ htrsh_pageimg_extract_linefeats () {
   [ "$?" != 0 ] && return 1;
 
   ### Extract lines from line coordinates ###
-  local LINEIMGS=$(htrsh_pageimg_extract_lines "$XML" -d "$OUTDIR");
+  local LINEIMGS=$(htrsh_pageimg_extract_lines "$XML" -d "$OUTDIR" -s "$SRC");
   ( [ "$?" != 0 ] || [ "$LINEIMGS" = "" ] ) && return 1;
 
   local xmledit=( ed );
@@ -2151,6 +2163,8 @@ htrsh_langmodel_train () {
     { canonic_count[$1] ++;
       variant_count[$1][$2] ++;
       variant_models[$1][$2] = $3;
+      if( NF != 3 )
+        exit 1;
     }
     END {
       printf( "\"<s>\"\t[]\t1\t@\n" );
@@ -2201,9 +2215,8 @@ htrsh_langmodel_train () {
     | $TOKENIZER \
     > "$OUTDIR/text_tokenized.txt";
 
-  # @todo check that number of tokens is the same for paste, if not return failure
   ### Create dictionary ###
-  paste \
+  { paste \
       <( cat "$OUTDIR/text_tokenized.txt" \
            | $CANONIZER \
            | tee "$OUTDIR/text_canonized.txt" \
@@ -2213,8 +2226,11 @@ htrsh_langmodel_train () {
       <( cat "$OUTDIR/text_tokenized.txt" \
            | $DIPLOMATIZER \
            | tr ' ' '\n' ) \
-    | gawk -v TYPE="$htrsh_hmm_type" -v SPECIAL=<( echo "$htrsh_special_chars" ) "$GAWK_CREATE_DIC" \
-    | LC_ALL=C.UTF-8 sort \
+      | gawk -v TYPE="$htrsh_hmm_type" -v SPECIAL=<( echo "$htrsh_special_chars" ) "$GAWK_CREATE_DIC";
+    [ "$?" != 0 ] &&
+      echo "$FN: error: problems creating dictionary" 1>&2 &&
+      return 1;
+  } | LC_ALL=C.UTF-8 sort \
     > "$OUTDIR/dictionary.txt";
 
   ### Create vocabulary ###
@@ -2978,6 +2994,7 @@ htrsh_pagexml_insertalign_lines () {
           } | awk -F'[ ,]' -v sz=$size "$AWK_ISECT" ) );
         pts=$( "${polydraw[@]//_/ }" | imgccomp -V0 -JS - );
       fi
+      pts=$(echo "$pts" | sed '/^[^ ]*,[^ ]*$/s|\(.*\)|\1 \1|');
       local wpts="$pts";
 
       #TE=$(($(date +%s%N)/1000000)); echo "time 4: $((TE-TS)) ms" 1>&2; TS="$TE";
@@ -3003,6 +3020,7 @@ htrsh_pagexml_insertalign_lines () {
             pts=$( "${polydraw[@]//_/ }" | imgccomp -V0 -JS - );
             # @todo character polygons overlap slightly, possible solution: reduce width of parallelograms by 1 pixel in each side
           fi
+          pts=$(echo "$pts" | sed '/^[^ ]*,[^ ]*$/s|\(.*\)|\1 \1|');
 
           xmledit+=( -s "//*[@id='${id}_w${ww}']" -t elem -n TMPNODE );
           xmledit+=( -i //TMPNODE -t attr -n id -v "${id}_w${ww}_g${gg}" );
