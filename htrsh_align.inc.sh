@@ -182,7 +182,7 @@ htrsh_pageimg_forcealign_regions () {
             }
           }
           END {
-            if( wordsplit != "yes" )
+            if( wordsplit != "yes" ) {
               for( n=2; n<=N; n++ )
                 if( ( ln[n] != ln[n-1] ) &&
                     ! ( txt[n]=="@" || txt[n-1]=="@" ) ) {
@@ -198,6 +198,14 @@ htrsh_pageimg_forcealign_regions () {
                       ln[m] = ln[n];
                       rs[m] = re[m] = rs[n];
                     }
+                }
+            }
+            else
+              for( n=2; n<=N; n++ )
+                if( ( ln[n] != ln[n-1] ) &&
+                    ! ( txt[n]=="@" || txt[n-1]=="@" ) ) {
+                  txt[n-1] = sprintf( "%s\xC2\xAD", txt[n-1] );
+                  txt[n] = sprintf( "\xC2\xAD%s", txt[n] );
                 }
 
             for( n=1; n<=N; n++ ) {

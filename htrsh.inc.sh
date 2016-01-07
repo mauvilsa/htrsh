@@ -1642,21 +1642,18 @@ htrsh_feats_pca () {(
     return 1;
   fi
 
-  local htrsh_fastpca="no";
-  if [ "$htrsh_fastpca" = "yes" ]; then
-
-    local DIMS=$(HList -h -z $(head -n 1 < "$FEATLST") \
-            | sed -n '/^  Num Comps:/{s|^[^:]*: *||;s| .*||;p;}');
-    tail -qc +13 $(< "$FEATLST") | swap4bytes | fast_pca -C -e $EXCL -f binary -b 500 -p $DIMS -m "$OUTMAT";
-
-    RC="$?";
-
-  else
+  #local htrsh_fastpca="no";
+  #if [ "$htrsh_fastpca" = "yes" ]; then
+  #  local DIMS=$(HList -h -z $(head -n 1 < "$FEATLST") \
+  #          | sed -n '/^  Num Comps:/{s|^[^:]*: *||;s| .*||;p;}');
+  #  tail -qc +13 $(< "$FEATLST") | swap4bytes | fast_pca -C -e $EXCL -f binary -b 500 -p $DIMS -m "$OUTMAT";
+  #  RC="$?";
+  #else
 
   local RC;
   local xEXCL=""; [ "$EXCL" != "[]" ] && xEXCL="se = se + sum(x(:,$EXCL)); x(:,$EXCL) = [];";
   local xxEXCL=""; [ "$EXCL" != "[]" ] && xxEXCL="se = se + cse;";
-  local nRDIM="D"; [ "$RDIM" != "" ] && nRDIM="min(D,$RDIM)";
+  local nRDIM="D"; [ "$RDIM" != "" ] && nRDIM="min(D,$RDIM)-DE";
 
   htrsh_comp_csgma () {
     { local f;
@@ -1719,7 +1716,7 @@ htrsh_feats_pca () {(
       V = V(idx);
       B = B(:,idx);
       D = size(sgma,1);
-      DR = $nRDIM-DE;
+      DR = $nRDIM;
       B = B(:,1:DR);
     ";
     if [ "$EXCL" != "[]" ]; then
@@ -1751,7 +1748,7 @@ htrsh_feats_pca () {(
 
   rm "$OUTMAT.csgma"*.mat.gz;
 
-  fi
+  #fi
 
   [ "$RC" != 0 ] &&
     echo "$FN: error: problems computing PCA" 1>&2;
@@ -1764,11 +1761,14 @@ htrsh_feats_pca () {(
 ##
 htrsh_feats_project () {(
   local FN="htrsh_feats_project";
+  local RDIM="";
   local THREADS="1";
   if [ $# -lt 3 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Projects a list of features for a given base";
       echo "Usage: $FN FEATLST PBASE OUTDIR";
+      echo " -r RDIM     Project to RDIM dimensions (def.=all)";
+      echo " -T THREADS  Threads for parallel processing (def.=$THREADS)";
     } 1>&2;
     return 1;
   fi
@@ -1779,7 +1779,9 @@ htrsh_feats_project () {(
   local OUTDIR="$3";
   shift 3;
   while [ $# -gt 0 ]; do
-    if [ "$1" = "-T" ]; then
+    if [ "$1" = "-r" ]; then
+      RDIM="$2";
+    elif [ "$1" = "-T" ]; then
       THREADS="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
@@ -1801,9 +1803,11 @@ htrsh_feats_project () {(
 
   feats_project () {
     { echo "load('$PBASE');"
+      [ "$RDIM" != "" ] &&
+        echo "B = B(:,1:min($RDIM,size(B,2)));";
       local f ff;
       for f in $(<"$1"); do
-        ff=$(echo "$f" | sed "s|.*/|$OUTDIR/|");
+        ff=$(echo "$f" | sed "s|.*/||; s|^|$OUTDIR/|;");
         echo "
           [x,FP,DT,TC] = readhtk('$f');
           x = (x-repmat(mu,size(x,1),1))*B;
