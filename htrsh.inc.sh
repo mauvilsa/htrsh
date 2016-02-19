@@ -13,8 +13,11 @@
   exit 1;
 [ "$(type -t htrsh_version)" = "function" ] &&
   echo "htrsh.inc.sh: warning: library already loaded, to reload first use htrsh_unload" 1>&2 &&
-  return 0;
+  return 1;
 
+[ "$(which run_parallel.inc.sh)" = "" ] &&
+  echo "htrsh.inc.sh: error: required run_parallel.inc.sh not found in path" 1>&2 &&
+  return 1;
 . run_parallel.inc.sh;
 
 #-----------------------#
@@ -27,7 +30,7 @@ htrsh_xpath_regions='//_:TextRegion';
 htrsh_xpath_lines='_:TextLine';
 htrsh_xpath_words='_:Word';
 htrsh_xpath_coords='_:Coords[@points and @points!="0,0 0,0"]';
-htrsh_xpath_textequiv='_:TextEquiv[_:Unicode and _:Unicode != ""]/_:Unicode';
+htrsh_xpath_textequiv=$'_:TextEquiv[_:Unicode and translate(_:Unicode,"\n\r\t ","") != ""]/_:Unicode';
 
 htrsh_imgclean="prhlt"; # Image preprocessing technique, prhlt or ncsr
 htrsh_clean_type="image"; #htrsh_clean_type="line";
@@ -59,9 +62,10 @@ htrsh_align_addtext="yes";          # Whether to add TextEquiv to word and glyph
 htrsh_align_words="yes";            # Whether to align at a word level when aligning regions
 htrsh_align_wordsplit="no";         # Whether to split words when aligning regions
 
-htrsh_hmm_states="6"; # Number of HMM states (excluding special initial and final)
-htrsh_hmm_nummix="4"; # Number of Gaussian mixture components per state
-htrsh_hmm_iter="4";   # Number of training iterations
+htrsh_hmm_states="6";  # Default number of HMM states (excluding special initial and final)
+htrsh_hmm_ndstates=""; # Number of states for specific HMMs (name #states\n...) use 'd' for an expression involving the default
+htrsh_hmm_nummix="4";  # Number of Gaussian mixture components per state
+htrsh_hmm_iter="4";    # Number of training iterations
 htrsh_hmm_type="char";
 #htrsh_hmm_type="overlap";
 
@@ -234,11 +238,14 @@ htrsh_pagexml_set_textequiv () {
 ##
 ## Function that prints to stdout the TextEquiv from an XML Page file
 ##
+# @todo hmms for different space types: word extremes, between numbers, etc.
+# @todo variable with awk function to convert word to hmm list, so that it can be reused and avoid code replication
 htrsh_pagexml_textequiv () {
   local FN="htrsh_pagexml_textequiv";
   local SRC="lines";
   local FORMAT="raw";
   local FILTER="cat";
+  local WORDEND="no";
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Prints to stdout the TextEquiv from an XML Page file";
@@ -247,6 +254,7 @@ htrsh_pagexml_textequiv () {
       echo " -s SOURCE    Source of TextEquiv, either 'regions', 'lines' or 'words' (def.=$SRC)";
       echo " -f FORMAT    Output format among 'raw', 'mlf-chars', 'mlf-words' and 'tab' (def.=$FORMAT)";
       echo " -F FILTER    Filtering pipe command, e.g. tokenizer, transliteration, etc. (def.=none)";
+      echo " -w (yes|no)  For mlf-words, whether to add word end marks (def.=$WORDEND)";
     } 1>&2;
     return 1;
   fi
@@ -261,6 +269,8 @@ htrsh_pagexml_textequiv () {
       FORMAT="$2";
     elif [ "$1" = "-F" ]; then
       FILTER="$2";
+    elif [ "$1" = "-w" ]; then
+      WORDEND="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -310,7 +320,7 @@ htrsh_pagexml_textequiv () {
         s|  *$||;
         s|   *| |g;
         ' \
-    | awk -F'\t' -v FORMAT=$FORMAT -v TYPE="$htrsh_hmm_type" -v SPECIAL=<( echo "$htrsh_special_chars" ) '
+    | awk -F'\t' -v FORMAT=$FORMAT -v TYPE="$htrsh_hmm_type" -v WORDEND=$WORDEND -v SPECIAL=<( echo "$htrsh_special_chars" ) '
         BEGIN {
           if( FORMAT == "tab" )
             OFS=" ";
@@ -356,18 +366,69 @@ htrsh_pagexml_textequiv () {
                 c = txt[n] == " " ? "@" : txt[n] ;
               if( TYPE == "overlap" )
                 printf( ( match(cprev,/^[.0-9]/) ? "\"%s%s\"\n" : "%s%s\n" ), cprev, c );
+              if( c == "@" && WORDEND == "yes" )
+                printf( "{wordend}\n" );
               printf( ( match(c,/^[.0-9]/) ? "\"%s\"\n" : "%s\n" ), c );
               cprev = c;
             }
             c = "@";
             if( TYPE == "overlap" )
               printf( ( match(cprev,/^[.0-9]/) ? "\"%s%s\"\n" : "%s%s\n" ), cprev, c );
+            if( WORDEND == "yes" )
+              printf( "{wordend}\n" );
             printf( ( match(c,/^[.0-9]/) ? "\"%s\"\n" : "%s\n" ), c );
             printf(".\n");
           }
         }';
 
   return 0;
+}
+
+##
+## Function that transforms a word MLF to hmm sequences using given dictionary
+##
+htrsh_mlf_word_to_hmms () {
+  local FN="htrsh_mlf_word_to_hmms";
+  if [ $# -lt 2 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Transforms a word MLF to an hmm sequence using given dictionary";
+      echo "Usage: $FN MLF DIC";
+    } 1>&2;
+    return 1;
+  fi
+
+  gawk -v RETVAL=0 '
+    { w = $1;
+      if( ARGIND == 1 ) {
+        if( match(w,/^".+"$/) )
+          w = gensub( /\\"/, "\"", "g", substr(w,2,length(w)-2) );
+        w = gensub( /\\\x27/, "\x27", "g", w );
+        if( ! ( w in dic ) )
+          dic[w] = $0;
+      }
+      else {
+        if( $0 == "#!MLF!#" || $0 == "." || match($0,/^".+\/.+\.[lr][ae][bc]"$/) )
+          print;
+        else {
+          if( match(w,/^".+"$/) )
+            w = gensub( /\\"/, "\"", "g", substr(w,2,length(w)-2) );
+          if( ! ( w in dic ) ) {
+            printf( "'"$FN"': error: word not in dictionary: %s\n", w ) > "/dev/stderr";
+            RETVAL="1";
+            #exit 1;
+          }
+          N = split( dic[w], chars );
+          for( n=4; n<=N; n++ )
+            if( match(chars[n],/^\.$/) || match(chars[n],/^[0-9]/) )
+              printf( "\"%s\"\n", chars[n] );
+            else
+              print chars[n];
+        }
+      }
+    }
+    END {
+      exit RETVAL;
+    }' "$2" "$1";
 }
 
 ##
@@ -494,6 +555,7 @@ htrsh_pageimg_resize () {
   local OUTRES="118";
   local INRESCHECK="yes";
   local SFACT="";
+  local OEXT="";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Resizes an XML Page file along with its corresponding image";
@@ -502,6 +564,7 @@ htrsh_pageimg_resize () {
       echo " -i INRES    Input image resolution in ppc (def.=use image metadata)";
       echo " -o OUTRES   Output image resolution in ppc (def.=$OUTRES)";
       echo " -s SFACT    Scaling factor in % (def.=inferred from resolutions)";
+      echo " -e OEXT     Output image format extension (def.=same as input)";
     } 1>&2;
     return 1;
   fi
@@ -517,6 +580,8 @@ htrsh_pageimg_resize () {
       OUTRES="$2";
     elif [ "$1" = "-s" ]; then
       SFACT="$2";
+    elif [ "$1" = "-e" ]; then
+      OEXT="$2";
     elif [ "$1" = "-c" ]; then
       INRESCHECK="$2";
     else
@@ -546,6 +611,7 @@ htrsh_pageimg_resize () {
   fi
 
   [ "$INRES" = "" ] && INRES="$IMRES";
+  [ "$OEXT" = "" ] && OEXT="$IMEXT";
 
   if [ "$SFACT" = "" ]; then
     SFACT=$(echo $OUTRES $INRES | awk '{printf("%g%%",100*$1/$2)}');
@@ -555,11 +621,12 @@ htrsh_pageimg_resize () {
   fi
 
   ### Resize image ###
-  convert "$IMFILE" -units PixelsPerCentimeter -density $OUTRES -resize $SFACT "$OUTDIR/$IMBASE.$IMEXT"; ### don't know why the density has to be set this way
+  convert "$IMFILE" -units PixelsPerCentimeter -density $OUTRES -resize $SFACT "$OUTDIR/$IMBASE.$OEXT"; ### don't know why the density has to be set this way
 
   ### Resize XML Page ###
   # @todo change the sed to XSLT
   htrsh_pagexml_resize $SFACT < "$XML" \
+    | xmlstarlet ed -u //@imageFilename -v "$IMBASE.$OEXT" \
     | sed '
         s|\( custom="[^"]*\)image-resolution:[^;]*;\([^"]*"\)|\1\2|;
         s| custom=" *"||;
@@ -722,6 +789,52 @@ htrsh_pagexml_round () {
 }
 
 ##
+## Function that inserts an XML Page node from an external XML Page
+##
+htrsh_pagexml_insertfrom () {
+  local FN="htrsh_pagexml_insertfrom";
+  if [ $# != 4 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Inserts an XML Page node from an external XML Page";
+      echo "Usage: $FN FILE_FROM XPATH_FROM FILE_TO XPATH_TO";
+    } 1>&2;
+    return 1;
+  fi
+
+  local FILE_FROM=$(pwd)/$($htrsh_realpath "$1");
+  local XPATH_FROM="$2";
+  local FILE_TO="$3";
+  local XPATH_TO="$4";
+
+  local XSLT='<?xml version="1.0"?>
+<xsl:stylesheet
+  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  xmlns:_="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  version="1.0">
+
+  <xsl:output method="xml" indent="yes" encoding="utf-8" omit-xml-declaration="no"/>
+
+  <xsl:template match="@* | node()">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()"/>
+    </xsl:copy>
+  </xsl:template>
+
+  <xsl:template match="'"$XPATH_TO"'">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()"/>
+      <xsl:copy-of select="document('"'$FILE_FROM'"')'"$XPATH_FROM"'"/>
+    </xsl:copy>
+  </xsl:template>
+
+</xsl:stylesheet>';
+
+  xmlstarlet tr <( echo "$XSLT" ) "$FILE_TO";
+}
+
+##
 ## Function that sorts Words from left to right within TextLines in an XML Page file
 ## (based ONLY on (xmin+xmax)/2 of the word Coords)
 ##
@@ -845,10 +958,11 @@ htrsh_pagexml_sort_lines () {
 
   <xsl:template match="//_:TextRegion[count(_:TextLine)=count(_:TextLine/_:Baseline)]">
     <xsl:copy>
-      <xsl:apply-templates select="@* | node()[not(self::_:TextLine)]" />
+      <xsl:apply-templates select="@* | node()[not(self::_:TextLine or self::_:TextEquiv)]" />
       <xsl:apply-templates select="_:TextLine">
         <xsl:sort select="number(substring-before(substring-after(_:Baseline/@points,&quot;,&quot;),&quot; &quot;))+(number(substring-before(_:Baseline/@points,&quot;,&quot;)) div number($Width))" data-type="number" order="ascending"/>
       </xsl:apply-templates>
+      <xsl:apply-templates select="_:TextEquiv" />
     </xsl:copy>
   </xsl:template>
 </xsl:stylesheet>';
@@ -1027,7 +1141,7 @@ htrsh_pagexml_points2bbox () {
     xmlstarlet sel -t -m "//$htrsh_xpath_coords" -v ../@id -o " " \
         -v 'translate(@points,","," ")' -n <( echo "$XML" ) \
       | awk '
-          { if( NF >= 5 ) {
+          { if( NF >= 3 ) {
               mn_x = mx_x = $2;
               mn_y = mx_y = $3;
               for( n=4; n<NF; n+=2 ) {
@@ -1853,6 +1967,7 @@ htrsh_feats_htk_to_kaldi () {
 ##
 ## Function that extracts line features from an image given its XML Page file
 ##
+# @todo option(s) for random variations (size, slant, extremes white space, etc.)
 htrsh_pageimg_extract_linefeats () {
   local FN="htrsh_pageimg_extract_linefeats";
   local OUTDIR=".";
@@ -2101,8 +2216,151 @@ htrsh_pageimg_extract_linefeats () {
 #----------------------------------#
 
 ##
+## GAWK functions to convert a word to an array of hmm names
+##
+htrsh_gawk_func_word_to_hmms='
+  function load_special_chars( SPECIAL,   n,c,line,sline ) {
+    delete SCHAR;
+    delete SWORD;
+    delete SMARK;
+    NSPECIAL = 0;
+    while( ( getline line<SPECIAL ) > 0 )
+      if( line != "" ) {
+        n = split(line,sline);
+        c = substr( sline[1], 1, 1 );
+        SCHAR[c] = "";
+        NSPECIAL ++;
+        SWORD[NSPECIAL] = sline[1];
+        SMARK[NSPECIAL] = n == 1 ? sline[1] : sline[2] ;
+      }
+    close( SPECIAL );
+  }
+
+  function word_to_hmms( word, hmms, hmmtype, endspace,   C,N,n,m,w,txt,cprev ) {
+    delete hmms;
+    C = 0;
+    N = split( word, txt, "" );
+    cprev = "@";
+    for( n=1; n<=N; n++ ) {
+      if( txt[n] in SCHAR ) {
+        for( m=1; m<=NSPECIAL; m++ ) {
+          w = SWORD[m];
+          if( w == substr(word,n,length(w)) ) {
+            if( hmmtype == "overlap" )
+              hmms[++C] = sprintf( "%s%s", cprev, SMARK[m] );
+            cprev = SMARK[m];
+            hmms[++C] = sprintf( "%s", SMARK[m] );
+            n += length(w)-1;
+            break;
+          }
+        }
+        if( m <= NSPECIAL )
+          continue;
+      }
+      if( hmmtype == "overlap" )
+        hmms[++C] = sprintf( "%s%s", cprev, txt[n] );
+      cprev = txt[n];
+      hmms[++C] = sprintf( "%s", txt[n] );
+    }
+    if( hmmtype == "overlap" )
+      hmms[++C] = sprintf( "%s@", cprev );
+    if( endspace == "yes" )
+      hmms[++C] = sprintf( "@" );
+    return C;
+  }';
+
+##
+## Function that creates a dictionary from file lists with the representations of the words
+##
+htrsh_create_dict () {
+  local FN="htrsh_create_dict";
+  local EXTR="no";
+  local HMMSEQ="no";
+  local ENDSPACE="no";
+  if [ $# -lt 3 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Creates a dictionary from file lists with the representations of the words";
+      echo "Usage: $FN ORIGINAL CANONIC DIPLOMATIC [ Options ]";
+      echo "Options:";
+      echo " -S (yes|no)     Whether to add <s> and </s> to dictionary (def.=$EXTR)";
+      echo " -H (yes|no)     Whether to transform diplomatic to hmm sequence (def.=$HMMSEQ)";
+      echo " -E (yes|no)     Whether to add space at end of words (def.=$ENDSPACE)";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local ORIGINAL="$1";
+  local CANONIC="$2";
+  local DIPLOMATIC="$3";
+  shift 3;
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "-S" ]; then
+      EXTR="$2";
+    elif [ "$1" = "-H" ]; then
+      HMMSEQ="$2";
+    elif [ "$1" = "-E" ]; then
+      ENDSPACE="$2";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
+    shift 2;
+  done
+
+  ### Create dictionary ###
+  paste "$CANONIC" "$ORIGINAL" "$DIPLOMATIC" \
+    | gawk -v hmmtype="$htrsh_hmm_type" -v hmmseq="$HMMSEQ" -v endspace="$ENDSPACE" \
+           -v extr="$EXTR" -v SPECIAL=<( echo "$htrsh_special_chars" ) \
+        "$htrsh_gawk_func_word_to_hmms"'
+        BEGIN {
+          load_special_chars( SPECIAL );
+          FS = "\t";
+        }
+        { canonic_count[$1] ++;
+          variant_count[$1][$2] ++;
+          variant_diplom[$1][$2] = $3;
+          if( NF != 3 ) {
+            printf( "'"$FN"': error: at line %d, expected three tokens: %s", FNR, $0 ) > "/dev/stderr";
+            exit 1;
+          }
+        }
+        END {
+          if( extr == "yes" ) {
+            printf( "\"<s>\"\t[]\t1\t@\n" );
+            printf( "\"</s>\"\t[]\n" );
+          }
+          for( canonic in canonic_count ) {
+            wcanonic = canonic;
+            gsub( "\x22", "\\\x22", wcanonic );
+            gsub( "\x27", "\\\x27", wcanonic );
+            if( wcanonic == "" ) {
+              printf( "'"$FN"': warning: ignored empty cannonic word" ) > "/dev/stderr";
+              continue;
+            }
+            for( variant in variant_count[canonic] ) {
+              vprob = sprintf("%g",variant_count[canonic][variant]/canonic_count[canonic]);
+              if( ! match(vprob,/\./) )
+                vprob = ( vprob ".0" );
+              printf( "\"%s\"\t[%s]\t%s\t", wcanonic, variant, vprob );
+              diplom = variant_diplom[canonic][variant];
+              if( hmmseq == "no" )
+                printf( "%s\n", diplom );
+              else {
+                N = word_to_hmms( diplom, hmms, hmmtype, endspace );
+                for( n=1; n<=N; n++ )
+                  printf( n==1 ? "%s" : " %s", hmms[n] );
+                printf( "\n" );
+              }
+            }
+          }
+        }';
+}
+
+##
 ## Function that trains a language model and creates related files
 ##
+# @todo dictionary without hmm models list, new function to add hmm models list, only create hmm dictionary when training
 htrsh_langmodel_train () {
   local FN="htrsh_langmodel_train";
   local OUTDIR=".";
@@ -2151,86 +2409,23 @@ htrsh_langmodel_train () {
     ORDEROPTS+=( -ukndiscount$n );
   done
 
-  local GAWK_CREATE_DIC='
-    BEGIN {
-      FS="\t";
-      while( (getline line<SPECIAL) > 0 )
-        if( line != "" ) {
-          n = split(line,sline," ");
-          c = substr( sline[1], 1, 1 );
-          SCHAR[c] = "";
-          NSPECIAL++;
-          SWORD[NSPECIAL] = sline[1];
-          SMARK[NSPECIAL] = n == 1 ? sline[1] : sline[2] ;
-        }
-    }
-    { canonic_count[$1] ++;
-      variant_count[$1][$2] ++;
-      variant_models[$1][$2] = $3;
-      if( NF != 3 )
-        exit 1;
-    }
-    END {
-      printf( "\"<s>\"\t[]\t1\t@\n" );
-      printf( "\"</s>\"\t[]\n" );
-      for( canonic in canonic_count ) {
-        wcanonic = canonic;
-        gsub( "\x22", "\\\x22", wcanonic );
-        gsub( "\x27", "\\\x27", wcanonic );
-        for( variant in variant_count[canonic] ) {
-          vprob = sprintf("%g",variant_count[canonic][variant]/canonic_count[canonic]);
-          if( ! match(vprob,/\./) )
-            vprob = ( vprob ".0" );
-          printf( "\"%s\"\t[%s]\t%s\t", wcanonic, variant, vprob );
-          utxt = variant_models[canonic][variant];
-          N = split( utxt, txt, "" );
-          cprev = "@";
-          for( n=1; n<=N; n++ ) {
-            printf( n==1 ? "" : " " );
-            if( txt[n] in SCHAR ) {
-              for( m=1; m<=NSPECIAL; m++ ) {
-                w = SWORD[m];
-                if( w == substr(utxt,n,length(w)) ) {
-                  if( TYPE == "overlap" )
-                    printf( "%s%s ", cprev, SMARK[m] );
-                  cprev = SMARK[m];
-                  printf( "%s", SMARK[m] );
-                  n += length(w)-1;
-                  break;
-                }
-              }
-              if( m <= NSPECIAL )
-                continue;
-            }
-            if( TYPE == "overlap" )
-              printf( "%s%s ", cprev, txt[n] );
-            cprev = txt[n];
-            printf( "%s", txt[n] );
-          }
-          if( TYPE == "overlap" )
-            printf( " %s@", cprev );
-          printf( " @\n" );
-        }
-      }
-    }';
-
   ### Tokenize training text ###
   cat "$TXT" \
     | $TOKENIZER \
     > "$OUTDIR/text_tokenized.txt";
 
   ### Create dictionary ###
-  { paste \
+  { htrsh_create_dict \
+      <( cat "$OUTDIR/text_tokenized.txt" \
+           | tr ' ' '\n' | sed '/^$/d' ) \
       <( cat "$OUTDIR/text_tokenized.txt" \
            | $CANONIZER \
            | tee "$OUTDIR/text_canonized.txt" \
-           | tr ' ' '\n' ) \
-      <( cat "$OUTDIR/text_tokenized.txt" \
-           | tr ' ' '\n' ) \
+           | tr ' ' '\n' | sed '/^$/d' ) \
       <( cat "$OUTDIR/text_tokenized.txt" \
            | $DIPLOMATIZER \
-           | tr ' ' '\n' ) \
-      | gawk -v TYPE="$htrsh_hmm_type" -v SPECIAL=<( echo "$htrsh_special_chars" ) "$GAWK_CREATE_DIC";
+           | tr ' ' '\n' | sed '/^$/d' ) \
+      -S yes -H yes -E yes;
     [ "$?" != 0 ] &&
       echo "$FN: error: problems creating dictionary" 1>&2 &&
       return 1;
@@ -2276,7 +2471,7 @@ htrsh_hmm_proto () {
       echo "Description: Prints to stdout HMM prototype(s) in HTK format";
       echo "Usage: $FN (DIMS|CODES) STATES [ Options ]";
       echo "Options:";
-      echo " -n PNAME     Proto name(s), if several separated by '\n' (def.=$PNAME)";
+      echo " -n PNAME     Proto names (optionally with #states), if several separated by '\n' (def.=$PNAME)";
       echo " -g GLOBAL    Include given global options string (def.=none)";
       echo " -m MEAN      Use given mean vector (def.=zeros)";
       echo " -v VARIANCE  Use given variance vector (def.=ones)";
@@ -2423,6 +2618,8 @@ htrsh_hmm_train () {
   local OUTDIR=".";
   local CODES="0";
   local PROTO="";
+  local DIC="";
+  local EXCLREALIGN="";
   local KEEPITERS="yes";
   local RESUME="yes";
   local RAND="no";
@@ -2436,6 +2633,8 @@ htrsh_hmm_train () {
       echo " -d OUTDIR    Directory for output models and temporal files (def.=$OUTDIR)";
       echo " -c CODES     Train discrete model with given codebook size (def.=false)";
       echo " -P PROTO     Use PROTO as initialization prototype (def.=false)";
+      echo " -D DICT      Realign using given dictionary, requires word MLF (def.=false)";
+      echo " -E EXCLST    Exclude list for realigning (def.=false)";
       echo " -k (yes|no)  Whether to keep models per iteration, including initialization (def.=$KEEPITERS)";
       echo " -r (yes|no)  Whether to resume previous training, looks for models per iteration (def.=$RESUME)";
       echo " -R (yes|no)  Whether to randomize initialization prototype (def.=$RAND)";
@@ -2456,6 +2655,10 @@ htrsh_hmm_train () {
       CODES="$2";
     elif [ "$1" = "-P" ]; then
       PROTO="$2";
+    elif [ "$1" = "-D" ]; then
+      DIC="$2";
+    elif [ "$1" = "-E" ]; then
+      EXCLREALIGN="$2";
     elif [ "$1" = "-k" ]; then
       KEEPITERS="$2";
     elif [ "$1" = "-r" ]; then
@@ -2482,16 +2685,57 @@ htrsh_hmm_train () {
   elif [ "$PROTO" != "" ] && [ ! -e "$PROTO" ]; then
     echo "$FN: error: initialization prototype not found: $PROTO" 1>&2;
     return 1;
+  elif [ "$DIC" != "" ] && [ ! -e "$DIC" ]; then
+    echo "$FN: error: realigning dictionary not found: $DIC" 1>&2;
+    return 1;
+  elif [ "$EXCLREALIGN" != "" ] && [ ! -e "$EXCLREALIGN" ]; then
+    echo "$FN: error: exclude list for realigning not found: $EXCLREALIGN" 1>&2;
+    return 1;
+  elif [ "$CODES" != 0 ] && [ $(HList -z -h "$(head -n 1 "$FEATLST")" | grep DISCRETE_K | wc -l) = 0 ]; then
+    echo "$FN: error: features are not discrete" 1>&2;
+    return 1;
+  fi
+
+  if [ "$DIC" != "" ]; then
+    local WMLF="$MLF";
+    MLF="$OUTDIR/realigned.mlf";
+    htrsh_mlf_word_to_hmms "$WMLF" "$DIC" > "$MLF";
+    [ "$?" != 0 ] &&
+      echo "$FN: error: MLF does not appear to be word based according to dictionary" 1>&2 &&
+      return 1;
+    local REALIGNLST="$FEATLST";
+    if [ "$EXCLREALIGN" != "" ]; then
+      awk '
+        { if( ARGIND == 1 )
+            excl[$0] = "";
+          else if( ! ( $0 in excl ) )
+            print;
+        }' "$EXCLREALIGN" "$FEATLST" \
+        > "$OUTDIR/realigned.lst";
+        REALIGNLST="$OUTDIR/realigned.lst";
+    fi
+    [ "$htrsh_keeptmp" -gt 0 ] &&
+      cp -p "$MLF" "$OUTDIR/realigned.mlf~0";
   fi
 
   local DIMS=$(HList -z -h $(head -n 1 "$FEATLST") | sed -n '/Num Comps:/{s|.*Num Comps: *||;s| .*||;p;}');
-  [ "$CODES" != 0 ] && [ $(HList -z -h "$(head -n 1 "$FEATLST")" | grep DISCRETE_K | wc -l) = 0 ] &&
-    echo "$FN: error: features are not discrete" 1>&2 &&
-    return 1;
 
   local HMMLST=$(cat "$MLF" \
                    | sed '/^#!MLF!#/d; /^"\*\//d; /^\.$/d; s|^"\(.*\)"$|\1|;' \
                    | LC_ALL=C.UTF-8 sort -u);
+
+  local STATES=$( gawk -v d="$htrsh_hmm_states" '
+      { if( ARGIND == 2 )
+          printf( "%s %s\n", $1, ( ($1 in states) ? states[$1] : d ) );
+        else if( NF > 1 ) {
+          expr = gensub( /d/, d, "g", $2 );
+          expr = sprintf( "gawk \x27 BEGIN { print %s; } \x27", expr );
+          expr | getline s;
+          if( s == "" )
+            printf( "'"$NF"': error: unable to interpret number of states: %s\n", $0 ) >> "/dev/stderr";
+          states[$1] = s;
+        }
+      }' <( echo "$htrsh_hmm_ndstates" ) <( echo "$HMMLST" ) );
 
   ### Discrete training ###
   if [ "$CODES" -gt 0 ]; then
@@ -2499,7 +2743,7 @@ htrsh_hmm_train () {
     if [ "$PROTO" != "" ]; then
       cp -p "$PROTO" "$OUTDIR/Macros_hmm.gz";
     else
-      htrsh_hmm_proto "$CODES" "$htrsh_hmm_states" -D yes -n "$HMMLST" -R $RAND \
+      htrsh_hmm_proto "$CODES" "$htrsh_hmm_states" -D yes -n "$STATES" -R $RAND \
         | gzip > "$OUTDIR/Macros_hmm.gz";
     fi
 
@@ -2547,7 +2791,7 @@ htrsh_hmm_train () {
       local MEAN=$(gzip -dc "$OUTDIR/proto" | sed -n '/<MEAN>/{N;s|.*\n||;p;q;}');
       local VARIANCE=$(gzip -dc "$OUTDIR/proto" | sed -n '/<VARIANCE>/{N;s|.*\n||;N;p;q;}');
 
-      htrsh_hmm_proto "$DIMS" "$htrsh_hmm_states" -n "$HMMLST" \
+      htrsh_hmm_proto "$DIMS" "$htrsh_hmm_states" -n "$STATES" \
           -g "$GLOBAL" -m "$MEAN" -v "$VARIANCE" \
         | gzip \
         > "$OUTDIR/Macros_hmm.gz";
@@ -2609,6 +2853,23 @@ htrsh_hmm_train () {
             return 1;
         fi
 
+        ### Realign using given dictionary ###
+        if [ "$DIC" != "" ]; then
+          echo "$FN: realigning using dictionary" 1>&2;
+          local k=$(ls "$OUTDIR/realigned.mlf~"* 2>/dev/null | wc -l);
+          HVite $htrsh_HTK_HVite_align_opts -C <( echo "$htrsh_HTK_config" ) -o SWT -H "$OUTDIR/Macros_hmm.gz" -S "$REALIGNLST" -m -I "$WMLF" -i "$OUTDIR/realigned.mlf~$k" "$DIC" <( echo "$HMMLST" );
+          [ "$?" != 0 ] &&
+            echo "$FN: error: problems realigning with HVite" 1>&2 &&
+            return 1;
+          sed '/^".*\/.*\.rec"$/s|^".*/\([^/]*\)\.rec"$|"*/\1.lab"|' "$OUTDIR/realigned.mlf~$k" \
+            | htrsh_fix_mlf_quotes - \
+            > "$OUTDIR/realigned.mlf~$k~";
+          mv "$OUTDIR/realigned.mlf~$k~" "$OUTDIR/realigned.mlf~$k";
+          cp -p "$OUTDIR/realigned.mlf~$k" "$MLF";
+          [ "$htrsh_keeptmp" = 0 ] &&
+            rm "$OUTDIR/realigned.mlf~$k";
+        fi
+
         local TE=$(($(date +%s%N)/1000000)); echo "$FN: time g=$g i=$i: $((TE-TS)) ms" 1>&2; TS="$TE";
 
         [ "$KEEPITERS" = "yes" ] &&
@@ -2620,7 +2881,7 @@ htrsh_hmm_train () {
     done
 
     [ "$RESUME" != "no" ] && [ "$RESUME" != "yes" ] &&
-      echo "$FN: warning: model already trained $RESUME" 1>&2;
+      echo "$FN: warning: model already trained: $RESUME" 1>&2;
 
     echo "$OUTDIR/Macros_hmm_g${gg}_i$i.gz";
   fi
@@ -2710,32 +2971,88 @@ htrsh_hvite_parallel () {
 }
 
 ##
-## Function that fixes the quotes of rec MLFs
+## Function that fixes the quotes of an MLF file
 ##
-htrsh_fix_rec_mlf_quotes () {
-  local FN="htrsh_fix_rec_mlf_quotes";
+htrsh_fix_mlf_quotes () {
+  local FN="htrsh_fix_mlf_quotes";
+  local COL="1";
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Fixes the quotes of rec MLFs";
-      echo "Usage: $FN MLF";
+      echo "Usage: $FN MLF [ Options ]";
+      echo "Options:";
+      echo " -c COLUMN    The column number to fix (def.=$COL)";
     } 1>&2;
     return 1;
   fi
 
-  local MLF="$1"; [ "$MLF" = "-" ] && MLF="/dev/stdin";
+  ### Parse input arguments ###
+  local MLF="$1";
+  shift 1;
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "-c" ]; then
+      COL="$2";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
+    shift 2;
+  done
 
-  gawk '
-    { if( NF >= 3 ) {
-        if( match($3,/^\x27.*\x27$/) )
-          $3 = gensub( /^\x27(.*)\x27$/, "\\1", 1, $3 );
-        if( ! match($3,/^".+"$/) )
-          $3 = ("\"" gensub( /\x22/, "\\\\\x22", "g", $3 ) "\"");
+  gawk -v pdot=0 -v col=$COL '
+    { if( $0 == "#!MLF!#" || match($0,/^".+\/.+\.[lr][ae][bc]"$/) ) {
+        if( pdot )
+          print ".";
+        pdot = 0;
+        print;
       }
-      print;
-    }' < "$MLF";
-
-  return 0;
+      else {
+        if( pdot )
+          print "\".\"";
+        pdot = 0;
+        if( $0 == "." )
+          pdot = 1;
+        else {
+          if( match($col,/^\x27.+\x27$/) )
+            $col = gensub( /^\x27(.+)\x27$/, "\\1", 1, $col );
+          if( ! match($col,/^".+"$/) )
+            $col = ("\"" gensub( /\x22/, "\\\\\x22", "g", $col ) "\"");
+          print;
+        }
+      }
+    }
+    END {
+      if( pdot )
+        print ".";
+    }' "$MLF";
 }
+
+##
+## Function that fixes the quotes of rec MLFs
+##
+htrsh_fix_rec_mlf_quotes () { htrsh_fix_mlf_quotes "$1" -c 3; }
+#htrsh_fix_rec_mlf_quotes () {
+#  local FN="htrsh_fix_rec_mlf_quotes";
+#  if [ $# -lt 1 ]; then
+#    { echo "$FN: Error: Not enough input arguments";
+#      echo "Description: Fixes the quotes of rec MLFs";
+#      echo "Usage: $FN MLF";
+#    } 1>&2;
+#    return 1;
+#  fi
+
+#  local MLF="$1"; [ "$MLF" = "-" ] && MLF="/dev/stdin";
+
+#  gawk '
+#    { if( NF >= 3 ) {
+#        if( match($3,/^\x27.*\x27$/) )
+#          $3 = gensub( /^\x27(.*)\x27$/, "\\1", 1, $3 );
+#        if( ! match($3,/^".+"$/) )
+#          $3 = ("\"" gensub( /\x22/, "\\\\\x22", "g", $3 ) "\"");
+#      }
+#      print;
+#    }' < "$MLF";
+#}
 
 ##
 ## Function that replaces special HMM model names with corresponding characters
@@ -3115,7 +3432,7 @@ htrsh_pageimg_forcealign_lines () {
   local pIFS="$IFS";
   local IFS=$'\n';
   local FBASE="$FEATDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
-  local FEATLST=( $( xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines[$htrsh_xpath_coords]" -o "$FBASE." -v ../@id -o . -v @id -o ".fea" -n "$XML" ) );
+  local FEATLST=( $( xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines[$htrsh_xpath_coords and $htrsh_xpath_textequiv]" -o "$FBASE." -v ../@id -o . -v @id -o ".fea" -n "$XML" ) );
   IFS="$pIFS";
 
   ls "${FEATLST[@]}" >/dev/null;
