@@ -2697,6 +2697,8 @@ htrsh_hmm_train () {
   fi
 
   if [ "$DIC" != "" ]; then
+    # @todo Instead of feature list to exclude in realigning, provide HMM-based MLF
+    # @todo Need to correct things and finish implementing, in particular the conversion from the realigned MLF to the HMM-based MLF for the next HERest iteration
     local WMLF="$MLF";
     MLF="$OUTDIR/realigned.mlf";
     htrsh_mlf_word_to_hmms "$WMLF" "$DIC" > "$MLF";
@@ -2705,14 +2707,25 @@ htrsh_hmm_train () {
       return 1;
     local REALIGNLST="$FEATLST";
     if [ "$EXCLREALIGN" != "" ]; then
-      awk '
+      gawk '
         { if( ARGIND == 1 )
             excl[$0] = "";
           else if( ! ( $0 in excl ) )
             print;
         }' "$EXCLREALIGN" "$FEATLST" \
-        > "$OUTDIR/realigned.lst";
-        REALIGNLST="$OUTDIR/realigned.lst";
+        > "$OUTDIR/realign.lst";
+      REALIGNLST="$OUTDIR/realign.lst";
+      gawk -v PRNT=0 '
+        { if( ARGIND == 1 )
+            excl[ gensub( /\.fea$/, "", 1, gensub( /.*\//, "", 1, $0 ) ) ] = "";
+          else {
+            if( match( $0, /^"\*\/.+\.lab"$/ ) )
+              PRNT = gensub( /.*\/(.+)\.lab"$/, "\\1", 1, $0 ) in excl ? 1 : 0 ;
+            if( PRNT )
+              print;
+          }
+        }' "$EXCLREALIGN" "$WMLF" \
+        > "$OUTDIR/norealign.mlf";
     fi
     [ "$htrsh_keeptmp" -gt 0 ] &&
       cp -p "$MLF" "$OUTDIR/realigned.mlf~0";
@@ -2732,7 +2745,7 @@ htrsh_hmm_train () {
           expr = sprintf( "gawk \x27 BEGIN { print %s; } \x27", expr );
           expr | getline s;
           if( s == "" )
-            printf( "'"$NF"': error: unable to interpret number of states: %s\n", $0 ) >> "/dev/stderr";
+            printf( "'"$FN"': error: unable to interpret number of states: %s\n", $0 ) >> "/dev/stderr";
           states[$1] = s;
         }
       }' <( echo "$htrsh_hmm_ndstates" ) <( echo "$HMMLST" ) );
@@ -2853,11 +2866,20 @@ htrsh_hmm_train () {
             return 1;
         fi
 
+        local TE=$(($(date +%s%N)/1000000)); echo "$FN: time g=$g i=$i: $((TE-TS)) ms" 1>&2; TS="$TE";
+
+        [ "$KEEPITERS" = "yes" ] &&
+          cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g${gg}_i$i.gz";
+
         ### Realign using given dictionary ###
         if [ "$DIC" != "" ]; then
           echo "$FN: realigning using dictionary" 1>&2;
           local k=$(ls "$OUTDIR/realigned.mlf~"* 2>/dev/null | wc -l);
-          HVite $htrsh_HTK_HVite_align_opts -C <( echo "$htrsh_HTK_config" ) -o SWT -H "$OUTDIR/Macros_hmm.gz" -S "$REALIGNLST" -m -I "$WMLF" -i "$OUTDIR/realigned.mlf~$k" "$DIC" <( echo "$HMMLST" );
+          htrsh_hvite_parallel "$THREADS" \
+            HVite $htrsh_HTK_HVite_align_opts -C <( echo "$htrsh_HTK_config" ) -H "$OUTDIR/Macros_hmm.gz" -S "$REALIGNLST" -a -m -I "$WMLF" -i "$OUTDIR/realigned.mlf~$k" "$DIC" <( echo "$HMMLST" );
+          # how about the -b silence option?
+          # http://www.ee.columbia.edu/ln/LabROSA/doc/HTKBook21/node143.html
+          #  HVite $htrsh_HTK_HVite_align_opts -C <( echo "$htrsh_HTK_config" ) -o SWT -H "$OUTDIR/Macros_hmm.gz" -S "$REALIGNLST" -m -I "$WMLF" -i "$OUTDIR/realigned.mlf~$k" "$DIC" <( echo "$HMMLST" );
           [ "$?" != 0 ] &&
             echo "$FN: error: problems realigning with HVite" 1>&2 &&
             return 1;
@@ -2866,14 +2888,13 @@ htrsh_hmm_train () {
             > "$OUTDIR/realigned.mlf~$k~";
           mv "$OUTDIR/realigned.mlf~$k~" "$OUTDIR/realigned.mlf~$k";
           cp -p "$OUTDIR/realigned.mlf~$k" "$MLF";
+          [ "$EXCLREALIGN" != "" ] &&
+            cat "$OUTDIR/norealign.mlf" >> "$MLF";
           [ "$htrsh_keeptmp" = 0 ] &&
             rm "$OUTDIR/realigned.mlf~$k";
+
+          local TE=$(($(date +%s%N)/1000000)); echo "$FN: realign time g=$g i=$i: $((TE-TS)) ms" 1>&2; TS="$TE";
         fi
-
-        local TE=$(($(date +%s%N)/1000000)); echo "$FN: time g=$g i=$i: $((TE-TS)) ms" 1>&2; TS="$TE";
-
-        [ "$KEEPITERS" = "yes" ] &&
-          cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g${gg}_i$i.gz";
       done
 
       cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g${gg}_i$i.gz";
@@ -3453,6 +3474,7 @@ htrsh_pageimg_forcealign_lines () {
   ### Do forced alignment with HVite ###
   printf "%s\n" "${FEATLST[@]}" > "$TMPDIR/$B.lst";
   HVite $htrsh_HTK_HVite_align_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$TMPDIR/$B.lst" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
+# @todo option -a ???
   [ "$?" != 0 ] &&
     echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
     return 1;
@@ -3503,6 +3525,7 @@ htrsh_pageimg_forcealign_lines () {
 ##
 ## Function that does a line by line forced alignment given only a page with baselines or contours and optionally a model
 ##
+# @todo Random TMPDIR to allow parallel processing without specifying -d
 htrsh_pageimg_forcealign () {
   local FN="htrsh_pageimg_forcealign";
   local TS=$(date +%s);
