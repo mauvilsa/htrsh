@@ -2851,11 +2851,13 @@ htrsh_hmm_train () {
 
         ### Multi-thread ###
         if [ "$THREADS" -gt 1 ]; then
-          echo "$htrsh_HTK_config" > "$OUTDIR/htrsh_HTK_config"; # @todo can the pipe problem be fixed on centos?
+          ### Pipes fail within run_parallel in CentOS bash 4.1.2(1)-release ###
+          echo "$htrsh_HTK_config" > "$OUTDIR/htrsh_HTK_config";
+          echo "$HMMLST" > "$OUTDIR/HMMLST";
           #  HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_HTK_config" ) -p '{#}' \
           run_parallel -T $THREADS -n $NUMELEM -l "$FEATLST" \
             HERest $htrsh_HTK_HERest_opts -C "$OUTDIR/htrsh_HTK_config" -p '{#}' \
-            -S '{@}' -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" -M "$OUTDIR" <( echo "$HMMLST" ) 1>&2;
+            -S '{@}' -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" -M "$OUTDIR" "$OUTDIR/HMMLST" 1>&2;
           [ "$?" != 0 ] &&
             echo "$FN: error: problem with parallel HERest" 1>&2 &&
             return 1;
@@ -2865,7 +2867,7 @@ htrsh_hmm_train () {
             echo "$FN: error: problem with accumulation HERest" 1>&2 &&
             return 1;
           #rm "$OUTDIR/"*.acc;
-          rm "$OUTDIR/"*.acc "$OUTDIR/htrsh_HTK_config";
+          rm "$OUTDIR/"*.acc "$OUTDIR/htrsh_HTK_config" "$OUTDIR/HMMLST";
 
         ### Single thread ###
         else
