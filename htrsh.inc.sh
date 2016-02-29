@@ -239,7 +239,7 @@ htrsh_pagexml_set_textequiv () {
 ## Function that prints to stdout the TextEquiv from an XML Page file
 ##
 # @todo hmms for different space types: word extremes, between numbers, etc.
-# @todo variable with awk function to convert word to hmm list, so that it can be reused and avoid code replication
+# @todo use already created awk function to convert word to hmm list, and remove the redundant code
 htrsh_pagexml_textequiv () {
   local FN="htrsh_pagexml_textequiv";
   local SRC="lines";
@@ -775,7 +775,14 @@ htrsh_pagexml_round () {
               <xsl:text> </xsl:text>
             </xsl:when>
           </xsl:choose>
-          <xsl:value-of select="round(number(.))"/>
+          <xsl:choose>
+            <xsl:when test="round(number(.)) &lt; 0">
+              <xsl:text>0</xsl:text>
+            </xsl:when>
+            <xsl:otherwise>
+              <xsl:value-of select="round(number(.))"/>
+            </xsl:otherwise>
+          </xsl:choose>
         </xsl:for-each>
         </xsl:attribute>
       </xsl:for-each>
@@ -2844,8 +2851,10 @@ htrsh_hmm_train () {
 
         ### Multi-thread ###
         if [ "$THREADS" -gt 1 ]; then
+          echo "$htrsh_HTK_config" > "$OUTDIR/htrsh_HTK_config"; # @todo can the pipe problem be fixed on centos?
+          #  HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_HTK_config" ) -p '{#}' \
           run_parallel -T $THREADS -n $NUMELEM -l "$FEATLST" \
-            HERest $htrsh_HTK_HERest_opts -C <( echo "$htrsh_HTK_config" ) -p '{#}' \
+            HERest $htrsh_HTK_HERest_opts -C "$OUTDIR/htrsh_HTK_config" -p '{#}' \
             -S '{@}' -I "$MLF" -H "$OUTDIR/Macros_hmm.gz" -M "$OUTDIR" <( echo "$HMMLST" ) 1>&2;
           [ "$?" != 0 ] &&
             echo "$FN: error: problem with parallel HERest" 1>&2 &&
@@ -2855,7 +2864,8 @@ htrsh_hmm_train () {
           [ "$?" != 0 ] &&
             echo "$FN: error: problem with accumulation HERest" 1>&2 &&
             return 1;
-          rm "$OUTDIR/"*.acc;
+          #rm "$OUTDIR/"*.acc;
+          rm "$OUTDIR/"*.acc "$OUTDIR/htrsh_HTK_config";
 
         ### Single thread ###
         else
@@ -2935,7 +2945,7 @@ htrsh_hvite_parallel () {
   local CMD=( "$2" );
   shift 2;
 
-  local TMP="${TMPDIR:-.}";
+  local TMP="${TMPDIR:-/tmp}";
   TMP=$(mktemp -d --tmpdir="$TMP" ${FN}_XXXXX);
   [ ! -d "$TMP" ] &&
     echo "$FN: error: failed to create temporal directory" 1>&2 &&
@@ -3292,8 +3302,11 @@ htrsh_pagexml_insertalign_lines () {
       fi
       #TE=$(($(date +%s%N)/1000000)); echo "time 3: $((TE-TS)) ms" 1>&2; TS="$TE";
 
+
+      local cpts="";
+
       if [ "$htrsh_align_contour" = "yes" ]; then
-        local cpts=$( echo $pts \
+        cpts=$( echo $pts \
                  | awk -F'[, ]' -v oX=${LGEO[2]} -v oY=${LGEO[3]} '
                      { for( n=1; n<NF; n+=2 )
                          printf( " %s,%s", $n-oX, $(n+1)-oY );
@@ -3303,9 +3316,9 @@ htrsh_pagexml_insertalign_lines () {
                     -compose lighten -composite -page $size+${LGEO[2]}+${LGEO[3]} \
                     -units ${LGEO[5]} -density ${LGEO[4]} miff:- \
                   | imgccomp -V0 -NJS -A 0.1 -D $htrsh_align_dilradi -R 2,2,2,2 - 2>/dev/null );
-        [ "$cpts" != "" ] && pts="$cpts";
+      fi
 
-      elif [ "$htrsh_align_isect" = "yes" ]; then
+      if [ "$cpts" = "" ] && [ "$htrsh_align_isect" = "yes" ]; then
         local AWK_ISECT='
           BEGIN {
             printf( "convert -fill white -stroke white +antialias" );
@@ -3334,8 +3347,12 @@ htrsh_pagexml_insertalign_lines () {
           { echo "$pts";
             echo "$contour";
           } | awk -F'[ ,]' -v sz=$size "$AWK_ISECT" ) );
-        pts=$( "${polydraw[@]//_/ }" | imgccomp -V0 -JS - );
+        cpts=$( "${polydraw[@]//_/ }" | imgccomp -V0 -JS - );
+        [ "$cpts" = "" ] && echo "failed to obtain intersection for word $id";
       fi
+
+      [ "$cpts" != "" ] && pts="$cpts";
+
       pts=$(echo "$pts" | sed '/^[^ ]*,[^ ]*$/s|\(.*\)|\1 \1|');
       local wpts="$pts";
 
@@ -3525,11 +3542,10 @@ htrsh_pageimg_forcealign_lines () {
 ##
 ## Function that does a line by line forced alignment given only a page with baselines or contours and optionally a model
 ##
-# @todo Random TMPDIR to allow parallel processing without specifying -d
 htrsh_pageimg_forcealign () {
   local FN="htrsh_pageimg_forcealign";
   local TS=$(date +%s);
-  local TMPDIR="./_forcealign";
+  local TMP="";
   local INRES="";
   local MODEL="";
   local PBASE="";
@@ -3545,7 +3561,7 @@ htrsh_pageimg_forcealign () {
       echo "Description: Does a line by line forced alignment given only a page with baselines or contours and optionally a model";
       echo "Usage: $FN XMLIN XMLOUT [ Options ]";
       echo "Options:";
-      echo " -d TMPDIR    Directory for temporal files (def.=$TMPDIR)";
+      echo " -d TMPDIR    Directory for temporal files (def.=${TMPDIR:-/tmp}/${FN}_XXXXX)";
       echo " -i INRES     Input image resolution in ppc (def.=use image metadata)";
       echo " -m MODEL     Use given model for aligning (def.=train model for page)";
       echo " -b PBASE     Project features using given base (def.=false)";
@@ -3555,7 +3571,7 @@ htrsh_pageimg_forcealign () {
       echo " -a (yes|no)  Whether to keep auxiliary attributes in XML (def.=$KEEPAUX)";
       #echo " -q (yes|no)  Whether to clean quadrilateral border of regions (def.=$QBORD)";
       echo " -F FILTER    Filtering pipe command, e.g. tokenizer, transliteration, etc. (def.=none)";
-      echo " -s SRES      Rescale image to SRES dpcm for processing (def.=orig.)";
+      echo " -s RES|FACT% Rescale image to RES dpcm or by FACT% for processing (def.=orig.)";
     } 1>&2;
     return 1;
   fi
@@ -3566,7 +3582,7 @@ htrsh_pageimg_forcealign () {
   shift 2;
   while [ $# -gt 0 ]; do
     if [ "$1" = "-d" ]; then
-      TMPDIR=$(echo "$2" | sed '/^[./]/!s|^|./|');
+      TMP=$(echo "$2" | sed '/^[./]/!s|^|./|');
     elif [ "$1" = "-i" ]; then
       INRES="$2";
     elif [ "$1" = "-m" ]; then
@@ -3594,14 +3610,21 @@ htrsh_pageimg_forcealign () {
     shift 2;
   done
 
-  if [ -d "$TMPDIR" ]; then
-    echo -n "$FN: temporal directory ($TMPDIR) already exists, current contents will be deleted, continue? " 1>&2;
+  ### Create temporal directory ###
+  if [ "$TMP" = "" ]; then
+    TMP="${TMPDIR:-/tmp}";
+    TMP=$(mktemp -d --tmpdir="$TMP" ${FN}_XXXXX);
+    [ ! -d "$TMP" ] &&
+      echo "$FN: error: failed to create temporal directory" 1>&2 &&
+      return 1;
+  elif [ -d "$TMP" ]; then
+    echo -n "$FN: temporal directory ($TMP) already exists, current contents will be deleted, continue? " 1>&2;
     local RMTMP="";
     read -n 1 RMTMP;
     [ "${RMTMP:0:1}" != "y" ] &&
       printf "\n$FN: aborting ...\n" 1>&2 &&
       return 1;
-    rm -r "$TMPDIR";
+    rm -r "$TMP";
     echo 1>&2;
   fi
 
@@ -3626,10 +3649,11 @@ htrsh_pageimg_forcealign () {
   local B=$(echo "$XMLBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
 
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): processing page: $XML";
+  echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): temporal directory: $TMP";
 
-  mkdir -p "$TMPDIR/proc";
-  cp -p "$XML" "$IMFILE" "$TMPDIR/proc";
-  sed 's|\(imageFilename="\)[^"/]*/|\1|' -i "$TMPDIR/proc/$XMLBASE.xml";
+  mkdir -p "$TMP/proc";
+  cp -p "$XML" "$IMFILE" "$TMP/proc";
+  sed 's|\(imageFilename="\)[^"/]*/|\1|' -i "$TMP/proc/$XMLBASE.xml";
 
   ### Generate contours from baselines ###
   if [ $(xmlstarlet sel -t -v \
@@ -3641,8 +3665,8 @@ htrsh_pageimg_forcealign () {
              "$XML") = 0 ] ); then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating line contours from baselines ...";
     page_format_generate_contour -a 75 -d 25 \
-      -p "$TMPDIR/proc/$XMLBASE.xml" \
-      -o "$TMPDIR/proc/$XMLBASE.xml";
+      -p "$TMP/proc/$XMLBASE.xml" \
+      -o "$TMP/proc/$XMLBASE.xml";
     [ "$?" != 0 ] &&
       echo "$FN: error: page_format_generate_contour failed" 1>&2 &&
       return 1;
@@ -3652,49 +3676,49 @@ htrsh_pageimg_forcealign () {
   if [ "$SFACT" != "" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): rescaling image ...";
     SFACT=$(echo "$SFACT" "$IMRES" | awk '{printf("%g",match($1,"%$")?$1:100*$1/$2)}');
-    mkdir "$TMPDIR/scaled";
-    mv "$TMPDIR/proc/"* "$TMPDIR";
-    htrsh_pageimg_resize "$TMPDIR/$XMLBASE.xml" "$TMPDIR/proc" -s "$SFACT";
+    mkdir "$TMP/scaled";
+    mv "$TMP/proc/"* "$TMP";
+    htrsh_pageimg_resize "$TMP/$XMLBASE.xml" "$TMP/proc" -s "$SFACT";
   fi
 
   ### Clean page image ###
   if [ "$ENHIMG" = "yes" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): enhancing page image ...";
     [ "$INRES" != "" ] && INRES="-i $INRES";
-    htrsh_pageimg_clean "$TMPDIR/proc/$XMLBASE.xml" "$TMPDIR" $INRES \
-      > "$TMPDIR/${XMLBASE}_pageclean.log";
+    htrsh_pageimg_clean "$TMP/proc/$XMLBASE.xml" "$TMP" $INRES \
+      > "$TMP/${XMLBASE}_pageclean.log";
     [ "$?" != 0 ] &&
-      echo "$FN: error: more info might be in file $TMPDIR/${XMLBASE}_pageclean.log" 1>&2 &&
+      echo "$FN: error: more info might be in file $TMP/${XMLBASE}_pageclean.log" 1>&2 &&
       return 1;
   else
-    mv "$TMPDIR/proc/"* "$TMPDIR";
+    mv "$TMP/proc/"* "$TMP";
   fi
 
   ### Clean quadrilateral borders ###
   if [ "$QBORD" = "yes" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): cleaning quadrilateral borders ...";
-    htrsh_pageimg_quadborderclean "$TMPDIR/${XMLBASE}.xml" "$TMPDIR/${IMBASE}_nobord.png" -d "$TMPDIR";
+    htrsh_pageimg_quadborderclean "$TMP/${XMLBASE}.xml" "$TMP/${IMBASE}_nobord.png" -d "$TMP";
     [ "$?" != 0 ] && return 1;
-    mv "$TMPDIR/${IMBASE}_nobord.png" "$TMPDIR/$IMBASE.png";
+    mv "$TMP/${IMBASE}_nobord.png" "$TMP/$IMBASE.png";
   fi
 
   ### Extract line features ###
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): extracting line features ...";
   htrsh_xpath_lines="_:TextLine[$htrsh_xpath_textequiv]" \
   htrsh_pageimg_extract_linefeats \
-    "$TMPDIR/$XMLBASE.xml" "$TMPDIR/${XMLBASE}_feats.xml" \
-    -d "$TMPDIR" -l "$TMPDIR/${B}_feats.lst" \
-    > "$TMPDIR/${XMLBASE}_linefeats.log";
+    "$TMP/$XMLBASE.xml" "$TMP/${XMLBASE}_feats.xml" \
+    -d "$TMP" -l "$TMP/${B}_feats.lst" \
+    > "$TMP/${XMLBASE}_linefeats.log";
   [ "$?" != 0 ] &&
-    echo "$FN: error: more info might be in file $TMPDIR/${XMLBASE}_linefeats.log" 1>&2 &&
+    echo "$FN: error: more info might be in file $TMP/${XMLBASE}_linefeats.log" 1>&2 &&
     return 1;
 
   ### Compute PCA and project features ###
   [ "$htrsh_feat" != "dotmatrix" ] && DOPCA="no";
   if [ "$PBASE" = "" ] && [ "$DOPCA" = "yes" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): computing PCA for page ...";
-    PBASE="$TMPDIR/pcab.mat.gz";
-    htrsh_feats_pca "$TMPDIR/${B}_feats.lst" "$PBASE" -e 1:4 -r 24;
+    PBASE="$TMP/pcab.mat.gz";
+    htrsh_feats_pca "$TMP/${B}_feats.lst" "$PBASE" -e 1:4 -r 24;
     [ "$?" != 0 ] && return 1;
   fi #| sed '/^$/d';
   if [ "$PBASE" != "" ]; then
@@ -3702,32 +3726,32 @@ htrsh_pageimg_forcealign () {
       echo "$FN: error: projection base file not found: $PBASE" 1>&2 &&
       return 1;
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): projecting features ...";
-    htrsh_feats_project "$TMPDIR/${B}_feats.lst" "$PBASE" "$TMPDIR";
+    htrsh_feats_project "$TMP/${B}_feats.lst" "$PBASE" "$TMP";
     [ "$?" != 0 ] && return 1;
   fi | sed '/^$/d';
 
   [ "${AREG[1]}" = "regions" ] &&
-    htrsh_feats_catregions "$TMPDIR/${XMLBASE}_feats.xml" "$TMPDIR" -l $TMPDIR/${B}_feats.lst;
+    htrsh_feats_catregions "$TMP/${XMLBASE}_feats.xml" "$TMP" -l "$TMP/${B}_feats.lst";
 
   ### Train HMMs model for this single page ###
   if [ "$MODEL" = "" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): training model for page ...";
     { echo '#!MLF!#';
-      htrsh_pagexml_textequiv "$TMPDIR/${XMLBASE}_feats.xml" -f mlf-chars "${AREG[@]}" -F "$FILTER";
-    } > "$TMPDIR/${B}_page.mlf";
+      htrsh_pagexml_textequiv "$TMP/${XMLBASE}_feats.xml" -f mlf-chars "${AREG[@]}" -F "$FILTER";
+    } > "$TMP/${B}_page.mlf";
     [ "$?" != 0 ] && return 1;
     MODEL=$(
-      htrsh_hmm_train "$TMPDIR/${B}_feats.lst" "$TMPDIR/${B}_page.mlf" -d "$TMPDIR" -k no \
-        2> "$TMPDIR/${XMLBASE}_hmmtrain.log"
+      htrsh_hmm_train "$TMP/${B}_feats.lst" "$TMP/${B}_page.mlf" -d "$TMP" -k no \
+        2> "$TMP/${XMLBASE}_hmmtrain.log"
       );
     [ "$?" != 0 ] &&
-      echo "$FN: error: problems training model, more info might be in file $TMPDIR/${XMLBASE}_hmmtrain.log" 1>&2 &&
+      echo "$FN: error: problems training model, more info might be in file $TMP/${XMLBASE}_hmmtrain.log" 1>&2 &&
       return 1;
 
   ### Check that given model has all characters, otherwise add protos for these ###
   else
     local CHARCHECK=$(
-            htrsh_pagexml_textequiv "$TMPDIR/${XMLBASE}_feats.xml" \
+            htrsh_pagexml_textequiv "$TMP/${XMLBASE}_feats.xml" \
                 -f mlf-chars "${AREG[@]}" -F "$FILTER" \
               | sed '/^"\*\/.*"$/d; /^\.$/d; s|^"\(.*\)"|\1|;' \
               | sort -u);
@@ -3743,16 +3767,16 @@ htrsh_pageimg_forcealign () {
     if [ "$CHARCHECK" != "" ]; then
       echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): adding missing characters ($(echo $CHARCHECK | tr ' ' ',')) to given model ...";
 
-      local DIMS=$(HList -h -z $(head -n 1 < "$TMPDIR/${B}_feats.lst") \
+      local DIMS=$(HList -h -z $(head -n 1 < "$TMP/${B}_feats.lst") \
                      | sed -n '/^  Num Comps:/{s|^[^:]*: *||;s| .*||;p;}');
 
-      htrsh_hmm_proto "$DIMS" 1 | gzip > "$TMPDIR/proto";
+      htrsh_hmm_proto "$DIMS" 1 | gzip > "$TMP/proto";
       HCompV $htrsh_HTK_HCompV_opts -C <( echo "$htrsh_HTK_config" ) \
-        -S "$TMPDIR/${B}_feats.lst" -M "$TMPDIR" "$TMPDIR/proto" 1>&2;
+        -S "$TMP/${B}_feats.lst" -M "$TMP" "$TMP/proto" 1>&2;
 
-      local MEAN=$(gzip -dc "$TMPDIR/proto" | sed -n '/<MEAN>/{N;s|.*\n||;p;q;}');
-      local VARIANCE=$(gzip -dc "$TMPDIR/proto" | sed -n '/<VARIANCE>/{N;s|.*\n||;N;p;q;}');
-      local NEWMODEL="$TMPDIR"/$(echo "$MODEL" | sed 's|.*/||');
+      local MEAN=$(gzip -dc "$TMP/proto" | sed -n '/<MEAN>/{N;s|.*\n||;p;q;}');
+      local VARIANCE=$(gzip -dc "$TMP/proto" | sed -n '/<VARIANCE>/{N;s|.*\n||;N;p;q;}');
+      local NEWMODEL="$TMP"/$(echo "$MODEL" | sed 's|.*/||');
 
       { gzip -dc "$MODEL";
         htrsh_hmm_proto "$DIMS" "$htrsh_hmm_states" -n "$CHARCHECK" \
@@ -3768,36 +3792,38 @@ htrsh_pageimg_forcealign () {
 
   ### Do forced alignment using model ###
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): doing forced alignment ...";
-  cp "$TMPDIR/${XMLBASE}_feats.xml" "$TMPDIR/${XMLBASE}_align.xml";
+  cp "$TMP/${XMLBASE}_feats.xml" "$TMP/${XMLBASE}_align.xml";
   local forcealign="htrsh_pageimg_forcealign_lines";
   [ "${AREG[1]}" = "regions" ] &&
     forcealign="htrsh_pageimg_forcealign_regions";
-  $forcealign "$TMPDIR/${XMLBASE}_align.xml" "$TMPDIR" "$MODEL" -d "$TMPDIR" \
-    > "$TMPDIR/${XMLBASE}_forcealign.log";
+  $forcealign "$TMP/${XMLBASE}_align.xml" "$TMP" "$MODEL" -d "$TMP" \
+    > "$TMP/${XMLBASE}_forcealign.log";
   [ "$?" != 0 ] &&
-    echo "$FN: error: more info might be in file $TMPDIR/${XMLBASE}_forcealign.log" 1>&2 &&
+    echo "$FN: error: more info might be in file $TMP/${XMLBASE}_forcealign.log" 1>&2 &&
     return 1;
-  mv "$TMPDIR/${XMLBASE}_align.xml" "$XMLOUT";
+  mv "$TMP/${XMLBASE}_align.xml" "$XMLOUT";
 
-  [ "$KEEPTMP" != "yes" ] && rm -r "$TMPDIR";
-
-  local I=$(xmlstarlet sel -t -v //@imageFilename "$XML");
-  local xmledit=( -u //@imageFilename -v "$I" );
-  [ "$KEEPAUX" != "yes" ] && xmledit+=( -d //@fpgram -d //@fcontour );
-
-  xmlstarlet ed --inplace ${xmledit[@]} "$XMLOUT";
+  [ "$KEEPTMP" != "yes" ] && rm -r "$TMP";
 
   if [ "$SFACT" != "" ]; then
     SFACT=$(echo "10000/$SFACT" | bc -l);
     cat "$XMLOUT" \
       | htrsh_pagexml_resize "$SFACT"% \
-      | htrsh_pagexml_round \
       | xmlstarlet ed \
           -u //@imageWidth -v ${IMSIZE%x*} \
           -u //@imageHeight -v ${IMSIZE#*x} \
       > "$XMLOUT"~;
     mv "$XMLOUT"~ "$XMLOUT";
   fi
+
+  local I=$(xmlstarlet sel -t -v //@imageFilename "$XML");
+  local xmledit=( -u //@imageFilename -v "$I" );
+  [ "$KEEPAUX" != "yes" ] && xmledit+=( -d //@fpgram -d //@fcontour );
+
+  xmlstarlet ed "${xmledit[@]}" "$XMLOUT" \
+    | htrsh_pagexml_round \
+    > "$XMLOUT"~;
+  mv "$XMLOUT"~ "$XMLOUT";
 
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): finished, $(( $(date +%s)-TS )) seconds";
 
