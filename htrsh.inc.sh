@@ -2679,7 +2679,6 @@ htrsh_hmm_train () {
       echo " -c CODES     Train discrete model with given codebook size (def.=false)";
       echo " -P PROTO     Use PROTO as initialization prototype (def.=false)";
       echo " -D DICT      Realign using given dictionary, requires word MLF (def.=false)";
-      #echo " -E EXCLST    Exclude list for realigning (def.=false)";
       echo " -E MLF       HMM-based MLF for training only features, i.e. no realigning (def.=false)";
       echo " -k (yes|no)  Whether to keep models per iteration, including initialization (def.=$KEEPITERS)";
       echo " -r (yes|no)  Whether to resume previous training, looks for models per iteration (def.=$RESUME)";
@@ -2735,7 +2734,6 @@ htrsh_hmm_train () {
     echo "$FN: error: realigning dictionary not found: $DIC" 1>&2;
     return 1;
   elif [ "$EXCLREALIGN" != "" ] && [ ! -e "$EXCLREALIGN" ]; then
-    #echo "$FN: error: exclude list for realigning not found: $EXCLREALIGN" 1>&2;
     echo "$FN: error: MLF file for training only features not found: $EXCLREALIGN" 1>&2;
     return 1;
   elif [ "$CODES" != 0 ] && [ $(HList -z -h "$(head -n 1 "$FEATLST")" | grep DISCRETE_K | wc -l) = 0 ]; then
@@ -2743,11 +2741,9 @@ htrsh_hmm_train () {
     return 1;
   fi
 
+  ### Prepare for realignment ###
   if [ "$DIC" != "" ]; then
-    # @todo Instead of feature list to exclude in realigning, provide HMM-based MLF
-    # @todo Need to correct things and finish implementing, in particular the conversion from the realigned MLF to the HMM-based MLF for the next HERest iteration
     local WMLF="$MLF";
-    #MLF="$OUTDIR/realigned.mlf";
     MLF="$OUTDIR/train.mlf";
     htrsh_mlf_word_to_hmms "$WMLF" "$DIC" \
       | sed '/^"\*\/.*\.lab"$/ s|$|\n@|;' \
@@ -2771,30 +2767,10 @@ htrsh_hmm_train () {
             }' - "$FEATLST" \
             > "$REALIGNLST";
       sed '/^#!MLF!#/d' "$EXCLREALIGN" >> "$MLF";
-    #  gawk '
-    #    { if( ARGIND == 1 )
-    #        excl[$0] = "";
-    #      else if( ! ( $0 in excl ) )
-    #        print;
-    #    }' "$EXCLREALIGN" "$FEATLST" \
-    #    > "$OUTDIR/realign.lst";
-    #  REALIGNLST="$OUTDIR/realign.lst";
-    #  gawk -v PRNT=0 '
-    #    { if( ARGIND == 1 )
-    #        excl[ gensub( /\.fea$/, "", 1, gensub( /.*\//, "", 1, $0 ) ) ] = "";
-    #      else {
-    #        if( match( $0, /^"\*\/.+\.lab"$/ ) )
-    #          PRNT = gensub( /.*\/(.+)\.lab"$/, "\\1", 1, $0 ) in excl ? 1 : 0 ;
-    #        if( PRNT )
-    #          print;
-    #      }
-    #    }' "$EXCLREALIGN" "$WMLF" \
-    #    > "$OUTDIR/norealign.mlf";
     fi
-    #[ "$htrsh_keeptmp" -gt 0 ] &&
-    #  cp -p "$MLF" "$OUTDIR/realigned.mlf~0";
   fi
 
+  ### Auxiliary variables ###
   local DIMS=$(HList -z -h $(head -n 1 "$FEATLST") | sed -n '/Num Comps:/{s|.*Num Comps: *||;s| .*||;p;}');
 
   local HMMLST=$(cat "$MLF" \
@@ -2941,16 +2917,10 @@ htrsh_hmm_train () {
           local k=$(ls "$OUTDIR/realigned.mlf~"* 2>/dev/null | wc -l);
           htrsh_hvite_parallel "$THREADS" \
             HVite $htrsh_HTK_HVite_align_opts -C <( echo "$htrsh_HTK_config" ) -H "$OUTDIR/Macros_hmm.gz" -S "$REALIGNLST" -a -m -I "$WMLF" -i "$OUTDIR/realigned.mlf~$k" "$DIC" <( echo "$HMMLST" );
-          # how about the -b silence option? no, -b is for sentence boundary
-          # http://www.ee.columbia.edu/ln/LabROSA/doc/HTKBook21/node143.html
-          #  HVite $htrsh_HTK_HVite_align_opts -C <( echo "$htrsh_HTK_config" ) -o SWT -H "$OUTDIR/Macros_hmm.gz" -S "$REALIGNLST" -m -I "$WMLF" -i "$OUTDIR/realigned.mlf~$k" "$DIC" <( echo "$HMMLST" );
           [ "$?" != 0 ] &&
             echo "$FN: error: problems realigning with HVite" 1>&2 &&
             return 1;
 
-          mv "$MLF" "$MLF"~$(ls "$MLF"~* | wc -l);
-
-          #return 0;
           gawk '
             { if( match($0,/^".+\/[^/]+\.rec"$/) )
                 $0 = gensub( /^".+\/([^/]+)\.rec"$/, "\"*/\\1.lab\"\n@", 1, $0 );
@@ -2964,14 +2934,7 @@ htrsh_hmm_train () {
           [ "$EXCLREALIGN" != "" ] &&
             sed '/^#!MLF!#/d' "$EXCLREALIGN" >> "$MLF";
 
-          #sed '/^".*\/.*\.rec"$/s|^".*/\([^/]*\)\.rec"$|"*/\1.lab"|' "$OUTDIR/realigned.mlf~$k" \
-          #  | htrsh_fix_mlf_quotes - \
-          #  > "$OUTDIR/realigned.mlf~$k~";
-          #mv "$OUTDIR/realigned.mlf~$k~" "$OUTDIR/realigned.mlf~$k";
-          #cp -p "$OUTDIR/realigned.mlf~$k" "$MLF";
-          #[ "$EXCLREALIGN" != "" ] &&
-          #  cat "$OUTDIR/norealign.mlf" >> "$MLF";
-
+          cp -p "$OUTDIR/realigned.mlf~$k" "$OUTDIR/realigned.mlf";
           [ "$htrsh_keeptmp" = 0 ] &&
             rm "$OUTDIR/realigned.mlf~$k";
 
