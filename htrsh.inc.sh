@@ -191,6 +191,44 @@ htrsh_check_dependencies () {
 #---------------------------------#
 
 ##
+## Function that creates an empty Page file for a given image
+##
+htrsh_pagexml_create () {
+  local FN="htrsh_pagexml_create";
+  if [ $# -lt 1 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Creates an empty Page file for a given image";
+      echo "Usage: $FN IMAGE";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local IMG="$1";
+  local SIZE=( $( identify -format "%w %h" "$IMG" 2>/dev/null ) );
+  local DATE=$( date -u "+%Y-%m-%dT%H:%M:%S" );
+
+  if [ ! -e "$IMG" ]; then
+    echo "$FN: error: file not found: $IMG" 1>&2;
+    return 1;
+  elif [ "${#SIZE[@]}" != 2 ]; then
+    echo "$FN: error: unable to determine size of image: $IMG" 1>&2;
+    return 1;
+  fi
+
+  echo '<?xml version="1.0" encoding="utf-8"?>';
+  echo '<PcGts xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15 http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15/pagecontent.xsd">';
+  echo "  <Metadata>";
+  echo "    <Creator>htrsh_pagexml_create</Creator>";
+  echo "    <Created>$DATE</Created>";
+  echo "    <LastChange>$DATE</LastChange>";
+  echo "  </Metadata>";
+  echo "  <Page imageFilename=\"$IMG\" imageHeight=\"${SIZE[1]}\" imageWidth=\"${SIZE[0]}\">";
+  echo "  </Page>";
+  echo "</PcGts>";
+}
+
+##
 ## Function that sets TextEquiv/Unicode in an XML Page
 ##
 htrsh_pagexml_set_textequiv () {
@@ -596,10 +634,10 @@ htrsh_pageimg_resize () {
   htrsh_pageimg_info "$XML";
   [ "$?" != 0 ] && return 1;
 
-  if [ "$INRES" = "" ] && [ "$IMRES" = "" ]; then
+  if [ "$SFACT" = "" ] && [ "$INRES" = "" ] && [ "$IMRES" = "" ]; then
     echo "$FN: error: resolution not given (-i option) and image does not specify resolution: $IMFILE" 1>&2;
     return 1;
-  elif [ "$INRESCHECK" = "yes" ] && [ "$INRES" = "" ] && [ $(echo $IMRES | awk '{printf("%.0f",$1)}') -lt 50 ]; then
+  elif [ "$INRESCHECK" = "yes" ] && [ "$SFACT" = "" ] && [ "$INRES" = "" ] && [ $(echo $IMRES | awk '{printf("%.0f",$1)}') -lt 50 ]; then
     echo "$FN: error: image resolution ($IMRES ppc) apparently incorrect since it is unusually low to be a text document image: $IMFILE" 1>&2;
     return 1;
   elif [ ! -d "$OUTDIR" ]; then
@@ -2641,7 +2679,8 @@ htrsh_hmm_train () {
       echo " -c CODES     Train discrete model with given codebook size (def.=false)";
       echo " -P PROTO     Use PROTO as initialization prototype (def.=false)";
       echo " -D DICT      Realign using given dictionary, requires word MLF (def.=false)";
-      echo " -E EXCLST    Exclude list for realigning (def.=false)";
+      #echo " -E EXCLST    Exclude list for realigning (def.=false)";
+      echo " -E MLF       HMM-based MLF for training only features, i.e. no realigning (def.=false)";
       echo " -k (yes|no)  Whether to keep models per iteration, including initialization (def.=$KEEPITERS)";
       echo " -r (yes|no)  Whether to resume previous training, looks for models per iteration (def.=$RESUME)";
       echo " -R (yes|no)  Whether to randomize initialization prototype (def.=$RAND)";
@@ -2696,7 +2735,8 @@ htrsh_hmm_train () {
     echo "$FN: error: realigning dictionary not found: $DIC" 1>&2;
     return 1;
   elif [ "$EXCLREALIGN" != "" ] && [ ! -e "$EXCLREALIGN" ]; then
-    echo "$FN: error: exclude list for realigning not found: $EXCLREALIGN" 1>&2;
+    #echo "$FN: error: exclude list for realigning not found: $EXCLREALIGN" 1>&2;
+    echo "$FN: error: MLF file for training only features not found: $EXCLREALIGN" 1>&2;
     return 1;
   elif [ "$CODES" != 0 ] && [ $(HList -z -h "$(head -n 1 "$FEATLST")" | grep DISCRETE_K | wc -l) = 0 ]; then
     echo "$FN: error: features are not discrete" 1>&2;
@@ -2707,35 +2747,52 @@ htrsh_hmm_train () {
     # @todo Instead of feature list to exclude in realigning, provide HMM-based MLF
     # @todo Need to correct things and finish implementing, in particular the conversion from the realigned MLF to the HMM-based MLF for the next HERest iteration
     local WMLF="$MLF";
-    MLF="$OUTDIR/realigned.mlf";
-    htrsh_mlf_word_to_hmms "$WMLF" "$DIC" > "$MLF";
+    #MLF="$OUTDIR/realigned.mlf";
+    MLF="$OUTDIR/train.mlf";
+    htrsh_mlf_word_to_hmms "$WMLF" "$DIC" \
+      | sed '/^"\*\/.*\.lab"$/ s|$|\n@|;' \
+      > "$MLF";
     [ "$?" != 0 ] &&
       echo "$FN: error: MLF does not appear to be word based according to dictionary" 1>&2 &&
       return 1;
+    [ "$EXCLREALIGN" != "" ] &&
     local REALIGNLST="$FEATLST";
     if [ "$EXCLREALIGN" != "" ]; then
-      gawk '
-        { if( ARGIND == 1 )
-            excl[$0] = "";
-          else if( ! ( $0 in excl ) )
-            print;
-        }' "$EXCLREALIGN" "$FEATLST" \
-        > "$OUTDIR/realign.lst";
       REALIGNLST="$OUTDIR/realign.lst";
-      gawk -v PRNT=0 '
-        { if( ARGIND == 1 )
-            excl[ gensub( /\.fea$/, "", 1, gensub( /.*\//, "", 1, $0 ) ) ] = "";
-          else {
-            if( match( $0, /^"\*\/.+\.lab"$/ ) )
-              PRNT = gensub( /.*\/(.+)\.lab"$/, "\\1", 1, $0 ) in excl ? 1 : 0 ;
-            if( PRNT )
-              print;
-          }
-        }' "$EXCLREALIGN" "$WMLF" \
-        > "$OUTDIR/norealign.mlf";
+      sed -n '/\.lab"$/{ s|.*/||; s|\.lab"$||; p; }' "$EXCLREALIGN" \
+        | gawk '
+            { if( ARGIND == 1 )
+                excl[$0] = "";
+              else {
+                fea = gensub( /^.*\//, "", 1, gensub(/\.fea$/,"",1,$0) );
+                if( ! ( fea in excl ) )
+                  print;
+              }
+            }' - "$FEATLST" \
+            > "$REALIGNLST";
+      sed '/^#!MLF!#/d' "$EXCLREALIGN" >> "$MLF";
+    #  gawk '
+    #    { if( ARGIND == 1 )
+    #        excl[$0] = "";
+    #      else if( ! ( $0 in excl ) )
+    #        print;
+    #    }' "$EXCLREALIGN" "$FEATLST" \
+    #    > "$OUTDIR/realign.lst";
+    #  REALIGNLST="$OUTDIR/realign.lst";
+    #  gawk -v PRNT=0 '
+    #    { if( ARGIND == 1 )
+    #        excl[ gensub( /\.fea$/, "", 1, gensub( /.*\//, "", 1, $0 ) ) ] = "";
+    #      else {
+    #        if( match( $0, /^"\*\/.+\.lab"$/ ) )
+    #          PRNT = gensub( /.*\/(.+)\.lab"$/, "\\1", 1, $0 ) in excl ? 1 : 0 ;
+    #        if( PRNT )
+    #          print;
+    #      }
+    #    }' "$EXCLREALIGN" "$WMLF" \
+    #    > "$OUTDIR/norealign.mlf";
     fi
-    [ "$htrsh_keeptmp" -gt 0 ] &&
-      cp -p "$MLF" "$OUTDIR/realigned.mlf~0";
+    #[ "$htrsh_keeptmp" -gt 0 ] &&
+    #  cp -p "$MLF" "$OUTDIR/realigned.mlf~0";
   fi
 
   local DIMS=$(HList -z -h $(head -n 1 "$FEATLST") | sed -n '/Num Comps:/{s|.*Num Comps: *||;s| .*||;p;}');
@@ -2884,19 +2941,37 @@ htrsh_hmm_train () {
           local k=$(ls "$OUTDIR/realigned.mlf~"* 2>/dev/null | wc -l);
           htrsh_hvite_parallel "$THREADS" \
             HVite $htrsh_HTK_HVite_align_opts -C <( echo "$htrsh_HTK_config" ) -H "$OUTDIR/Macros_hmm.gz" -S "$REALIGNLST" -a -m -I "$WMLF" -i "$OUTDIR/realigned.mlf~$k" "$DIC" <( echo "$HMMLST" );
-          # how about the -b silence option?
+          # how about the -b silence option? no, -b is for sentence boundary
           # http://www.ee.columbia.edu/ln/LabROSA/doc/HTKBook21/node143.html
           #  HVite $htrsh_HTK_HVite_align_opts -C <( echo "$htrsh_HTK_config" ) -o SWT -H "$OUTDIR/Macros_hmm.gz" -S "$REALIGNLST" -m -I "$WMLF" -i "$OUTDIR/realigned.mlf~$k" "$DIC" <( echo "$HMMLST" );
           [ "$?" != 0 ] &&
             echo "$FN: error: problems realigning with HVite" 1>&2 &&
             return 1;
-          sed '/^".*\/.*\.rec"$/s|^".*/\([^/]*\)\.rec"$|"*/\1.lab"|' "$OUTDIR/realigned.mlf~$k" \
+
+          mv "$MLF" "$MLF"~$(ls "$MLF"~* | wc -l);
+
+          #return 0;
+          gawk '
+            { if( match($0,/^".+\/[^/]+\.rec"$/) )
+                $0 = gensub( /^".+\/([^/]+)\.rec"$/, "\"*/\\1.lab\"\n@", 1, $0 );
+                #$0 = gensub( /^".+\/([^/]+)\.rec"$/, "\"*/\\1.lab\"", 1, $0 );
+              else if( NR > 1 && $0 != "." )
+                $0 = $3;
+              print;
+            }' "$OUTDIR/realigned.mlf~$k" \
             | htrsh_fix_mlf_quotes - \
-            > "$OUTDIR/realigned.mlf~$k~";
-          mv "$OUTDIR/realigned.mlf~$k~" "$OUTDIR/realigned.mlf~$k";
-          cp -p "$OUTDIR/realigned.mlf~$k" "$MLF";
+            > "$MLF";
           [ "$EXCLREALIGN" != "" ] &&
-            cat "$OUTDIR/norealign.mlf" >> "$MLF";
+            sed '/^#!MLF!#/d' "$EXCLREALIGN" >> "$MLF";
+
+          #sed '/^".*\/.*\.rec"$/s|^".*/\([^/]*\)\.rec"$|"*/\1.lab"|' "$OUTDIR/realigned.mlf~$k" \
+          #  | htrsh_fix_mlf_quotes - \
+          #  > "$OUTDIR/realigned.mlf~$k~";
+          #mv "$OUTDIR/realigned.mlf~$k~" "$OUTDIR/realigned.mlf~$k";
+          #cp -p "$OUTDIR/realigned.mlf~$k" "$MLF";
+          #[ "$EXCLREALIGN" != "" ] &&
+          #  cat "$OUTDIR/norealign.mlf" >> "$MLF";
+
           [ "$htrsh_keeptmp" = 0 ] &&
             rm "$OUTDIR/realigned.mlf~$k";
 
