@@ -2921,10 +2921,11 @@ htrsh_hmm_train () {
             echo "$FN: error: problems realigning with HVite" 1>&2 &&
             return 1;
 
+          mv "$MLF" "$MLF"~$(ls "$MLF"~* >/dev/null | wc -l);
+
           gawk '
             { if( match($0,/^".+\/[^/]+\.rec"$/) )
                 $0 = gensub( /^".+\/([^/]+)\.rec"$/, "\"*/\\1.lab\"\n@", 1, $0 );
-                #$0 = gensub( /^".+\/([^/]+)\.rec"$/, "\"*/\\1.lab\"", 1, $0 );
               else if( NR > 1 && $0 != "." )
                 $0 = $3;
               print;
@@ -2934,9 +2935,9 @@ htrsh_hmm_train () {
           [ "$EXCLREALIGN" != "" ] &&
             sed '/^#!MLF!#/d' "$EXCLREALIGN" >> "$MLF";
 
-          cp -p "$OUTDIR/realigned.mlf~$k" "$OUTDIR/realigned.mlf";
-          [ "$htrsh_keeptmp" = 0 ] &&
-            rm "$OUTDIR/realigned.mlf~$k";
+          #cp -p "$OUTDIR/realigned.mlf~$k" "$OUTDIR/realigned.mlf";
+          #[ "$htrsh_keeptmp" = 0 ] &&
+          #  rm "$OUTDIR/realigned.mlf~$k";
 
           local TE=$(($(date +%s%N)/1000000)); echo "$FN: realign time g=$g i=$i: $((TE-TS)) ms" 1>&2; TS="$TE";
         fi
