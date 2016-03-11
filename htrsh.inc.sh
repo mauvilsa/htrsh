@@ -2915,13 +2915,23 @@ htrsh_hmm_train () {
         if [ "$DIC" != "" ]; then
           echo "$FN: realigning using dictionary" 1>&2;
           local k=$(ls "$OUTDIR/realigned.mlf~"* 2>/dev/null | wc -l);
+          local kk=$(ls "$MLF"~* 2>/dev/null | wc -l);
           htrsh_hvite_parallel "$THREADS" \
             HVite $htrsh_HTK_HVite_align_opts -C <( echo "$htrsh_HTK_config" ) -H "$OUTDIR/Macros_hmm.gz" -S "$REALIGNLST" -a -m -I "$WMLF" -i "$OUTDIR/realigned.mlf~$k" "$DIC" <( echo "$HMMLST" );
           [ "$?" != 0 ] &&
             echo "$FN: error: problems realigning with HVite" 1>&2 &&
             return 1;
 
-          mv "$MLF" "$MLF"~$(ls "$MLF"~* >/dev/null | wc -l);
+          awk '
+            { if( ARGIND == 1 )
+                realigned[$1] = "";
+              else if( ! ( $1 in realigned ) )
+                print;
+            }' <( sed -n '/^".*\/.*\.rec"$/{ s|.*/||; s|\.rec"$||; p; }' "$OUTDIR/realigned.mlf~$k" ) \
+               <( sed 's|.*/||; s|\.fea$||;' "$REALIGNLST" ) \
+            > "$OUTDIR/failrealign.lst~$k";
+
+          mv "$MLF" "$MLF~$kk";
 
           gawk '
             { if( match($0,/^".+\/[^/]+\.rec"$/) )
@@ -2932,12 +2942,13 @@ htrsh_hmm_train () {
             }' "$OUTDIR/realigned.mlf~$k" \
             | htrsh_fix_mlf_quotes - \
             > "$MLF";
+          if [ -s "$OUTDIR/failrealign.lst~$k" ]; then
+            htrsh_mlf_filter "$OUTDIR/failrealign.lst~$k" "$MLF~$kk" >> "$MLF";
+          else
+            rm "$OUTDIR/failrealign.lst~$k";
+          fi
           [ "$EXCLREALIGN" != "" ] &&
             sed '/^#!MLF!#/d' "$EXCLREALIGN" >> "$MLF";
-
-          #cp -p "$OUTDIR/realigned.mlf~$k" "$OUTDIR/realigned.mlf";
-          #[ "$htrsh_keeptmp" = 0 ] &&
-          #  rm "$OUTDIR/realigned.mlf~$k";
 
           local TE=$(($(date +%s%N)/1000000)); echo "$FN: realign time g=$g i=$i: $((TE-TS)) ms" 1>&2; TS="$TE";
         fi
@@ -3146,6 +3157,33 @@ htrsh_fix_rec_names () {
   sed -i "$SED_REP" "$1";
 
   return 0;
+}
+
+##
+## Function that extracts MLF samples for a given list
+##
+htrsh_mlf_filter () {
+  local FN="htrsh_mlf_filter";
+  if [ $# -lt 2 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Extracts MLF samples for a given list";
+      echo "Usage: $FN LIST MLF";
+    } 1>&2;
+    return 1;
+  fi
+
+  gawk -v PRNT=0 '
+    { if( ARGIND == 1 )
+        filter[$1] = "";
+      else {
+        if( match($1,/^".+\.[lr][ae][bc]"$/) ) {
+          samp = gensub( /^"*(.+)\.[lr][ae][bc]"$/, "\\1", 1, gensub(/.*\//,"",1,$1) );
+          PRNT = samp in filter ? 1 : 0 ;
+        }
+        if( PRNT )
+          print;
+      }
+    }' "$1" "$2";
 }
 
 
