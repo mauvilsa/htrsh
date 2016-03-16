@@ -971,17 +971,34 @@ htrsh_pagexml_sort_words () {
 
 ##
 ## Function that sorts TextLines within each TextRegion in an XML Page file
-## (based ONLY on the first Y coordinate of the baselines)
+## (based on the rounded average of the Y coordinates of the baseline plus
+## the width fraction of the smallest X coordinate of the baseline)
 ##
 htrsh_pagexml_sort_lines () {
   local FN="htrsh_pagexml_sort_lines";
   if [ $# != 0 ]; then
     { echo "$FN: Error: Incorrect input arguments";
-      echo "Description: Sorts TextLines within each TextRegion in an XML Page file (based ONLY on the first Y coordinate of the baselines)";
+      echo "Description: Sorts TextLines within each TextRegion in an XML Page file (based on the rounded average of the Y coordinates of the baseline plus the width fraction of the smallest X coordinate of the baseline)";
       echo "Usage: $FN < XMLIN";
     } 1>&2;
     return 1;
   fi
+
+  local XML=$( cat - );
+  local WIDTH=$( echo "$XML" | xmlstarlet sel -t -v '//@imageWidth' - );
+  local SORTVALS=( $( echo "$XML" \
+          | xmlstarlet sel -t -m "//$htrsh_xpath_lines/_:Baseline[@points]" \
+              -v ../@id -o ' ' -v 'translate(@points,","," ")' -n - \
+          | awk -v W=$WIDTH '
+              { s = 0;
+                for( n=3; n<=NF; n+=2 )
+                  s += $n;
+                s = sprintf( "%.0f", 2*s/(NF-1) );
+                xmin = $2;
+                for( n=4; n<=NF; n+=2 )
+                  xmin = xmin > $n ? $n : xmin;
+                printf( " -i //_:TextLine[@id=\"%s\"] -t attr -n sortval -v %g", $1, s+xmin/W );
+              }' ) );
 
   local XSLT='<?xml version="1.0"?>
 <xsl:stylesheet
@@ -1005,14 +1022,22 @@ htrsh_pagexml_sort_lines () {
     <xsl:copy>
       <xsl:apply-templates select="@* | node()[not(self::_:TextLine or self::_:TextEquiv)]" />
       <xsl:apply-templates select="_:TextLine">
-        <xsl:sort select="number(substring-before(substring-after(_:Baseline/@points,&quot;,&quot;),&quot; &quot;))+(number(substring-before(_:Baseline/@points,&quot;,&quot;)) div number($Width))" data-type="number" order="ascending"/>
+        <!--<xsl:sort select="number(substring-before(substring-after(_:Baseline/@points,&quot;,&quot;),&quot; &quot;))+(number(substring-before(_:Baseline/@points,&quot;,&quot;)) div number($Width))" data-type="number" order="ascending"/>-->
+        <xsl:sort select="@sortval" data-type="number" order="ascending" />
       </xsl:apply-templates>
       <xsl:apply-templates select="_:TextEquiv" />
     </xsl:copy>
   </xsl:template>
 </xsl:stylesheet>';
 
-  xmlstarlet tr <( echo "$XSLT" );
+  if [ "${#SORTVALS[@]}" = 0 ]; then
+    echo "$XML";
+  else
+    echo "$XML" \
+      | xmlstarlet ed "${SORTVALS[@]}" \
+      | xmlstarlet tr <( echo "$XSLT" ) \
+      | xmlstarlet ed -d //@sortval;
+  fi
 }
 
 ##
@@ -1541,7 +1566,7 @@ htrsh_pageimg_extract_lines () {
   fi
 
   [ $(xmlstarlet sel -t -v "count($XPATH)" "$XML") = 0 ] &&
-    echo "$FN: error: zero lines have coordinates for extraction: $XML" 1>&2 &&
+    echo "$FN: error: zero lines match xpath for extraction: $XML" 1>&2 &&
     return 1;
 
   if [ "$RESSRC" = "xml" ]; then

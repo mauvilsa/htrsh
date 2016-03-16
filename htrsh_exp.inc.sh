@@ -2,6 +2,8 @@
 htrsh_exp_dataset="";  # Name of dataset
 htrsh_exp_cvparts="4"; # Number of cross-validation partitions
 
+htrsh_exp_require_textequiv="yes"; # Whether to extract features only from lines with TextEquiv
+
 htrsh_exp_feat_name=""; # Name for feature extraction configuration
 
 htrsh_run_threads="1";   # Number of parallel threads
@@ -111,9 +113,16 @@ htrsh_exp_htr_cv () {(
         htrsh_pageimg_clean "$f" "$FDIR/orig";
       fi
 
-      htrsh_xpath_lines="_:TextLine[$htrsh_xpath_textequiv]" \
-        htrsh_pageimg_extract_linefeats "$FDIR/orig/$ff.xml" "$FDIR/orig/${ff}_feats.xml" \
-          -d "$FDIR/orig";
+      if [ "$htrsh_exp_require_textequiv" = "yes" ]; then
+        htrsh_xpath_lines="_:TextLine[$htrsh_xpath_textequiv]" \
+          htrsh_pageimg_extract_linefeats "$FDIR/orig/$ff.xml" "$FDIR/orig/${ff}_feats.xml" \
+            -d "$FDIR/orig";
+      else
+        htrsh_xpath_lines="_:TextLine" \
+          htrsh_pageimg_extract_linefeats "$FDIR/orig/$ff.xml" "$FDIR/orig/${ff}_feats.xml" \
+            -d "$FDIR/orig";
+      fi
+
       mv "$FDIR/orig/${ff}_feats.xml" "$FDIR/orig/$ff.xml";
     }
 
