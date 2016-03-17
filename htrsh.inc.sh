@@ -3368,12 +3368,12 @@ htrsh_pagexml_insertalign_lines () {
 
     local xmledit=( -d "//*[@id='$id']/_:Word" );
 
-    local LIMG LGEO contour;
     if [ "$htrsh_align_contour" = "yes" ]; then
-      LIMG="$XMLDIR/$IMBASE."$(xmlstarlet sel -t -v "//*[@id='$id']/../@id" "$XML")".${id}_clean.png";
-      LGEO=( $(identify -format "%w %h %X %Y %x %U" "$LIMG" | sed 's|+||g') );
-    elif [ "$htrsh_align_isect" = "yes" ]; then
-      contour=$(xmlstarlet sel -t -v '//*[@id="'$id'"]/_:Coords/@points' "$XML");
+      local LIMG="$XMLDIR/$IMBASE."$(xmlstarlet sel -t -v "//*[@id='$id']/../@id" "$XML")".${id}_clean.png";
+      local LGEO=( $(identify -format "%w %h %X %Y %x %U" "$LIMG" | sed 's|+||g') );
+    fi
+    if [ "$htrsh_align_isect" = "yes" ]; then
+      local contour=$(xmlstarlet sel -t -v '//*[@id="'$id'"]/_:Coords/@points' "$XML");
     fi
 
     local align=$(echo "$aligns" | sed -n "/^$id /{ s|^$id ||; p; }");
