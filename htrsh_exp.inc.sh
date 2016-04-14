@@ -3,6 +3,7 @@ htrsh_exp_dataset="";  # Name of dataset
 htrsh_exp_cvparts="4"; # Number of cross-validation partitions
 
 htrsh_exp_require_textequiv="yes"; # Whether to extract features only from lines with TextEquiv
+htrsh_exp_from_baselines="no"; # Whether to compute line contours from baselines
 
 htrsh_exp_feat_name=""; # Name for feature extraction configuration
 
@@ -20,6 +21,7 @@ htrsh_diplomatizer="cat"; # Pipe command for diplomatization
 
 htrsh_decode_gsf="10"; # Grammar Scale Factor used to compute word graphs
 htrsh_decode_wip="0";  # Word Insertion Penalty used to compute word graphs
+htrsh_exp_wordgraphs="yes"; # Whether to create wordgraphs
 htrsh_HTK_HVite_decode_opts="-n 15 1"; # Parameters for HVite when decoding
 
 htrsh_exp_decode_gsf="0 3 5 10 20 30 50"; # List of Grammar Scale Factors to vary
@@ -112,6 +114,9 @@ htrsh_exp_htr_cv () {(
       else
         htrsh_pageimg_clean "$f" "$FDIR/orig";
       fi
+
+      [ "$htrsh_exp_from_baselines" = "yes" ] &&
+        page_format_generate_contour -a 75 -d 25 -p "$FDIR/orig/$ff.xml" -o "$FDIR/orig/$ff.xml";
 
       if [ "$htrsh_exp_require_textequiv" = "yes" ]; then
         htrsh_xpath_lines="_:TextLine[$htrsh_xpath_textequiv]" \
@@ -223,6 +228,25 @@ htrsh_exp_htr_cv () {(
 
     [ $(ls "$EXPDIR/feats/$DATASET/$FEATNAME/orig/"*.fea 2>/dev/null | wc -l) != 0 ] &&
       rm "$EXPDIR/feats/$DATASET/$FEATNAME/orig/"*.fea;
+  fi
+
+  FDIR="$EXPDIR/feats/$DATASET/$FEATNAME";
+  if [ ! -e "$FDIR/frames_per_char.txt" ]; then
+    tokenizer_and_diplomatizer () { "$htrsh_tokenizer" | "$htrsh_diplomatizer"; }
+    awk '
+      { if ( ARGIND == 1 )
+          numchar[$1] = 2 + length( gensub( /^[^ ]* /, "", 1, $0 ) );
+        else if( $2 in numchar )
+          printf( "%g %s\n", $1/numchar[$2], $2 );
+      }' <( for f in "$EXPDIR/data/$DATASET/"*.xml; do
+              htrsh_pagexml_textequiv "$f" -f tab -F tokenizer_and_diplomatizer;
+            done ) \
+         <( for f in "$FDIR/pca_part0/"*.fea; do
+              echo \
+                $(HList -z -h "$f" | awk '{if($2=="Samples:")print $3;}') \
+                $(echo "$f" | sed 's|.*/||; s|\.fea$||;');
+            done ) \
+      > "$FDIR/frames_per_char.txt";
   fi
 
   [ "$htrsh_exp_partial" = "feats" ] && return 0;
@@ -391,6 +415,10 @@ htrsh_exp_htr_cv () {(
       param="s${states}_${gauss}_gsf${htrsh_decode_gsf}_wip${htrsh_decode_wip}";
       DDIR="$EXPDIR/decode/$DATASET/$FEATNAME/lat_$param";
 
+      HVite_decode_opts="$htrsh_HTK_HVite_decode_opts";
+      [ "$htrsh_exp_wordgraphs" = "yes" ] &&
+        HVite_decode_opts+=" -z lat.gz -q ABtvalr";
+
       mkdir -p "$DDIR";
 
       ### Generate word-graphs ###
@@ -411,8 +439,7 @@ htrsh_exp_htr_cv () {(
               | xargs ls -f \
               > "$DDIR/feats_part$p.lst";
 
-            htrsh_hvite_parallel $THREADS HVite -C <( echo "$htrsh_HTK_config" ) \
-              $htrsh_HTK_HVite_decode_opts -z lat.gz -q ABtvalr \
+            htrsh_hvite_parallel $THREADS HVite -C <( echo "$htrsh_HTK_config" ) $HVite_decode_opts \
               -s $htrsh_decode_gsf -p $htrsh_decode_wip -H "$HMM" \
               -S "$DDIR/feats_part$p.lst" -i "$DDIR/part$p.mlf" -l "$DDIR" \
               -w "$LM" "$DIC" <( echo "$HMMLST" );
@@ -439,6 +466,8 @@ htrsh_exp_htr_cv () {(
       fi
 
       ### Use word-graphs to decode for different parameters ###
+      if [ "$htrsh_exp_wordgraphs" = "yes" ]; then
+
       wg="s${states}_${gauss}_gsf${htrsh_decode_gsf}_wip${htrsh_decode_wip}";
       DDIR="$EXPDIR/decode/$DATASET/$FEATNAME/rescore_$wg";
 
@@ -507,20 +536,25 @@ htrsh_exp_htr_cv () {(
         TE=$(($(date +%s%N)/1000000)); echo "$FN: rescores for parameters $param: time $((TE-TS)) ms";
       fi
 
+      fi
+
 
       ### Compute evaluation measures: WER and CER ###
       wg="s${states}_${gauss}_gsf${htrsh_decode_gsf}_wip${htrsh_decode_wip}";
       DDIR="$EXPDIR/decode/$DATASET/$FEATNAME/rescore_$wg";
+      [ "$htrsh_exp_wordgraphs" = "no" ] &&
+        DDIR="$EXPDIR/decode/$DATASET/$FEATNAME/lat_$wg";
 
       [ -e "$DDIR.txt" ] &&
         continue;
+      [ "$htrsh_exp_wordgraphs" = "yes" ] &&
       [ $(( $(echo $htrsh_exp_decode_gsf | wc -w)*$(echo $htrsh_exp_decode_wip | wc -w) )) != $(ls "$DDIR/"*.mlf.gz 2>/dev/null | grep -v _part | wc -l) ] &&
         continue;
 
       echo "$FN: computing evaluation measures for parameters $param";
       TS=$(($(date +%s%N)/1000000));
       echo "# WER CER WER_canonic CER_canonic WER_diplom CER_diplom" > "$DDIR.txt";
-      for f in $(ls "$DDIR"/*.mlf.gz | grep -v _part); do
+      for f in $(ls "$DDIR"/*.mlf.gz | grep -v 'part[0-9]*.mlf.gz'); do
         htrsh_mlf_to_tasas \
             "$EXPDIR/groundtruth/$DATASET/pages_test.mlf" \
             <( gzip -dc "$f" ) \

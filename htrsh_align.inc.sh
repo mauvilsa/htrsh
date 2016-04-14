@@ -2,7 +2,7 @@
 #htrsh_align_wordsplit="no"; # Whether to split words when aligning regions
 htrsh_align_wordsplit="yes";
 #htrsh_align_words="no"; # Whether to align at a word level when aligning regions
-htrsh_align_words="yes";
+htrsh_align_words="yes"; # currently only used in old version
 
 #htrsh_hmm_software="kaldi";
 htrsh_hmm_software="htk";
@@ -77,7 +77,8 @@ htrsh_pageimg_forcealign_regions () {
   local pIFS="$IFS";
   local IFS=$'\n';
   local FBASE="$FEATDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
-  local FEATLST=( $( xmlstarlet sel -t -m "$htrsh_xpath_regions[$htrsh_xpath_lines/$htrsh_xpath_coords]" -o "$FBASE." -v @id -o ".fea" -n "$XML" ) );
+  #local FEATLST=( $( xmlstarlet sel -t -m "$htrsh_xpath_regions[$htrsh_xpath_lines/$htrsh_xpath_coords]" -o "$FBASE." -v @id -o ".fea" -n "$XML" ) );
+  local FEATLST=( $( xmlstarlet sel -t -m "$htrsh_xpath_regions" -o "$FBASE." -v @id -o ".fea" -n "$XML" ) );
   IFS="$pIFS";
 
   ls "${FEATLST[@]}" "${FEATLST[@]//.fea/.nfea}" >/dev/null;
@@ -108,18 +109,21 @@ htrsh_pageimg_forcealign_regions () {
   for f in "${FEATLST[@]}"; do
     local ff=$(echo $f | sed 's|.*/||; s|\.fea$||;');
 
+
     local align=$(
-      sed -n '
-        /\/'${ff}'\.rec"$/{
-          :loop;
-          N;
-          /\n\.$/!b loop;
-          s|^[^\n]*\n||;
-          s|\n\.$||;
-          p; q;
-        }' "$TMPDIR/${B}_aligned.mlf" \
+      #sed -n '
+      #  /\/'${ff}'\.rec"$/{
+      #    :loop;
+      #    N;
+      #    /\n\.$/!b loop;
+      #    s|^[^\n]*\n||;
+      #    s|\n\.$||;
+      #    p; q;
+      #  }' "$TMPDIR/${B}_aligned.mlf" \
+      htrsh_mlf_filter "$ff" "$TMPDIR/${B}_aligned.mlf" \
         | awk '
-            { NF = 3;
+            { if( NR == 1 || $0 == "." ) next;
+              NF = 3;
               $2 = sprintf( "%.0f", $2/100000-1 ); # -1 since MLF ends at N not N-1
               $1 = sprintf( "%.0f", $1==0 ? 0 : $1/100000-1 );
               print;
@@ -232,7 +236,7 @@ htrsh_pageimg_forcealign_regions () {
       >> "$TMPDIR/${B}_line_aligned.mlf";
   done
 
-  htrsh_pagexml_insertalign_lines "$XML" "$TMPDIR/${B}_line_aligned.mlf";
+  htrsh_pagexml_insertalign_lines "$XML" "$TMPDIR/${B}_line_aligned.mlf" -s regions;
   [ "$?" != 0 ] &&
     return 1;
 
