@@ -10,8 +10,9 @@ htrsh_exp_feat_name=""; # Name for feature extraction configuration
 htrsh_run_threads="1";   # Number of parallel threads
 htrsh_run_tmpdir="/tmp"; # Directory for temporal files
 
-htrsh_feat_imgres="";  # If set, resize pages to given resolution in dpi
-htrsh_feat_pcabase=""; # If set, use provided PCA base
+htrsh_feat_imgres="";     # If set, resize pages to given resolution in dpi
+htrsh_feat_normheight=""; # If set, resizes all line images to given height in px
+htrsh_feat_pcabase="";    # If set, use provided PCA base
 #htrsh_feat_pcabase="single"; # Compute and use PCA from 1st partition training
 htrsh_feat_pcaopts="-e 1:4 -r 24"; # Options for PCA computation
 
@@ -102,6 +103,10 @@ htrsh_exp_htr_cv () {(
     mkdir -p $FDIR/orig;
     mkdir -p $FDIR/tmp;
 
+    FEATOPTS="";
+    [ "$htrsh_feat_normheight" != "" ] &&
+      FEATOPTS="-h $htrsh_feat_normheight";
+
     ### Change image to resolution FEATRES dpi and then extract features ###
     extract_feats () {
       local f="$1";
@@ -121,11 +126,11 @@ htrsh_exp_htr_cv () {(
       if [ "$htrsh_exp_require_textequiv" = "yes" ]; then
         htrsh_xpath_lines="_:TextLine[$htrsh_xpath_textequiv]" \
           htrsh_pageimg_extract_linefeats "$FDIR/orig/$ff.xml" "$FDIR/orig/${ff}_feats.xml" \
-            -d "$FDIR/orig";
+            -d "$FDIR/orig" $FEATOPTS;
       else
         htrsh_xpath_lines="_:TextLine" \
           htrsh_pageimg_extract_linefeats "$FDIR/orig/$ff.xml" "$FDIR/orig/${ff}_feats.xml" \
-            -d "$FDIR/orig";
+            -d "$FDIR/orig" $FEATOPTS;
       fi
 
       mv "$FDIR/orig/${ff}_feats.xml" "$FDIR/orig/$ff.xml";

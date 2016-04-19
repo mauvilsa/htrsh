@@ -1923,13 +1923,15 @@ SAVEASVQ       = T
 ##
 htrsh_extract_feats () {
   local FN="htrsh_extract_feats";
+  local HEIGHT="";
   local XHEIGHT="";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Extracts features from an image";
       echo "Usage: $FN IMGIN FEAOUT [ Options ]";
       echo "Options:";
-      echo " -xh XHEIGHT  The image x-height for size normalization";
+      echo " -h HEIGHT    Line height for size normalization (def.=false)";
+      echo " -xh XHEIGHT  Line x-height for size normalization based on htrsh_feat_normxheight, ignored if -h given (def.=false)";
     } 1>&2;
     return 1;
   fi
@@ -1939,7 +1941,9 @@ htrsh_extract_feats () {
   local FEAOUT="$2";
   shift 2;
   while [ $# -gt 0 ]; do
-    if [ "$1" = "-xh" ]; then
+    if [ "$1" = "-h" ]; then
+      HEIGHT="$2";
+    elif [ "$1" = "-xh" ]; then
       XHEIGHT="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
@@ -1949,7 +1953,10 @@ htrsh_extract_feats () {
   done
 
   local IMGPROC="$IMGIN";
-  if [ "$XHEIGHT" != "" ] && [ "$htrsh_feat_normxheight" != "" ]; then
+  if [ "$HEIGHT" != "" ]; then
+    IMGPROC=$(mktemp).png;
+    convert "$IMGIN" -resize x"$HEIGHT" "$IMGPROC";
+  elif [ "$XHEIGHT" != "" ] && [ "$htrsh_feat_normxheight" != "" ]; then
     IMGPROC=$(mktemp).png;
     convert "$IMGIN" -resize $(echo "100*$htrsh_feat_normxheight/$XHEIGHT" | bc -l)% "$IMGPROC";
   fi
@@ -2239,6 +2246,7 @@ htrsh_feats_pca () {(
 htrsh_feats_project () {(
   local FN="htrsh_feats_project";
   local RDIM="";
+  local UNPROJ="no";
   local THREADS="1";
   if [ $# -lt 3 ]; then
     { echo "$FN: Error: Not enough input arguments";
@@ -2258,6 +2266,8 @@ htrsh_feats_project () {(
   while [ $# -gt 0 ]; do
     if [ "$1" = "-r" ]; then
       RDIM="$2";
+    elif [ "$1" = "-u" ]; then
+      UNPROJ="$2";
     elif [ "$1" = "-T" ]; then
       THREADS="$2";
     else
@@ -2283,11 +2293,14 @@ htrsh_feats_project () {(
       [ "$RDIM" != "" ] &&
         echo "B = B(:,1:min($RDIM,size(B,2)));";
       local f ff;
+      local proj="x = (x-repmat(mu,size(x,1),1))*B;";
+      [ "$UNPROJ" = "yes" ] && proj="x = x*B'+repmat(mu,size(x,1),1);";
       for f in $(<"$1"); do
         ff=$(echo "$f" | sed "s|.*/||; s|^|$OUTDIR/|;");
         echo "
           [x,FP,DT,TC] = readhtk('$f');
-          x = (x-repmat(mu,size(x,1),1))*B;
+          %x = (x-repmat(mu,size(x,1),1))*B;
+          $proj
           writehtk('$ff',x,FP,TC);
           ";
       done
@@ -2336,6 +2349,7 @@ htrsh_pageimg_extract_linefeats () {
   local OUTDIR=".";
   local FEATLST="/dev/null";
   local PBASE="";
+  local HEIGHT="";
   local REPLC="yes";
   local SRC="lines";
   if [ $# -lt 2 ]; then
@@ -2346,6 +2360,7 @@ htrsh_pageimg_extract_linefeats () {
       echo " -d OUTDIR   Output directory for features (def.=$OUTDIR)";
       echo " -l FEATLST  Output list of features to file (def.=$FEATLST)";
       echo " -b PBASE    Project features using given base (def.=false)";
+      echo " -h HEIGHT   Normalize line height (def.=false)";
       echo " -c (yes|no) Whether to replace Coords/@points with the features contour (def.=$REPLC)";
     } 1>&2;
     return 1;
@@ -2364,6 +2379,8 @@ htrsh_pageimg_extract_linefeats () {
       PBASE="-b $2";
     elif [ "$1" = "-c" ]; then
       REPLC="$2";
+    elif [ "$1" = "-h" ]; then
+      HEIGHT="$2";
     elif [ "$1" = "-s" ]; then
       SRC="$2";
     else
@@ -2518,7 +2535,9 @@ htrsh_pageimg_extract_linefeats () {
     fi 2>&1;
 
     local FEATOP="";
-    if [ "$htrsh_feat_normxheight" != "" ]; then
+    if [ "$HEIGHT" != "" ]; then
+      FEATOP="-h $HEIGHT";
+    elif [ "$htrsh_feat_normxheight" != "" ]; then
       FEATOP=$(xmlstarlet sel -t -v "//*[@id='$id']/@custom" "$XML" 2>/dev/null \
         | sed -n '/x-height:/ { s|.*x-height:\([^;]*\).*|\1|; s|px$||; p; }' );
       [ "$FEATOP" != "" ] && FEATOP="-xh $FEATOP";
