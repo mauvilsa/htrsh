@@ -33,7 +33,7 @@ htrsh_xpath_coords='_:Coords[@points and @points!="0,0 0,0"]';
 htrsh_xpath_textequiv=$'_:TextEquiv[_:Unicode and translate(_:Unicode,"\n\r\t ","") != ""]/_:Unicode';
 
 htrsh_imgclean="prhlt"; # Image preprocessing technique, prhlt or ncsr
-htrsh_clean_type="image"; #htrsh_clean_type="line";
+htrsh_clean_type="image"; htrsh_clean_type="line";
 
 htrsh_imgtxtenh_regmask="yes";               # Whether to use a region-based processing mask
 htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.1"; # Options for imgtxtenh tool
@@ -232,6 +232,7 @@ htrsh_pagexml_create () {
 ##
 ## Function that sets TextEquiv/Unicode in a Page XML
 ##
+# @todo Also allow to stdout?
 htrsh_pagexml_set_textequiv () {
   local FN="htrsh_pagexml_set_textequiv";
   if [ $# -lt 3 ]; then
@@ -280,21 +281,36 @@ htrsh_pagexml_set_textequiv () {
 ##
 htrsh_pagexml_textequiv_lines2region () {
   local FN="htrsh_pagexml_textequiv_lines2region";
+  local FILTER="cat";
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Propagates text in lines to the corresponding region";
-      echo "Usage: $FN XML";
+      echo "Usage: $FN XML [ Options ]";
+      echo "Options:";
+      echo " -F FILTER    Filtering pipe command, e.g. join broken words, etc. (def.=none)";
     } 1>&2;
     return 1;
   fi
 
+  ### Parse input arguments ###
   local XML="$1";
+  shift;
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "-F" ]; then
+      FILTER="$2";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
+    shift 2;
+  done
+
   local TEXT=$( htrsh_pagexml_textequiv "$XML" -s lines -f tab \
-    | sed 's|^[^. ]*\.\([^. ]*\)\.[^. ]* |\1 |' );
+    | sed -r 's|^.+*\.([^. ]+)\.[^. ]+ |\1 |' );
 
   local updatetext=();
   for regid in $( echo "$TEXT" | sed 's| .*||' | sort -u ); do
-    local text=$( echo "$TEXT" | sed -n "/^$regid /{ s|^[^ ]* ||; p; }" );
+    local text=$( echo "$TEXT" | sed -n "/^$regid /{ s|^[^ ]* ||; p; }" | "$FILTER" );
     updatetext+=( "$regid" "$text" );
   done
   htrsh_pagexml_set_textequiv "$XML" "${updatetext[@]}";
@@ -354,13 +370,14 @@ htrsh_pagexml_wordid_fix () {
 ## Function that prints to stdout the TextEquiv from an XML Page file
 ##
 # @todo hmms for different space types: word extremes, between numbers, etc.
-# @todo use already created awk function to convert word to hmm list, and remove the redundant code
 htrsh_pagexml_textequiv () {
   local FN="htrsh_pagexml_textequiv";
   local SRC="lines";
   local FORMAT="raw";
   local FILTER="cat";
+  local WSPACE="no";
   local WORDEND="no";
+  local PRTHEAD="no";
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Prints to stdout the TextEquiv from an XML Page file";
@@ -369,7 +386,9 @@ htrsh_pagexml_textequiv () {
       echo " -s SOURCE    Source of TextEquiv, either 'regions', 'lines' or 'words' (def.=$SRC)";
       echo " -f FORMAT    Output format among 'raw', 'mlf-chars', 'mlf-words' and 'tab' (def.=$FORMAT)";
       echo " -F FILTER    Filtering pipe command, e.g. tokenizer, transliteration, etc. (def.=none)";
-      echo " -w (yes|no)  For mlf-words, whether to add word end marks (def.=$WORDEND)";
+      echo " -W (yes|no)  For mlf-words, whether to start space (def.=$WSPACE)";
+      echo " -w (yes|no)  For mlf-chars, whether to add word end marks (def.=$WORDEND)";
+      echo " -H (yes|no)  Whether to print header (def.=$PRTHEAD)";
     } 1>&2;
     return 1;
   fi
@@ -382,10 +401,18 @@ htrsh_pagexml_textequiv () {
       SRC="$2";
     elif [ "$1" = "-f" ]; then
       FORMAT="$2";
-    elif [ "$1" = "-F" ]; then
+      if ! ( [ "$FORMAT" = 'raw' ] || [ "$FORMAT" = 'mlf-chars' ] || [ "$FORMAT" = 'mlf-words' ] || [ "$FORMAT" = 'tab' ] ); then
+        echo "$FN: error: unexpected output format: $FORMAT" 1>&2;
+        return 1;
+      fi
+    elif [ "$1" = "-F" ] || [ "$1" = "-D" ]; then
       FILTER="$2";
+    elif [ "$1" = "-W" ]; then
+      WSPACE="$2";
     elif [ "$1" = "-w" ]; then
       WORDEND="$2";
+    elif [ "$1" = "-H" ]; then
+      PRTHEAD="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -415,6 +442,9 @@ htrsh_pagexml_textequiv () {
   elif [ "$SRC" = "lines" ]; then
     XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_textequiv";
     IDop=( -o "$PG." -v ../../../@id -o . -v ../../@id );
+  elif [ "$SRC" = "all" ]; then
+    XPATH="//$htrsh_xpath_textequiv";
+    IDop=( -o "$PG." -v ../../@id );
   else
     echo "$FN: error: unexpected source type: $SRC" 1>&2;
     return 1;
@@ -424,30 +454,28 @@ htrsh_pagexml_textequiv () {
     echo "$FN: error: zero matches for xpath $XPATH on file: $XML" 1>&2 &&
     return 1;
 
+  [ "$PRTHEAD" = "yes" ] && [ "${FORMAT:0:3}" = "mlf" ] &&
+    echo '#!MLF!#';
+
   paste \
       <( xmlstarlet sel -t -m "$XPATH" "${IDop[@]}" -n "$XML" ) \
       <( cat "$XML" \
            | tr '\t\n' '  ' \
            | xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" "${PRINT[@]}" \
+           | perl -CSD -e 'use Unicode::Normalize; while ($line = <STDIN>){ print NFC($line) }' \
            | $FILTER ) \
     | sed '
         s|\t  *|\t|;
         s|  *$||;
         s|   *| |g;
         ' \
-    | awk -F'\t' -v FORMAT=$FORMAT -v TYPE="$htrsh_hmm_type" -v WORDEND=$WORDEND -v SPECIAL=<( echo "$htrsh_special_chars" ) '
+    | awk -v FORMAT=$FORMAT -v hmmtype="$htrsh_hmm_type" -v WSPACE=$WSPACE -v WORDEND=$WORDEND -v SPECIAL=<( echo "$htrsh_special_chars" ) \
+        "$htrsh_gawk_func_word_to_chars"'
         BEGIN {
+          load_special_chars( SPECIAL );
+          FS = "\t";
           if( FORMAT == "tab" )
             OFS=" ";
-          while( (getline line<SPECIAL) > 0 )
-            if( line != "" ) {
-              n = split(line,sline," ");
-              c = substr( sline[1], 1, 1 );
-              SCHAR[c] = "";
-              NSPECIAL++;
-              SWORD[NSPECIAL] = sline[1];
-              SMARK[NSPECIAL] = n == 1 ? sline[1] : sline[2] ;
-            }
         }
         { if( FORMAT == "raw" )
             print $2;
@@ -455,6 +483,8 @@ htrsh_pagexml_textequiv () {
             print $1,$2;
           else if( FORMAT == "mlf-words" ) {
             printf("\"*/%s.lab\"\n",$1);
+            if( WSPACE == "yes" )
+              printf("\"@\"\n");
             gsub("\x22","\\\x22",$2);
             N = split($2,txt," ");
             for( n=1; n<=N; n++ )
@@ -464,46 +494,58 @@ htrsh_pagexml_textequiv () {
           else if( FORMAT == "mlf-chars" ) {
             printf("\"*/%s.lab\"\n",$1);
             printf("@\n");
-            cprev = "@";
-            N = split($2,txt,"");
-            for( n=1; n<=N; n++ ) {
-              c = "";
-              if( txt[n] in SCHAR )
-                for( m=1; m<=NSPECIAL; m++ ) {
-                  w = SWORD[m];
-                  if( w == substr($2,n,length(w)) ) {
-                    c = SMARK[m];
-                    n += length(w)-1;
-                    break;
-                  }
-                }
-              if( c == "" )
-                c = txt[n] == " " ? "@" : txt[n] ;
-              if( TYPE == "overlap" )
-                printf( ( match(cprev,/^[.0-9]/) ? "\"%s%s\"\n" : "%s%s\n" ), cprev, c );
-              if( c == "@" && WORDEND == "yes" )
+            M = split( $2, words, " " );
+            for( m=1; m<=M; m++ ) {
+              N = word_to_chars( words[m], hmms, hmmtype, "no" );
+              for( n=1; n<=N; n++ )
+                printf( ( match(hmms[n],/^[.0-9]/) ? "\"%s\"\n" : "%s\n" ), hmms[n] );
+              if( WORDEND == "yes" )
                 printf( "{wordend}\n" );
-              printf( ( match(c,/^[.0-9]/) ? "\"%s\"\n" : "%s\n" ), c );
-              cprev = c;
+              printf("@\n");
             }
-            c = "@";
-            if( TYPE == "overlap" )
-              printf( ( match(cprev,/^[.0-9]/) ? "\"%s%s\"\n" : "%s%s\n" ), cprev, c );
-            if( WORDEND == "yes" )
-              printf( "{wordend}\n" );
-            printf( ( match(c,/^[.0-9]/) ? "\"%s\"\n" : "%s\n" ), c );
             printf(".\n");
           }
         }';
-
-  return 0;
 }
 
 ##
-## Function that transforms a word MLF to hmm sequences using given dictionary
+## Function that filters the TextEquiv in an XML Page file
 ##
-htrsh_mlf_word_to_hmms () {
-  local FN="htrsh_mlf_word_to_hmms";
+htrsh_pagexml_textequiv_filter () {
+  local FN="htrsh_pagexml_textequiv_filter";
+  if [ $# != 2 ]; then
+    { echo "$FN: Error: Incorrect input arguments";
+      echo "Description: Filters the TextEquiv in an XML Page file";
+      echo "Usage: $FN XMLFILE FILTER";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local XML="$1";
+  local FILTER="$2";
+
+  ### Check page ###
+  htrsh_pageimg_info "$XML" noinfo;
+  local TEXT=$( htrsh_pagexml_textequiv "$XML" -s all -f tab | sed -r 's|^[^ ]+\.([^. ]+ )|\1|' );
+  [ "$?" != 0 ] && return 1;
+
+  local updatetext=();
+  local N=$( echo "$TEXT" | wc -l );
+  for n in $(seq 1 $N); do
+    local text=$( echo "$TEXT" | sed -n ${n}p );
+    local tid=$( echo "$text" | sed 's| .*||' );
+    text=$( echo "$text" | sed 's|^[^ ]* ||' | "$FILTER" );
+    updatetext+=( "$tid" "$text" );
+  done
+  htrsh_pagexml_set_textequiv "$XML" "${updatetext[@]}";
+}
+
+##
+## Function that transforms a word MLF to character sequences using given dictionary
+##
+htrsh_mlf_word_to_chars () {
+  local FN="htrsh_mlf_word_to_chars";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Transforms a word MLF to an hmm sequence using given dictionary";
@@ -559,21 +601,119 @@ htrsh_mlf_to_tab () {
     return 1;
   fi
 
-  gawk '
-    { if( $0 == "." )
-        printf("\n");
-      else if( $0 != "#!MLF!#" ) {
-        if( NF==1 && ( match($1,/\.lab"$/) || match($1,/\.rec"$/) ) )
-          printf( "%s", gensub( /^".*\/(.+)\.[lr][ae][bc]"$/, "\\1", 1, $1 ) );
-        else {
-          if( NF > 1 )
-            $1 = $3;
-          if( match($1,/^".+"$/) )
-            $1 = gensub( /\\"/, "\"", "g", substr($1,2,length($1)-2) );
-          printf(" %s",$1);
-        }
+  gawk -v PROPERMLF="no" -v FN="$FN" '
+    { if( $0 == "#!MLF!#" )
+        PROPERMLF = "yes";
+      else if( match($1,/^".+\/(.+)\.[lr][ae][bc]"$/) ) {
+        printf( "%s", gensub( /^".+\/(.+)\.[lr][ae][bc]"$/, "\\1", 1, $1 ) );
+        PROPERMLF = "yes";
       }
-    }' $1;
+      else if( PROPERMLF == "no" ) {
+        printf("%s: error: input file does not seem to be in MLF format\n",FN) > "/dev/stderr";
+        exit(1);
+      }
+      else if( $0 == "." ) {
+        PROPERMLF = "no";
+        printf("\n");
+      }
+      else {
+        if( NF > 1 )
+          $1 = $3;
+        if( match($1,/^".+"$/) )
+          $1 = gensub( /\\"/, "\"", "g", substr($1,2,length($1)-2) );
+        printf(" %s",$1);
+      }
+    }' "$1";
+}
+
+##
+## Function that transforms a ground truth and a recognition file to the format used by tasas
+##
+htrsh_prep_tasas () {
+  local FN="htrsh_prep_tasas";
+  local FORMAT="mlf";
+  local SEPCHARS="no";
+  if [ $# -lt 2 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Transforms a ground truth and a recognition file to the format used by tasas";
+      echo "Usage: $FN GT REC [ Options ]";
+      echo "Options:";
+      echo " -f FORMAT    Input format, either 'mlf' or 'tab' (def.=$FORMAT)";
+      echo " -c (yes|no)  Whether to separate characters for CER computation (def.=$SEPCHARS)";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local GT="$1";
+  local REC="$2";
+  shift 2;
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "-f" ]; then
+      FORMAT="$2";
+    elif [ "$1" = "-c" ]; then
+      SEPCHARS="$2";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
+    shift 2;
+  done
+
+  if [ ! -e "$GT" ]; then
+    echo "$FN: error: ground truth file not found: $GT" 1>&2;
+    return 1;
+  elif [ ! -e "$REC" ]; then
+    echo "$FN: error: recognition file not found: $REC" 1>&2;
+    return 1;
+  fi
+
+  if [ "$FORMAT" = "mlf" ]; then
+    FORMAT="htrsh_mlf_to_tab";
+  else
+    FORMAT="cat";
+  fi
+
+  ### Create tasas file ###
+  gawk -v SEPCHARS="$SEPCHARS" -v SPECIAL=<( echo "$htrsh_special_chars" ) \
+    "$htrsh_gawk_func_word_to_chars"'
+    BEGIN {
+      load_special_chars( SPECIAL );
+    }
+    { if( ARGIND == 1 ) {
+        if( $1 in GT )
+          printf( "warning: duplicate ground truth %s\n", $1 ) > "/dev/stderr";
+        else
+          GT[$1] = $0;
+      }
+      else if( !( $1 in GT ) )
+        printf( "warning: no ground truth for %s\n", $1 ) > "/dev/stderr";
+      else {
+        NWORDS = split( GT[$1], gt );
+        for( w=2; w<=NWORDS; w++ ) {
+          if( SEPCHARS == "no" )
+            printf( w==2 ? "%s" : " %s", gt[w] );
+          else {
+            NCHARS = word_to_chars( gt[w], chars, "char", "no" );
+            printf( w==2 ? "%s" : " {space} %s", chars[1] );
+            for( c=2; c<=NCHARS; c++ )
+              printf( " %s", chars[c] );
+          }
+        }
+        printf("|");
+        for( w=2; w<=NF; w++ ) {
+          if( SEPCHARS == "no" )
+            printf( w==2 ? "%s" : " %s", $w );
+          else {
+            NCHARS = word_to_chars( $w, chars, "char", "no" );
+            printf( w==2 ? "%s" : " {space} %s", chars[1] );
+            for( c=2; c<=NCHARS; c++ )
+              printf( " %s", chars[c] );
+          }
+        }
+        printf("\n");
+      }
+    }' <( $FORMAT "$GT" ) <( $FORMAT "$REC" );
 }
 
 ##
@@ -582,7 +722,7 @@ htrsh_mlf_to_tab () {
 htrsh_pageimg_info () {
   local FN="htrsh_pageimg_info";
   local XML="$1";
-  local VAL=( -e ); [ "$htrsh_valschema" = "yes" ] && VAL+=( -s "$htrsh_pagexsd" );
+  local VAL=( val -e ); [ "$htrsh_valschema" = "yes" ] && VAL+=( -s "$htrsh_pagexsd" );
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Checks and extracts basic info (XMLDIR, IMDIR, IMFILE, XMLBASE, IMBASE, IMEXT, IMSIZE, IMRES, RESSRC) from an XML Page file and respective image";
@@ -592,7 +732,7 @@ htrsh_pageimg_info () {
   elif [ ! -f "$XML" ]; then
     echo "$FN: error: page file not found: $XML" 1>&2;
     return 1;
-  elif [ $(xmlstarlet val ${VAL[@]} "$XML" | grep ' invalid$' | wc -l) != 0 ]; then
+  elif [ $(xmlstarlet "${VAL[@]}" "$XML" | grep ' invalid$' | wc -l) != 0 ]; then
     echo "$FN: error: invalid page file: $XML" 1>&2;
     return 1;
   elif [ $(xmlstarlet sel -t -m '//*/@id' -v . -n "$XML" 2>/dev/null | sort | uniq -d | wc -l) != 0 ]; then
@@ -1295,7 +1435,7 @@ htrsh_pagexml_relabel () {
     <xsl:copy>
       <xsl:attribute name="id">
         <xsl:value-of select="'"'t'"'"/>
-        <xsl:number count="//_:TextRegion"/>
+        <xsl:number count="//_:TextRegion" format="01"/>
       </xsl:attribute>
       <xsl:apply-templates select="@*[local-name() != '"'id'"'] | node()" />
     </xsl:copy>
@@ -1324,7 +1464,7 @@ htrsh_pagexml_relabel () {
     <xsl:copy>
       <xsl:attribute name="id">
         <xsl:value-of select="concat(../@id,&quot;_l&quot;)"/>
-        <xsl:number count="//_:TextRegion/_:TextLine"/>
+        <xsl:number count="//_:TextRegion/_:TextLine" format="01"/>
       </xsl:attribute>
       <xsl:apply-templates select="@*[local-name() != '"'id'"'] | node()" />
     </xsl:copy>
@@ -2340,6 +2480,83 @@ htrsh_feats_htk_to_kaldi () {
   return $?;
 }
 
+
+htrsh_pageimg_extract_linefeats_fast () {
+  local FN="htrsh_pageimg_extract_linefeats_fast";
+  local OUTDIR=".";
+  local FEATLST="/dev/null";
+  local PBASE="";
+  local HEIGHT="";
+  local REPLC="yes";
+  local SRC="lines";
+  if [ $# -lt 2 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Extracts line features from an image given its XML Page file";
+      echo "Usage: $FN XMLIN XMLOUT [ Options ]";
+      echo "Options:";
+      echo " -d OUTDIR   Output directory for features (def.=$OUTDIR)";
+      echo " -l FEATLST  Output list of features to file (def.=$FEATLST)";
+      echo " -b PBASE    Project features using given base (def.=false)";
+      echo " -h HEIGHT   Normalize line height (def.=false)";
+      echo " -c (yes|no) Whether to replace Coords/@points with the features contour (def.=$REPLC)";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local XML="$1";
+  local XMLOUT="$2";
+  shift 2;
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "-d" ]; then
+      OUTDIR="$2";
+    elif [ "$1" = "-l" ]; then
+      FEATLST="$2";
+    elif [ "$1" = "-b" ]; then
+      PBASE="-b $2";
+    elif [ "$1" = "-c" ]; then
+      REPLC="$2";
+    elif [ "$1" = "-h" ]; then
+      HEIGHT="$2";
+    elif [ "$1" = "-s" ]; then
+      SRC="$2";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
+    shift 2;
+  done
+
+  ### Check XML file ###
+  local $htrsh_infovars;
+  htrsh_pageimg_info "$XML";
+  [ "$?" != 0 ] && return 1;
+
+  local XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_coords";
+  local TMP="${TMPDIR:-/tmp}";
+  TMP=$(mktemp -d --tmpdir="$TMP" ${FN}_XXXXX);
+
+  textLineFeats -VVV \
+    --outdir "$TMP" --format htk --xpath "$XPATH" \
+    --slope="$htrsh_feat_deslope" --slant="$htrsh_feat_deslant" \
+    --fcontour="$htrsh_feat_contour" --fpgram="$htrsh_feat_contour" --fpoints="$REPLC" \
+    --featlist --saveclean --savexml \
+    --sliding "$htrsh_dotmatrix_shift":"$htrsh_dotmatrix_win" \
+    --sampdims "$htrsh_dotmatrix_W"x"$htrsh_dotmatrix_H" \
+    "$XML" > "$TMP/feats.lst" 2> "$TMP/feats.log";
+  [ "$?" != 0 ] &&
+    echo "$FN: error: problems extracting features" 1>&2 &&
+    return 1;
+
+  mv "$TMP"/*.fea "$TMP"/*_clean.png "$OUTDIR";
+  mv "$TMP/$IMBASE.xml" "$XMLOUT";
+  sed 's|^|'"$OUTDIR"'/|; s|$|.fea|;' "$TMP/feats.lst" > "$FEATLST";
+
+  xmlstarlet ed --inplace -d //@slope -d //@slant "$XMLOUT";
+
+  mv "$TMP" "$OUTDIR";
+}
+
 ##
 ## Function that extracts line features from an image given its XML Page file
 ##
@@ -2600,7 +2817,7 @@ htrsh_pageimg_extract_linefeats () {
 ##
 ## GAWK functions to convert a word to an array of hmm names
 ##
-htrsh_gawk_func_word_to_hmms='
+htrsh_gawk_func_word_to_chars='
   function load_special_chars( SPECIAL,   n,c,line,sline ) {
     delete SCHAR;
     delete SWORD;
@@ -2618,20 +2835,21 @@ htrsh_gawk_func_word_to_hmms='
     close( SPECIAL );
   }
 
-  function word_to_hmms( word, hmms, hmmtype, endspace,   C,N,n,m,w,txt,cprev ) {
+  function word_to_chars( word, hmms, hmmtype, endspace,   C,N,n,m,w,txt,cprev ) {
     delete hmms;
     C = 0;
     N = split( word, txt, "" );
     cprev = "@";
     for( n=1; n<=N; n++ ) {
-      if( txt[n] in SCHAR ) {
+      c = txt[n];
+      if( c in SCHAR ) {
         for( m=1; m<=NSPECIAL; m++ ) {
           w = SWORD[m];
           if( w == substr(word,n,length(w)) ) {
             if( hmmtype == "overlap" )
-              hmms[++C] = sprintf( "%s%s", cprev, SMARK[m] );
+              hmms[++C] = ( cprev SMARK[m] );
             cprev = SMARK[m];
-            hmms[++C] = sprintf( "%s", SMARK[m] );
+            hmms[++C] = SMARK[m];
             n += length(w)-1;
             break;
           }
@@ -2639,15 +2857,26 @@ htrsh_gawk_func_word_to_hmms='
         if( m <= NSPECIAL )
           continue;
       }
+      if( n+1 <= N ) {
+        cc = txt[n+1];
+        if( ( cc >= "\xcc\x80"     && cc <= "\xcd\xaf" )     ||  # Combining Diacritical Marks 0300-036F
+            ( cc >= "\xe1\xaa\xb0" && cc <= "\xe1\xab\xbf" ) ||  # Combining Diacritical Marks Extended 1AB0-1AFF
+            ( cc >= "\xe1\xb7\x80" && cc <= "\xe1\xb7\xbf" ) ||  # Combining Diacritical Marks Supplement 1DC0-1DFF
+            ( cc >= "\xe2\x83\x90" && cc <= "\xe2\x83\xbf" ) ||  # Combining Diacritical Marks for Symbols 20D0-20FF
+            ( cc >= "\xef\xb8\xa0" && cc <= "\xef\xb8\xaf" ) ) { # Combining Half Marks FE20-FE2F
+          c = ( c cc );
+          n++;
+        }
+      }
       if( hmmtype == "overlap" )
-        hmms[++C] = sprintf( "%s%s", cprev, txt[n] );
-      cprev = txt[n];
-      hmms[++C] = sprintf( "%s", txt[n] );
+        hmms[++C] = ( cprev c );
+      cprev = c;
+      hmms[++C] = c;
     }
     if( hmmtype == "overlap" )
-      hmms[++C] = sprintf( "%s@", cprev );
+      hmms[++C] = ( cprev "@" );
     if( endspace == "yes" )
-      hmms[++C] = sprintf( "@" );
+      hmms[++C] = "@";
     return C;
   }';
 
@@ -2657,21 +2886,47 @@ htrsh_gawk_func_word_to_hmms='
 htrsh_create_dict () {
   local FN="htrsh_create_dict";
   local EXTR="no";
-  local HMMSEQ="no";
+  local CHARSEQ="no";
   local ENDSPACE="no";
+  local WSPACE="no";
   if [ $# -lt 3 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Creates a dictionary from file lists with the representations of the words";
       echo "Usage: $FN ORIGINAL CANONIC DIPLOMATIC [ Options ]";
       echo "Options:";
-      echo " -S (yes|no)     Whether to add <s> and </s> to dictionary (def.=$EXTR)";
-      echo " -H (yes|no)     Whether to transform diplomatic to hmm sequence (def.=$HMMSEQ)";
+      echo " -S (yes|no)     Whether to add start/end labels to dictionary (def.=$EXTR)";
+      echo " -H (yes|no)     Whether to transform diplomatic to a character sequence (def.=$CHARSEQ)";
       echo " -E (yes|no)     Whether to add space at end of words (def.=$ENDSPACE)";
+      echo " -W (yes|no)     Whether to add space as a word (def.=$WSPACE)";
+      #echo " --[no-]extr-labs  Whether to add start/end labels to dictionary (def.=$EXTR)";
+      #echo " --[no-]charseq    Whether to transform diplomatic to a character sequence (def.=$CHARSEQ)";
+      #echo " --[no-]endspace   Whether to add space at end of words (def.=$ENDSPACE)";
+      #echo " --[no-]space      Whether to add space as a word (def.=$WSPACE)";
     } 1>&2;
     return 1;
   fi
 
   ### Parse input arguments ###
+  #local OPTS=$( getopt --long extr-labs,no-extr-labs,charseq,no-charseq,endspace,no-endspace,space,no-space -n "$FN" -- "$@" );
+  #eval set -- "$OPTS";
+  #while true; do
+  #  case "$1" in
+  #    --extr-labs )    EXTR="yes";     ;;
+  #    --no-extr-labs ) EXTR="no";      ;;
+  #    --charseq )      CHARSEQ="yes";  ;;
+  #    --no-charseq )   CHARSEQ="no";   ;;
+  #    --endspace )     ENDSPACE="yes"; ;;
+  #    --no-endspace )  ENDSPACE="no";  ;;
+  #    --spase )        WSPACE="yes";   ;;
+  #    --no-spase )     WSPACE="yes";   ;;
+  #    -- ) shift; break ;;
+  #    * )
+  #      echo "$FN: error: unexpected input argument: $1" 1>&2;
+  #      return 1;
+  #  esac
+  #  shift;
+  #done
+
   local ORIGINAL="$1";
   local CANONIC="$2";
   local DIPLOMATIC="$3";
@@ -2680,9 +2935,11 @@ htrsh_create_dict () {
     if [ "$1" = "-S" ]; then
       EXTR="$2";
     elif [ "$1" = "-H" ]; then
-      HMMSEQ="$2";
+      CHARSEQ="$2";
     elif [ "$1" = "-E" ]; then
       ENDSPACE="$2";
+    elif [ "$1" = "-W" ]; then
+      WSPACE="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -2692,9 +2949,9 @@ htrsh_create_dict () {
 
   ### Create dictionary ###
   paste "$CANONIC" "$ORIGINAL" "$DIPLOMATIC" \
-    | gawk -v hmmtype="$htrsh_hmm_type" -v hmmseq="$HMMSEQ" -v endspace="$ENDSPACE" \
-           -v extr="$EXTR" -v SPECIAL=<( echo "$htrsh_special_chars" ) \
-        "$htrsh_gawk_func_word_to_hmms"'
+    | gawk -v hmmtype="$htrsh_hmm_type" -v charseq="$CHARSEQ" -v extr="$EXTR" \
+           -v endspace="$ENDSPACE" -v wspace="$WSPACE" -v SPECIAL=<( echo "$htrsh_special_chars" ) \
+        "$htrsh_gawk_func_word_to_chars"'
         BEGIN {
           load_special_chars( SPECIAL );
           FS = "\t";
@@ -2708,6 +2965,8 @@ htrsh_create_dict () {
           }
         }
         END {
+          if( wspace == "yes" )
+            printf( "\"@\"\t[]\t1\t@\n" );
           if( extr == "yes" ) {
             printf( "\"<s>\"\t[]\t1\t@\n" );
             printf( "\"</s>\"\t[]\n" );
@@ -2726,10 +2985,10 @@ htrsh_create_dict () {
                 vprob = ( vprob ".0" );
               printf( "\"%s\"\t[%s]\t%s\t", wcanonic, variant, vprob );
               diplom = variant_diplom[canonic][variant];
-              if( hmmseq == "no" )
+              if( charseq == "no" )
                 printf( "%s\n", diplom );
               else {
-                N = word_to_hmms( diplom, hmms, hmmtype, endspace );
+                N = word_to_chars( diplom, hmms, hmmtype, endspace );
                 for( n=1; n<=N; n++ )
                   printf( n==1 ? "%s" : " %s", hmms[n] );
                 printf( "\n" );
@@ -3082,13 +3341,12 @@ htrsh_hmm_train () {
   if [ "$DIC" != "" ]; then
     local WMLF="$MLF";
     MLF="$OUTDIR/train.mlf";
-    htrsh_mlf_word_to_hmms "$WMLF" "$DIC" \
+    htrsh_mlf_word_to_chars "$WMLF" "$DIC" \
       | sed '/^"\*\/.*\.lab"$/ s|$|\n@|;' \
       > "$MLF";
     [ "$?" != 0 ] &&
       echo "$FN: error: MLF does not appear to be word based according to dictionary" 1>&2 &&
       return 1;
-    [ "$EXCLREALIGN" != "" ] &&
     local REALIGNLST="$FEATLST";
     if [ "$EXCLREALIGN" != "" ]; then
       REALIGNLST="$OUTDIR/realign.lst";
@@ -3259,6 +3517,8 @@ htrsh_hmm_train () {
             echo "$FN: error: problems realigning with HVite" 1>&2 &&
             return 1;
 
+          ln -fs "realigned.mlf~$k" "$OUTDIR/realigned.mlf";
+
           awk '
             { if( ARGIND == 1 )
                 realigned[$1] = "";
@@ -3272,7 +3532,8 @@ htrsh_hmm_train () {
 
           gawk '
             { if( match($0,/^".+\/[^/]+\.rec"$/) )
-                $0 = gensub( /^".+\/([^/]+)\.rec"$/, "\"*/\\1.lab\"\n@", 1, $0 );
+                #$0 = gensub( /^".+\/([^/]+)\.rec"$/, "\"*/\\1.lab\"\n@", 1, $0 );
+                $0 = gensub( /^".+\/([^/]+)\.rec"$/, "\"*/\\1.lab\"", 1, $0 );
               else if( NR > 1 && $0 != "." )
                 $0 = $3;
               print;
@@ -3326,8 +3587,13 @@ htrsh_hvite_parallel () {
 
   ### Parse input arguments ###
   local THREADS="$1";
+  shift;
+  if [ "$THREADS" -le 1 ]; then
+    "$@";
+    return $?;
+  fi
   local CMD=( "$2" );
-  shift 2;
+  shift;
 
   local TMP="${TMPDIR:-/tmp}";
   TMP=$(mktemp -d --tmpdir="$TMP" ${FN}_XXXXX);
@@ -3446,28 +3712,6 @@ htrsh_fix_mlf_quotes () {
 ## Function that fixes the quotes of rec MLFs
 ##
 htrsh_fix_rec_mlf_quotes () { htrsh_fix_mlf_quotes "$1" -c 3; }
-#htrsh_fix_rec_mlf_quotes () {
-#  local FN="htrsh_fix_rec_mlf_quotes";
-#  if [ $# -lt 1 ]; then
-#    { echo "$FN: Error: Not enough input arguments";
-#      echo "Description: Fixes the quotes of rec MLFs";
-#      echo "Usage: $FN MLF";
-#    } 1>&2;
-#    return 1;
-#  fi
-
-#  local MLF="$1"; [ "$MLF" = "-" ] && MLF="/dev/stdin";
-
-#  gawk '
-#    { if( NF >= 3 ) {
-#        if( match($3,/^\x27.*\x27$/) )
-#          $3 = gensub( /^\x27(.*)\x27$/, "\\1", 1, $3 );
-#        if( ! match($3,/^".+"$/) )
-#          $3 = ("\"" gensub( /\x22/, "\\\\\x22", "g", $3 ) "\"");
-#      }
-#      print;
-#    }' < "$MLF";
-#}
 
 ##
 ## Function that replaces special HMM model names with corresponding characters
@@ -3559,17 +3803,85 @@ htrsh_mlf_prepalign () {
 }
 
 ##
+## Function that prepares an MLF result of diplomatization for inserting alignment information in a Page XML
+##
+htrsh_mlf_diplom_prepalign () {
+  local FN="htrsh_mlf_diplom_prepalign";
+  if [ $# -lt 1 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Prepares an MLF result of diplomatization for inserting alignment information in a Page XML";
+      echo "Usage: $FN MLF DIC";
+    } 1>&2;
+    return 1;
+  fi
+
+  local MLF="$1";
+  local DICT="$2";
+
+  cat "$MLF" \
+    | awk '
+      { if( NF==1 || $3=="@" )
+          printf("%s\n",$0);
+        else
+          printf("%s ",$0);
+      }' \
+    | gawk '
+      { if( ARGIND == 1 ) {
+          full = substr($2,2,length($2)-2);
+          canon = match($1,/^".+"$/) ? 
+            gensub( /\\"/, "\"", "g", substr($1,2,length($1)-2) ) : $1 ;
+          $1 = $2 = $3 = "";
+          if( $NF == "@" )
+            NF--;
+          dipl = gensub( /^ +/, "", 1, $0 );
+          #printf("full=%s canon=%s dipl=%s\n",full,canon,dipl);
+          if( (canon,dipl) in dict )
+            printf("warning: duplicate dictionary entry: %s : %s : %s\n",canon,dipl,full) >> "/dev/stderr";
+          else
+            dict[canon,dipl] = full;
+        }
+        else if( NF == 1 || NF == 5 || match($0,/^".+\/[^/]+\.rec"$/) ) {
+          if( match($0,/^".+\/[^/]+\.rec"$/) )
+            $0 = gensub( /^".+\/([^/]+)\.rec"$/, "\"*/\\1.rec\"", 1, $0 );
+          else if( NF == 5 )
+            NF -= 2;
+          print;
+        }
+        else {
+          canon = $5;
+          space = "";
+          if( $(NF-1) == "@" ) {
+            space = ( $(NF-3) " " $(NF-2) " " $(NF-1) );
+            NF = NF-4;
+          }
+          dipl = $3;
+          for( n=8; n<NF; n+=4 )
+            dipl = ( dipl " " $n );
+          if( (canon,dipl) in dict )
+            printf("%s %s %s\n",$1,NF==5?$2:$(NF-2),dict[canon,dipl]);
+          else
+            printf("error: not in dict: %s %s %s :: %s\n",$1,$(NF-2),canon,dipl) >> "/dev/stderr";
+          if( space )
+            print space;
+        }
+      }' "$DICT" - ;
+}
+
+
+##
 ## Function that inserts alignment information in an XML Page given a rec MLF
 ##
-htrsh_pagexml_insertalign_lines () {
+htrsh_pagexml_insertalign_lines () {(
   local FN="htrsh_pagexml_insertalign_lines";
   local SRC="lines";
+  local MAP="";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Inserts alignment information in an XML Page given a rec MLF";
       echo "Usage: $FN XML MLF [ Options ]";
       echo "Options:";
       echo " -s SOURCE    Source of TextEquiv, either 'regions' or 'lines' (def.=$SRC)";
+      echo " -M MAPFILE   Diplomatic text mapping file (def.=none)";
     } 1>&2;
     return 1;
   fi
@@ -3581,6 +3893,8 @@ htrsh_pagexml_insertalign_lines () {
   while [ $# -gt 0 ]; do
     if [ "$1" = "-s" ]; then
       SRC="$2";
+    elif [ "$1" = "-M" ]; then
+      MAP="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -3588,11 +3902,14 @@ htrsh_pagexml_insertalign_lines () {
     shift 2;
   done
 
-  if ! [ -e "$XML" ]; then
+  if [ ! -e "$XML" ]; then
     echo "$FN: error: XML Page file not found: $XML" 1>&2;
     return 1;
-  elif ! [ -e "$MLF" ]; then
+  elif [ ! -e "$MLF" ]; then
     echo "$FN: error: MLF file not found: $MLF" 1>&2;
+    return 1;
+  elif [ "$MAP" != "" ] && [ ! -e "$MAP" ]; then
+    echo "$FN: error: MAP file not found: $MAP" 1>&2;
     return 1;
   fi
 
@@ -3601,7 +3918,7 @@ htrsh_pagexml_insertalign_lines () {
   htrsh_pageimg_info "$XML" noimg;
   [ "$?" != 0 ] && return 1;
 
-  ### Prepare command to add alignments to XML ###
+  ### Prepare alignment information for each line to align ###
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating Page XML with alignments ..." 1>&2;
 
   local ids=$( sed -n '/\/'"$IMBASE"'\.[^.]\+\.[^.]\+\.rec"$/{ s|.*\.\([^.]\+\)\.rec"$|\1|; p; }' "$MLF" );
@@ -3689,11 +4006,25 @@ htrsh_pagexml_insertalign_lines () {
   local prevreg="";
   local wbreak="no";
 
+  insert_nondipl_word () {
+    wid="${id}_w$(printf %.3d $rw)";
+    xmledit+=( -s "//*[@id='$id']" -t elem -n TMPNODE );
+    xmledit+=( -i //TMPNODE -t attr -n id -v "$wid" );
+    xmledit+=( -s //TMPNODE -t elem -n Coords );
+    xmledit+=( -i //TMPNODE/Coords -t attr -n points -v "0,0 0,0" );
+    xmledit+=( -r //TMPNODE -v Word );
+    xmledit+=( -s "//*[@id='$wid']" -t elem -n TextEquiv );
+    xmledit+=( -s "//*[@id='$wid']/TextEquiv" -t elem -n Unicode -v "${wmap[0]}" );
+    rw=$((rw+1));
+  }
+
+  ### Insert alignment for each sample ###
   local n=0;
   for id in $ids; do
     n=$((n+1));
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): alignments for line $n (id=$id) ..." 1>&2;
 
+    ### Prepare command to add alignments to XML ###
     local xmledit=( -d "//*[@id='$id']/_:Word" );
 
     if [ "$htrsh_align_contour" = "yes" ]; then
@@ -3710,7 +4041,21 @@ htrsh_pagexml_insertalign_lines () {
     #TE=$(($(date +%s%N)/1000000)); echo "time 1: $((TE-TS)) ms" 1>&2; TS="$TE";
 
     local reg=$(xmlstarlet sel -t -v "//*[@id='$id']/../@id" "$XML");
-    [ "$reg" != "$prevreg" ] && local rw="1";
+
+    #[ "$reg" != "$prevreg" ] && local rw="1";
+    if [ "$reg" != "$prevreg" ]; then
+      if [ "$MAP" != "" ]; then
+        [ "$prevreg" != "" ] && [ "$rw" -le "${#WMAP[@]}" ] &&
+          echo "$FN: error: unaligned words accoring to MAP file: regid=$reg word=#$rw" 1>&2 &&
+          return 1;
+        local pIFS="$IFS";
+        local IFS=$'\n';
+        local WMAP=($(grep "^$reg " "$MAP" | sed 's|^[^ ]* ||'));
+        IFS="$pIFS";
+      fi
+      local rw="1";
+    fi
+
     prevreg="$reg";
 
     ### Word level alignments ###
@@ -3718,7 +4063,17 @@ htrsh_pagexml_insertalign_lines () {
     local w;
     for w in $(seq 1 $W); do
       #TE=$(($(date +%s%N)/1000000)); echo "time 2: $((TE-TS)) ms" 1>&2; TS="$TE";
-      #local ww=$(printf %.2d $w);
+
+      [ "$MAP" != "" ] &&
+        while true; do
+          [ "$rw" -gt "${#WMAP[@]}" ] &&
+            echo "$FN: error: found more words than defined in the MAP file: regid=$reg word=#$rw" 1>&2 &&
+            return 1;
+          wmap=( ${WMAP[$((rw-1))]} );
+          [ "${#wmap[@]}" = 2 ] && break;
+          insert_nondipl_word;
+        done
+
       local wid="${id}_w$(printf %.3d $rw)";
       local pS=$(echo "$align" | grep -n ' @$' | sed -n "$w{s|:.*||;p;}"); pS=$((pS+1));
       local pE=$(echo "$align" | grep -n ' @$' | sed -n "$((w+1)){s|:.*||;p;}"); pE=$((pE-1));
@@ -3748,37 +4103,37 @@ htrsh_pagexml_insertalign_lines () {
                   | imgccomp -V0 -NJS -A 0.1 -D $htrsh_align_dilradi -R 2,2,2,2 - 2>/dev/null );
       fi
 
-      if [ "$cpts" = "" ] && [ "$htrsh_align_isect" = "yes" ]; then
-        local AWK_ISECT='
-          BEGIN {
-            printf( "convert -fill white -stroke white +antialias" );
-          }
-          { if( NR == 1 ) {
-              mn_x=$1; mx_x=$1;
-              mn_y=$2; mx_y=$2;
-              for( n=3; n<=NF; n+=2 ) {
-                if( mn_x > $n ) mn_x = $n;
-                if( mx_x < $n ) mx_x = $n;
-                if( mn_y > $(n+1) ) mn_y = $(n+1);
-                if( mx_y < $(n+1) ) mx_y = $(n+1);
-              }
-              w = mx_x-mn_x+1;
-              h = mx_y-mn_y+1;
+      local AWK_ISECT='
+        BEGIN {
+          printf( "convert -fill white -stroke white +antialias" );
+        }
+        { if( NR == 1 ) {
+            mn_x=$1; mx_x=$1;
+            mn_y=$2; mx_y=$2;
+            for( n=3; n<=NF; n+=2 ) {
+              if( mn_x > $n ) mn_x = $n;
+              if( mx_x < $n ) mx_x = $n;
+              if( mn_y > $(n+1) ) mn_y = $(n+1);
+              if( mx_y < $(n+1) ) mx_y = $(n+1);
             }
-            printf( " ( -size %dx%d xc:black -draw polygon", w, h );
-            for( n=1; n<=NF; n+=2 )
-              printf( "_%d,%d", $n-mn_x, $(n+1)-mn_y );
-            printf( " )" );
+            w = mx_x-mn_x+1;
+            h = mx_y-mn_y+1;
           }
-          END {
-            printf( " -compose darken -composite -page %s+%d+%d miff:-", sz, mn_x, mn_y );
-          }';
+          printf( " ( -size %dx%d xc:black -draw polygon", w, h );
+          for( n=1; n<=NF; n+=2 )
+            printf( "_%d,%d", $n-mn_x, $(n+1)-mn_y );
+          printf( " )" );
+        }
+        END {
+          printf( " -compose darken -composite -page %s+%d+%d miff:-", sz, mn_x, mn_y );
+        }';
+      if [ "$cpts" = "" ] && [ "$htrsh_align_isect" = "yes" ]; then
         local polydraw=( $(
           { echo "$pts";
             echo "$contour";
           } | awk -F'[ ,]' -v sz=$size "$AWK_ISECT" ) );
         cpts=$( "${polydraw[@]//_/ }" | imgccomp -V0 -JS - );
-        [ "$cpts" = "" ] && echo "failed to obtain intersection for word $wid";
+        [ "$cpts" = "" ] && echo "failed to obtain intersection for word $wid" 1>&2;
       fi
 
       [ "$cpts" != "" ] && pts="$cpts";
@@ -3805,24 +4160,6 @@ htrsh_pagexml_insertalign_lines () {
       fi
       rw=$((rw+1));
 
-      #if [ "$wbreak" = "yes" ]; then
-      #  if [ $(echo "$text" | grep -c $'^\xC2\xAD') != 0 ]; then
-      #    wid+="_part2";
-      #  elif [ "$SRC" = "regions" ]; then
-      #    echo "$FN: error: expected soft hyphen for second part of word $rw ($textpart1...) in region $reg: $XML" 1>&2;
-      #  fi
-      #  wbreak="no";
-      #  rw=$((rw+1));
-      #else
-      #  if [ $(echo "$text" | grep -c $'\xC2\xAD$') != 0 ]; then
-      #    wid+="_part1";
-      #    wbreak="yes";
-      #    local textpart1="$text";
-      #  else
-      #    rw=$((rw+1));
-      #  fi
-      #fi
-
       xmledit+=( -s "//*[@id='$id']" -t elem -n TMPNODE );
       xmledit+=( -i //TMPNODE -t attr -n id -v "$wid" );
       xmledit+=( -s //TMPNODE -t elem -n Coords );
@@ -3830,6 +4167,7 @@ htrsh_pagexml_insertalign_lines () {
       xmledit+=( -r //TMPNODE -v Word );
 
       ### Character level alignments ###
+      # @todo fails when doing region alignment
       if [ "$htrsh_align_chars" = "yes" ]; then
         local g=1;
         local c;
@@ -3842,6 +4180,7 @@ htrsh_pagexml_insertalign_lines () {
                 echo "$wpts";
               } | awk -F'[ ,]' -v sz=$size "$AWK_ISECT" ) );
             pts=$( "${polydraw[@]//_/ }" | imgccomp -V0 -JS - );
+            [ "$pts" = "" ] && echo "failed to obtain intersection for character ${wid}_g${gg}" 1>&2;
             # @todo character polygons overlap slightly, possible solution: reduce width of parallelograms by 1 pixel in each side
           fi
           pts=$(echo "$pts" | sed '/^[^ ]*,[^ ]*$/s|\(.*\)|\1 \1|');
@@ -3865,10 +4204,18 @@ htrsh_pagexml_insertalign_lines () {
 
       if [ "$htrsh_align_addtext" = "yes" ]; then
         local text=$(echo "$align" | sed -n "$pS,$pE{s|.* ||;p;}" | tr -d '\n');
+        [ "$MAP" != "" ] && text="${wmap[0]}";
         xmledit+=( -s "//*[@id='$wid']" -t elem -n TextEquiv );
         xmledit+=( -s "//*[@id='$wid']/TextEquiv" -t elem -n Unicode -v "$text" );
         #TE=$(($(date +%s%N)/1000000)); echo "time 6: $((TE-TS)) ms" 1>&2; TS="$TE";
       fi
+
+      [ "$MAP" != "" ] &&
+        while [ "$rw" -le "${#WMAP[@]}" ]; do
+          wmap=( ${WMAP[$((rw-1))]} );
+          [ "${#wmap[@]}" = 2 ] && break;
+          insert_nondipl_word;
+        done
     done # for w in $(seq 1 $W); do
 
     xmledit+=( -m "//*[@id='$id']/_:TextEquiv" "//*[@id='$id']" );
@@ -3879,31 +4226,53 @@ htrsh_pagexml_insertalign_lines () {
       return 1;
   done
 
-  return 0;
-}
+  [ "$MAP" != "" ] && [ "$rw" -le "${#WMAP[@]}" ] &&
+    echo "$FN: error: unaligned words accoring to MAP file: regid=$reg word=#$rw" 1>&2 &&
+    return 1;
 
+  [ "$MAP" = "" ] &&
+    htrsh_fix_rec_names "$XML";
+
+  return 0;
+)}
 
 ##
-## Function that sorts an MLF alphabetically by the sample names
+## Function that sorts an MLF alphabetically or using a given order list
 ##
 htrsh_mlf_sort () {
   local FN="htrsh_mlf_sort";
-  if [ $# != 0 ]; then
+  if [ $# -lt 1 ] || [ $# -gt 2 ]; then
     { echo "$FN: Error: Incorrect input arguments";
-      echo "Description: Sorts an MLF alphabetically by the sample names";
-      echo "Usage: $FN < MLF";
+      echo "Description: Sorts an MLF alphabetically or using a given order list";
+      echo "Usage: $FN [ORDERLST] MLF";
     } 1>&2;
     return 1;
   fi
 
-  awk '
-    { if( $0 != "#!MLF!#" )
-        printf( $0 == "." ? "\t%s\n" : "\t%s", $0 );
-    }' \
-    | sed 's|^\t||' \
-    | sort \
+  local SRT=""; [ $# = 2 ] && SRT="-k 1n,1";
+
+  gawk -v NUM="$#" '
+    { if( NUM == 2 && ARGIND == 1 ) {
+        ORDER[$1] = FNR;
+        N = FNR;
+      }
+      else {
+        if( NUM == 2 && match($0,/^".*\/.+\.[lr][ae][bc]"$/) ) {
+          samp = gensub( /^".*\/(.+)\.[lr][ae][bc]"$/, "\\1", 1, $0 );
+          num = samp in ORDER ? ORDER[samp] : N+1;
+          printf( "%d %s", num, $0 );
+        }
+        else if( $0 != "#!MLF!#" )
+          printf( $0 == "." ? "\t%s\n" : "\t%s", $0 );
+      }
+    }' "$@" \
+    | sort $SRT \
+    | sed 's|^\t||; s|^[0-9]* ||;' \
     | awk '
-        BEGIN { FS="\t"; }
+        BEGIN {
+          FS="\t";
+          print("#!MLF!#");
+        }
         { for( n=1; n<=NF; n++ )
             printf( "%s\n", $n );
         }';
@@ -4003,13 +4372,15 @@ htrsh_mlf_align_blind () {
 ##
 htrsh_pageimg_forcealign_lines () {
   local FN="htrsh_pageimg_forcealign_lines";
-  local TMPDIR=".";
+  local TMP="${TMPDIR:-/tmp}";
+  local DIPLOMATIZER=();
   if [ $# -lt 3 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Does a forced alignment at a line level for a given XML Page, feature list and model";
       echo "Usage: $FN XML FEATDIR MODEL [ Options ]";
       echo "Options:";
-      echo " -d TMPDIR    Directory for temporal files (def.=$TMPDIR)";
+      echo " -d TMPDIR       Directory for temporal files (def.=$TMP)";
+      echo " -D DIPLOMATIZER Diplomatizer pipe command, e.g. remove expansions (def.=none)";
     } 1>&2;
     return 1;
   fi
@@ -4021,7 +4392,9 @@ htrsh_pageimg_forcealign_lines () {
   shift 3;
   while [ $# -gt 0 ]; do
     if [ "$1" = "-d" ]; then
-      TMPDIR="$2";
+      TMP="$2";
+    elif [ "$1" = "-D" ]; then
+      DIPLOMATIZER=( -D "$2" );
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -4051,7 +4424,6 @@ htrsh_pageimg_forcealign_lines () {
   local pIFS="$IFS";
   local IFS=$'\n';
   local FBASE="$FEATDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
-  #local FEATLST=( $( xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines[$htrsh_xpath_coords and $htrsh_xpath_textequiv]" -o "$FBASE." -v ../@id -o . -v @id -o ".fea" -n "$XML" ) );
   local FEATLST=( $( xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines" -o "$FBASE." -v ../@id -o . -v @id -o ".fea" -n "$XML" ) );
   IFS="$pIFS";
 
@@ -4061,7 +4433,7 @@ htrsh_pageimg_forcealign_lines () {
     return 1;
 
   ### Create MLF from XML ###
-  { echo '#!MLF!#'; htrsh_pagexml_textequiv "$XML" -f mlf-chars; } > "$TMPDIR/$B.mlf";
+  htrsh_pagexml_textequiv "$XML" -f mlf-chars "${DIPLOMATIZER[@]}" -H yes > "$TMP/$B.mlf";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems creating MLF file: $XML" 1>&2 &&
     return 1;
@@ -4071,74 +4443,58 @@ htrsh_pageimg_forcealign_lines () {
   local DIC=$(echo "$HMMLST" | awk '{printf("\"%s\" [%s] 1.0 %s\n",$1,$1,$1)}');
 
   ### Do forced alignment with HVite ###
-  printf "%s\n" "${FEATLST[@]}" > "$TMPDIR/$B.lst";
-  HVite $htrsh_HTK_HVite_align_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$TMPDIR/$B.lst" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
-# @todo option -a ???
+  printf "%s\n" "${FEATLST[@]}" > "$TMP/$B.lst";
+  HVite $htrsh_HTK_HVite_align_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$TMP/$B.lst" -a -I "$TMP/$B.mlf" -i "$TMP/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
   [ "$?" != 0 ] &&
     echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
     return 1;
 
-  sed '/\.rec"$/s|^".*/|"*/|;' -i "$TMPDIR/${B}_aligned.mlf";
+  sed '/\.rec"$/s|^".*/|"*/|;' -i "$TMP/${B}_aligned.mlf";
 
   ### Blindly align failed lines ###
   local missing=( $(
-    { sed 's|.*/||; s|\.fea$||;' "$TMPDIR/$B.lst";
+    { sed 's|.*/||; s|\.fea$||;' "$TMP/$B.lst";
       sed -n '
         /\/'"$IMBASE"'\.[^.]\+\.[^.]\+\.rec"$/ {
           s|.*/||; s|\.rec"$||;
           p;
-        }' "$TMPDIR/${B}_aligned.mlf";
+        }' "$TMP/${B}_aligned.mlf";
     } | sort | uniq -u ) );
 
-  if [ "${#missing[@]}" != 0 ]; then
-    echo "$FN: warning: failed lines will be blindly aligned: $B :: $(echo ${missing[@]//$IMBASE./})" 1>&2;
-    mv "$TMPDIR/${B}_aligned.mlf" "$TMPDIR/${B}_aligned.mlf-";
-    { echo '#!MLF!#';
-      { cat "$TMPDIR/${B}_aligned.mlf-";
-        htrsh_mlf_align_blind "$TMPDIR/$B.mlf" "$FEATDIR" "${missing[@]}";
-      } | htrsh_mlf_sort;
-    } > "$TMPDIR/${B}_aligned.mlf";
+  if [ "${#missing[@]}" = "${#FEATLST[@]}" ]; then
+    echo "$FN: error: HVite failed to align all lines, aborting: $XML" 1>&2 &&
+    return 1;
+  elif [ "${#missing[@]}" != 0 ]; then
+    echo "$FN: warning: ${#missing[@]} failed lines will be blindly aligned: $B :: $(echo ${missing[@]//$IMBASE./})" 1>&2;
+    mv "$TMP/${B}_aligned.mlf" "$TMP/${B}_aligned.mlf-";
+    { cat "$TMP/${B}_aligned.mlf-";
+      htrsh_mlf_align_blind "$TMP/$B.mlf" "$FEATDIR" "${missing[@]}";
+    } > "$TMP/${B}_aligned.mlf";
+  fi
+
+  mv "$TMP/${B}_aligned.mlf" "$TMP/${B}_aligned.mlf-";
+  htrsh_mlf_sort <( sed 's|.*/||; s|\.fea$||;' "$TMP/$B.lst" ) "$TMP/${B}_aligned.mlf-" > "$TMP/${B}_aligned.mlf";
+
+  ### Create diplomatic mapping ###
+  if [ "${#DIPLOMATIZER[@]}" != 0 ]; then
+    htrsh_pagexml_textequiv "$XML" -f tab \
+      | sed -r 's|^[^ ]+\.([^. ]+)\.[^. ]+ |\1 |' \
+      | awk '{ for( n=2; n<=NF; n++ ) printf("%s %s\n",$1,$n); }' \
+      > "$TMP/$B.txt";
+    sed -r 's|^[^ ]+ ||' "$TMP/${B}.txt" \
+      | "${DIPLOMATIZER[1]}" \
+      | paste -d " " "$TMP/${B}.txt" - \
+      > "$TMP/${B}_map.txt";
+    DIPLOMATIZER=( -M "$TMP/${B}_map.txt" );
   fi
 
   ### Insert alignment information in XML ###
-  htrsh_pagexml_insertalign_lines "$XML" "$TMPDIR/${B}_aligned.mlf";
+  htrsh_pagexml_insertalign_lines "$XML" "$TMP/${B}_aligned.mlf" "${DIPLOMATIZER[@]}";
   [ "$?" != 0 ] &&
     return 1;
 
-  #local missing=$(
-  #        { sed 's|.*\.\([^.]\+\)\.fea$|\1|' "$TMPDIR/$B.lst";
-  #          sed -n '
-  #            /\/'"$IMBASE"'\.[^.]\+\.[^.]\+\.rec"$/ {
-  #              s|.*\.\([^.]\+\)\.rec"$|\1|;
-  #              p;
-  #            }' "$TMPDIR/${B}_aligned.mlf";
-  #        } | sort | uniq -u );
-
-  #if [ "$missing" != "" ]; then
-  #  echo "$FN: error: unaligned lines: $B $(echo $missing)" 1>&2;
-  #  local xmledit=( ed --inplace );
-  #  local id;
-  #  for id in $missing; do
-  #    local line=$(htrsh_xpath_lines="*[@id='$id']" htrsh_pagexml_textequiv "$XML");
-  #    for w in $(seq 1 $(echo "$line" | awk '{print NF}')); do
-  #      local ww=$(echo "$line" | awk '{printf("%s",$'$w')}');
-  #      xmledit+=( -s "//*[@id='$id']" -t elem -n TMPNODE );
-  #      xmledit+=( -i //TMPNODE -t attr -n id -v ${id}_w$(printf %.2d $w) );
-  #      xmledit+=( -s //TMPNODE -t elem -n Coords );
-  #      xmledit+=( -i //TMPNODE/Coords -t attr -n points -v "0,0 0,0" );
-  #      xmledit+=( -s //TMPNODE -t elem -n TextEquiv );
-  #      xmledit+=( -s //TMPNODE/TextEquiv -t elem -n Unicode -v "$ww" );
-  #      xmledit+=( -r //TMPNODE -v Word );
-  #    done
-  #    xmledit+=( -m "//*[@id='$id']/_:TextEquiv" "//*[@id='$id']" );
-  #  done
-  #  xmlstarlet "${xmledit[@]}" "$XML";
-  #fi
-
-  htrsh_fix_rec_names "$XML"; # @todo move this inside htrsh_pagexml_insertalign_lines?
-
   [ "$htrsh_keeptmp" -lt 1 ] &&
-    rm -f "$TMPDIR/$B.mlf" "$TMPDIR/$B.lst" "$TMPDIR/${B}_aligned.mlf";
+    rm -f "$TMP/$B.mlf" "$TMP/$B.lst" "$TMP/${B}_aligned.mlf"{,-} "$TMP/$B"{,_map}.txt;
 
   return 0;
 }
@@ -4249,7 +4605,7 @@ htrsh_pageimg_forcealign () {
   local KEEPTMP="no";
   local KEEPAUX="no";
   local QBORD="no";
-  local FILTER="cat";
+  local DIPLOMATIZER=();
   local SFACT="";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
@@ -4266,7 +4622,7 @@ htrsh_pageimg_forcealign () {
       echo " -t (yes|no)  Whether to keep temporal directory and files (def.=$KEEPTMP)";
       echo " -a (yes|no)  Whether to keep auxiliary attributes in XML (def.=$KEEPAUX)";
       #echo " -q (yes|no)  Whether to clean quadrilateral border of regions (def.=$QBORD)";
-      echo " -F FILTER    Filtering pipe command, e.g. tokenizer, transliteration, etc. (def.=none)";
+      echo " -D DIPLOM    Diplomatizer pipe command, e.g. remove expansions (def.=none)";
       echo " -s RES|FACT% Rescale image to RES dpcm or by FACT% for processing (def.=orig.)";
     } 1>&2;
     return 1;
@@ -4297,8 +4653,8 @@ htrsh_pageimg_forcealign () {
       KEEPAUX="$2";
     elif [ "$1" = "-q" ]; then
       QBORD="$2";
-    elif [ "$1" = "-F" ]; then
-      FILTER="$2";
+    elif [ "$1" = "-D" ]; then
+      DIPLOMATIZER=( -D "$2" );
     elif [ "$1" = "-s" ]; then
       SFACT="$2";
     else
@@ -4389,7 +4745,7 @@ htrsh_pageimg_forcealign () {
     [ "$INRES" != "" ] && INRES="-i $INRES";
     htrsh_pageimg_clean "$TMP/proc/$XMLBASE.xml" "$TMP" $INRES \
       > "$TMP/${XMLBASE}_pageclean.log";
-    [ "$?" != 0 ] &&
+    [ "$?" != 0 ] && [ -s "$TMP/${XMLBASE}_pageclean.log" ] &&
       echo "$FN: error: more info might be in file $TMP/${XMLBASE}_pageclean.log" 1>&2 &&
       return 1;
   else
@@ -4416,7 +4772,7 @@ htrsh_pageimg_forcealign () {
       "$TMP/$XMLBASE.xml" "$TMP/${XMLBASE}_feats.xml" \
       -d "$TMP" -l "$TMP/${B}_feats.lst" \
       > "$TMP/${XMLBASE}_linefeats.log";
-  [ "$?" != 0 ] &&
+  [ "$?" != 0 ] && [ -s "$TMP/${XMLBASE}_linefeats.log" ] &&
     echo "$FN: error: more info might be in file $TMP/${XMLBASE}_linefeats.log" 1>&2 &&
     return 1;
 
@@ -4437,21 +4793,34 @@ htrsh_pageimg_forcealign () {
     [ "$?" != 0 ] && return 1;
   fi | sed '/^$/d';
 
+  ### Concatenate features ###
   [ "${AREG[1]}" = "regions" ] &&
     > "$TMP/${B}_feats.lst" &&
     htrsh_xpath_regions="$xpath_regions" htrsh_xpath_lines="$xpath_lines" \
       htrsh_feats_catregions "$TMP/${XMLBASE}_feats.xml" "$TMP" -l "$TMP/${B}_feats.lst";
 
+  ### Compute frames per char stat ###
+  local PER_CHAR=$( awk '
+    { if ( ARGIND == 1 )
+        numchar[$1] = 2 + length( gensub( /^[^ ]* /, "", 1, $0 ) );
+      else if( $2 in numchar )
+        printf( "%g %s\n", $1/numchar[$2], $2 );
+    }' <( htrsh_pagexml_textequiv "$TMP/${XMLBASE}_feats.xml" -f tab "${AREG[@]}" "${DIPLOMATIZER[@]}" ) \
+       <( for f in $(<"$TMP/${B}_feats.lst"); do
+            echo \
+              $(HList -z -h "$f" | awk '{if($2=="Samples:")print $3;}') \
+              $(echo "$f" | sed 's|.*/||; s|\.fea$||;');
+          done ) \
+    | awk '{s+=$1}END{print s/NR}' );
+  echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): feature frames per character: $PER_CHAR";
+
   ### Get list of required HMM character models ###
-  { echo '#!MLF!#';
-    htrsh_pagexml_textequiv "$TMP/${XMLBASE}_feats.xml" -f mlf-chars "${AREG[@]}" -F "$FILTER";
-  } > "$TMP/${B}_page.mlf";
+  htrsh_pagexml_textequiv "$TMP/${XMLBASE}_feats.xml" -f mlf-chars -H yes "${AREG[@]}" "${DIPLOMATIZER[@]}" \
+    > "$TMP/${B}_page.mlf";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems extracting text for page" 1>&2 &&
     return 1;
   local REQHMMS=$(
-          #htrsh_pagexml_textequiv "$TMP/${XMLBASE}_feats.xml" \
-          #    -f mlf-chars "${AREG[@]}" -F "$FILTER" \
           cat "$TMP/${B}_page.mlf" \
             | sed '/^#!MLF!#/d; /^"\*\/.*"$/d; /^\.$/d; s|^"\(.*\)"|\1|;' \
             | sort -u );
@@ -4476,7 +4845,7 @@ htrsh_pageimg_forcealign () {
     else
       MODEL=$( htrsh_hmm_train "$TMP/${B}_feats.lst" "$TMP/${B}_page.mlf" -d "$TMP" );
     fi 2> "$TMP/${XMLBASE}_hmm${HMMTYPE}.log"
-    [ "$?" != 0 ] &&
+    [ "$?" != 0 ] && [ -s "$TMP/${XMLBASE}_hmm${HMMTYPE}.log" ] &&
       echo "$FN: error: problems ${HMMTYPE}ing model, more info might be in file $TMP/${XMLBASE}_hmm${HMMTYPE}.log" 1>&2 &&
       return 1;
 
@@ -4498,9 +4867,9 @@ htrsh_pageimg_forcealign () {
   [ "${AREG[1]}" = "regions" ] &&
     forcealign="htrsh_pageimg_forcealign_regions";
   htrsh_xpath_regions="$xpath_regions" htrsh_xpath_lines="$xpath_lines" \
-    $forcealign "$TMP/${XMLBASE}_align.xml" "$TMP" "$MODEL" -d "$TMP" \
+    $forcealign "$TMP/${XMLBASE}_align.xml" "$TMP" "$MODEL" -d "$TMP" "${DIPLOMATIZER[@]}" \
       > "$TMP/${XMLBASE}_forcealign.log";
-  [ "$?" != 0 ] &&
+  [ "$?" != 0 ] && [ -s "$TMP/${XMLBASE}_forcealign.log" ] &&
     echo "$FN: error: more info might be in file $TMP/${XMLBASE}_forcealign.log" 1>&2 &&
     return 1;
   mv "$TMP/${XMLBASE}_align.xml" "$XMLOUT";
