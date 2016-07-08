@@ -29,13 +29,15 @@ htrsh_hmm_software="htk";
 ##
 htrsh_pageimg_forcealign_regions () {
   local FN="htrsh_pageimg_forcealign_regions";
-  local TMPDIR=".";
+  local TMP="${TMPDIR:-/tmp}";
+  local DIPLOMATIZER=();
   if [ $# -lt 3 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Does a forced alignment at a region level for a given XML Page, model and directory to find the features";
       echo "Usage: $FN XML FEATDIR MODEL [ Options ]";
       echo "Options:";
-      echo " -d TMPDIR    Directory for temporal files (def.=$TMPDIR)";
+      echo " -d TMPDIR       Directory for temporal files (def.=$TMP)";
+      echo " -D DIPLOMATIZER Diplomatizer pipe command, e.g. remove expansions (def.=none)";
     } 1>&2;
     return 1;
   fi
@@ -47,7 +49,9 @@ htrsh_pageimg_forcealign_regions () {
   shift 3;
   while [ $# -gt 0 ]; do
     if [ "$1" = "-d" ]; then
-      TMPDIR="$2";
+      TMP="$2";
+    elif [ "$1" = "-D" ]; then
+      DIPLOMATIZER=( -D "$2" );
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -87,7 +91,7 @@ htrsh_pageimg_forcealign_regions () {
     return 1;
 
   ### Create MLF from XML ###
-  { echo '#!MLF!#'; htrsh_pagexml_textequiv "$XML" -f mlf-chars -s regions; } > "$TMPDIR/$B.mlf";
+  { echo '#!MLF!#'; htrsh_pagexml_textequiv "$XML" -f mlf-chars -s regions "${DIPLOMATIZER[@]}"; } > "$TMP/$B.mlf";
   [ "$?" != 0 ] &&
     echo "$FN: error: problems creating MLF file: $XML" 1>&2 &&
     return 1;
@@ -97,13 +101,13 @@ htrsh_pageimg_forcealign_regions () {
   local DIC=$(echo "$HMMLST" | awk '{printf("\"%s\" [%s] 1.0 %s\n",$1,$1,$1)}');
 
   ### Do forced alignment with HVite ###
-  printf "%s\n" "${FEATLST[@]}" > "$TMPDIR/$B.lst";
-  HVite $htrsh_HTK_HVite_align_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$TMPDIR/$B.lst" -m -I "$TMPDIR/$B.mlf" -i "$TMPDIR/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
+  printf "%s\n" "${FEATLST[@]}" > "$TMP/$B.lst";
+  HVite $htrsh_HTK_HVite_align_opts -C <( echo "$htrsh_HTK_config" ) -H "$MODEL" -S "$TMP/$B.lst" -m -I "$TMP/$B.mlf" -i "$TMP/${B}_aligned.mlf" <( echo "$DIC" ) <( echo "$HMMLST" );
   [ "$?" != 0 ] &&
     echo "$FN: error: problems aligning with HVite: $XML" 1>&2 &&
     return 1;
 
-  echo '#!MLF!#' > "$TMPDIR/${B}_line_aligned.mlf";
+  echo '#!MLF!#' > "$TMP/${B}_line_aligned.mlf";
 
   local f;
   for f in "${FEATLST[@]}"; do
@@ -111,16 +115,7 @@ htrsh_pageimg_forcealign_regions () {
 
 
     local align=$(
-      #sed -n '
-      #  /\/'${ff}'\.rec"$/{
-      #    :loop;
-      #    N;
-      #    /\n\.$/!b loop;
-      #    s|^[^\n]*\n||;
-      #    s|\n\.$||;
-      #    p; q;
-      #  }' "$TMPDIR/${B}_aligned.mlf" \
-      htrsh_mlf_filter "$ff" "$TMPDIR/${B}_aligned.mlf" \
+      htrsh_mlf_filter "$ff" "$TMP/${B}_aligned.mlf" \
         | awk '
             { if( NR == 1 || $0 == "." ) next;
               NF = 3;
@@ -233,17 +228,29 @@ htrsh_pageimg_forcealign_regions () {
             if( n > 1 )
               printf( ".\n" );
           }' "$FEATDIR/$ff.nfea" - \
-      >> "$TMPDIR/${B}_line_aligned.mlf";
+      >> "$TMP/${B}_line_aligned.mlf";
   done
 
-  htrsh_pagexml_insertalign_lines "$XML" "$TMPDIR/${B}_line_aligned.mlf" -s regions;
+  ### Create diplomatic mapping ###
+  if [ "${#DIPLOMATIZER[@]}" != 0 ]; then
+    htrsh_pagexml_textequiv "$XML" -f tab -s regions \
+      | sed -r 's|^[^ ]+\.([^. ]+) |\1 |' \
+      | awk '{ for( n=2; n<=NF; n++ ) printf("%s %s\n",$1,$n); }' \
+      > "$TMP/$B.txt";
+    sed -r 's|^[^ ]+ ||' "$TMP/${B}.txt" \
+      | "${DIPLOMATIZER[1]}" \
+      | paste -d " " "$TMP/${B}.txt" - \
+      > "$TMP/${B}_map.txt";
+    DIPLOMATIZER=( -M "$TMP/${B}_map.txt" );
+  fi
+
+  ### Insert alignment information in XML ###
+  htrsh_pagexml_insertalign_lines "$XML" "$TMP/${B}_line_aligned.mlf" -s regions "${DIPLOMATIZER[@]}";
   [ "$?" != 0 ] &&
     return 1;
 
-  htrsh_fix_rec_names "$XML";
-
   [ "$htrsh_keeptmp" -lt 1 ] &&
-    rm -f "$TMPDIR/$B.mlf" "$TMPDIR/$B.lst" "$TMPDIR/${B}_aligned.mlf" "$TMPDIR/${B}_line_aligned.mlf";
+    rm -f "$TMP/$B.mlf" "$TMP/$B.lst" "$TMP/${B}_aligned.mlf" "$TMP/${B}_line_aligned.mlf" "$TMP/$B"{,_map}.txt;
 
   return 0;
 }
