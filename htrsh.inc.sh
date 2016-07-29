@@ -31,6 +31,7 @@ htrsh_xpath_lines='_:TextLine';
 htrsh_xpath_words='_:Word';
 htrsh_xpath_coords='_:Coords[@points and @points!="0,0 0,0"]';
 htrsh_xpath_textequiv=$'_:TextEquiv[_:Unicode and translate(_:Unicode,"\n\r\t ","") != ""]/_:Unicode';
+htrsh_extended_names="false";
 
 htrsh_imgclean="prhlt"; # Image preprocessing technique, prhlt or ncsr
 htrsh_clean_type="image"; htrsh_clean_type="line";
@@ -46,6 +47,7 @@ htrsh_feat_padding="1.0"; # Left and right white padding in mm for line images
 htrsh_feat_contour="yes"; # Whether to compute connected components contours
 htrsh_feat_dilradi="0.5"; # Dilation radius in mm for contours
 htrsh_feat_normxheight="18"; # Normalize x-height (if in Page) to a fixed number of pixels
+htrsh_feat_normheight="0";   # Normalize height to a fixed number of pixels
 
 htrsh_feat="dotmatrix";    # Type of features to extract
 htrsh_dotmatrix_shift="2"; # Sliding window shift in px @todo make it with respect to x-height
@@ -67,8 +69,7 @@ htrsh_hmm_states="6";  # Default number of HMM states (excluding special initial
 htrsh_hmm_ndstates=""; # Number of states for specific HMMs (name #states\n...) use 'd' for an expression involving the default
 htrsh_hmm_nummix="4";  # Number of Gaussian mixture components per state
 htrsh_hmm_iter="4";    # Number of training iterations
-htrsh_hmm_type="char";
-#htrsh_hmm_type="overlap";
+htrsh_hmm_type="char"; # HMM modelling type, currently among char and overlap
 
 htrsh_HTK_HERest_opts="-m 2";      # Options for HERest tool
 htrsh_HTK_HCompV_opts="-f 0.1 -m"; # Options for HCompV tool
@@ -84,6 +85,8 @@ NONUMESCAPES   = T
 STARTWORD      = "<s>"
 ENDWORD        = "</s>"
 ';
+
+htrsh_symb_space="{space}";
 
 htrsh_special_chars=$'
 <gap/> {gap}
@@ -306,7 +309,7 @@ htrsh_pagexml_textequiv_lines2region () {
   done
 
   local TEXT=$( htrsh_pagexml_textequiv "$XML" -s lines -f tab \
-    | sed -r 's|^.+*\.([^. ]+)\.[^. ]+ |\1 |' );
+    | sed -r 's|^[^ ]+*\.([^. ]+)\.[^. ]+ |\1 |' );
 
   local updatetext=();
   for regid in $( echo "$TEXT" | sed 's| .*||' | sort -u ); do
@@ -375,6 +378,7 @@ htrsh_pagexml_textequiv () {
   local SRC="lines";
   local FORMAT="raw";
   local FILTER="cat";
+  local ESPACES="yes";
   local WSPACE="no";
   local WORDEND="no";
   local PRTHEAD="no";
@@ -384,9 +388,10 @@ htrsh_pagexml_textequiv () {
       echo "Usage: $FN XMLFILE [ Options ]";
       echo "Options:";
       echo " -s SOURCE    Source of TextEquiv, either 'regions', 'lines' or 'words' (def.=$SRC)";
-      echo " -f FORMAT    Output format among 'raw', 'mlf-chars', 'mlf-words' and 'tab' (def.=$FORMAT)";
+      echo " -f FORMAT    Output format among 'raw', 'mlf-chars', 'mlf-words', 'tab' and 'tab-chars' (def.=$FORMAT)";
       echo " -F FILTER    Filtering pipe command, e.g. tokenizer, transliteration, etc. (def.=none)";
-      echo " -W (yes|no)  For mlf-words, whether to start space (def.=$WSPACE)";
+      echo " -E (yes|no)  For *-chars, whether to add spaces at start and end (def.=$ESPACES)";
+      echo " -W (yes|no)  For mlf-words, whether to add start space (def.=$WSPACE)";
       echo " -w (yes|no)  For mlf-chars, whether to add word end marks (def.=$WORDEND)";
       echo " -H (yes|no)  Whether to print header (def.=$PRTHEAD)";
     } 1>&2;
@@ -401,12 +406,16 @@ htrsh_pagexml_textequiv () {
       SRC="$2";
     elif [ "$1" = "-f" ]; then
       FORMAT="$2";
-      if ! ( [ "$FORMAT" = 'raw' ] || [ "$FORMAT" = 'mlf-chars' ] || [ "$FORMAT" = 'mlf-words' ] || [ "$FORMAT" = 'tab' ] ); then
+      if ! ( [ "$FORMAT" = 'raw' ] ||
+             [ "$FORMAT" = 'mlf-chars' ] || [ "$FORMAT" = 'mlf-words' ] ||
+             [ "$FORMAT" = 'tab' ] || [ "$FORMAT" = 'tab-chars' ] ); then
         echo "$FN: error: unexpected output format: $FORMAT" 1>&2;
         return 1;
       fi
     elif [ "$1" = "-F" ] || [ "$1" = "-D" ]; then
       FILTER="$2";
+    elif [ "$1" = "-E" ]; then
+      ESPACES="$2";
     elif [ "$1" = "-W" ]; then
       WSPACE="$2";
     elif [ "$1" = "-w" ]; then
@@ -427,24 +436,28 @@ htrsh_pagexml_textequiv () {
   local PG=$(xmlstarlet sel -t -v //@imageFilename "$XML" \
                | sed 's|.*/||; s|\.[^.]*$||; s|[\[ ()]|_|g; s|]|_|g;');
 
-  local XPATH IDop;
+  local XPATH;
+  local IDop=( -o "$PG." );
   local PRINT=( -v . -n );
   if [ "$SRC" = "regions" ]; then
     XPATH="$htrsh_xpath_regions/$htrsh_xpath_textequiv";
-    IDop=( -o "$PG." -v ../../@id );
+    IDop+=( -v ../../@id );
   elif [ "$SRC" = "words" ]; then
     XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines[$htrsh_xpath_words/$htrsh_xpath_textequiv]";
     PRINT=( -m "$htrsh_xpath_words/$htrsh_xpath_textequiv" -o " " -v . -b -n );
-    IDop=( -o "$PG." -v ../@id -o . -v @id );
+    [ "$htrsh_extended_names" = "true" ] && IDop+=( -v ../@id -o . -v @id );
+    [ "$htrsh_extended_names" != "true" ] && IDop+=( -v @id );
   elif [ "$SRC" = "solo-words" ]; then
     XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_words/$htrsh_xpath_textequiv";
-    IDop=( -o "$PG." -v ../../../../@id -o . -v ../../../@id -o . -v ../../@id );
+    [ "$htrsh_extended_names" = "true" ] && IDop+=( -v ../../../../@id -o . -v ../../../@id -o . -v ../../@id );
+    [ "$htrsh_extended_names" != "true" ] && IDop+=( -v ../../@id );
   elif [ "$SRC" = "lines" ]; then
     XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_textequiv";
-    IDop=( -o "$PG." -v ../../../@id -o . -v ../../@id );
+    [ "$htrsh_extended_names" = "true" ] && IDop+=( -v ../../../@id -o . -v ../../@id );
+    [ "$htrsh_extended_names" != "true" ] && IDop+=( -v ../../@id );
   elif [ "$SRC" = "all" ]; then
     XPATH="//$htrsh_xpath_textequiv";
-    IDop=( -o "$PG." -v ../../@id );
+    IDop+=( -v ../../@id );
   else
     echo "$FN: error: unexpected source type: $SRC" 1>&2;
     return 1;
@@ -469,7 +482,9 @@ htrsh_pagexml_textequiv () {
         s|  *$||;
         s|   *| |g;
         ' \
-    | awk -v FORMAT=$FORMAT -v hmmtype="$htrsh_hmm_type" -v WSPACE=$WSPACE -v WORDEND=$WORDEND -v SPECIAL=<( echo "$htrsh_special_chars" ) \
+    | awk -v FORMAT=$FORMAT -v hmmtype="$htrsh_hmm_type" \
+          -v ESPACES="$ESPACES" -v WSPACE="$WSPACE" -v WORDEND="$WORDEND" \
+          -v SPACE="$htrsh_symb_space" -v SPECIAL=<( echo "$htrsh_special_chars" ) \
         "$htrsh_gawk_func_word_to_chars"'
         BEGIN {
           load_special_chars( SPECIAL );
@@ -484,16 +499,33 @@ htrsh_pagexml_textequiv () {
           else if( FORMAT == "mlf-words" ) {
             printf("\"*/%s.lab\"\n",$1);
             if( WSPACE == "yes" )
-              printf("\"@\"\n");
+              printf("\"%s\"\n",SPACE);
             gsub("\x22","\\\x22",$2);
             N = split($2,txt," ");
             for( n=1; n<=N; n++ )
               printf( "\"%s\"\n", txt[n] );
             printf(".\n");
           }
+          else if( FORMAT == "tab-chars" ) {
+            printf("%s",$1);
+            if( ESPACES == "yes" )
+              printf(" %s",SPACE);
+            M = split( $2, words, " " );
+            for( m=1; m<=M; m++ ) {
+              N = word_to_chars( words[m], hmms, hmmtype, "no" );
+              for( n=1; n<=N; n++ )
+                printf( " %s", hmms[n] );
+              if( WORDEND == "yes" )
+                printf( " {wordend}" );
+              if( m < M || ESPACES == "yes" )
+                printf(" %s",SPACE);
+            }
+            printf("\n");
+          }
           else if( FORMAT == "mlf-chars" ) {
             printf("\"*/%s.lab\"\n",$1);
-            printf("@\n");
+            if( ESPACES == "yes" )
+              printf("%s\n",SPACE);
             M = split( $2, words, " " );
             for( m=1; m<=M; m++ ) {
               N = word_to_chars( words[m], hmms, hmmtype, "no" );
@@ -501,7 +533,8 @@ htrsh_pagexml_textequiv () {
                 printf( ( match(hmms[n],/^[.0-9]/) ? "\"%s\"\n" : "%s\n" ), hmms[n] );
               if( WORDEND == "yes" )
                 printf( "{wordend}\n" );
-              printf("@\n");
+              if( m < M || ESPACES == "yes" )
+                printf("%s\n",SPACE);
             }
             printf(".\n");
           }
@@ -675,7 +708,7 @@ htrsh_prep_tasas () {
   fi
 
   ### Create tasas file ###
-  gawk -v SEPCHARS="$SEPCHARS" -v SPECIAL=<( echo "$htrsh_special_chars" ) \
+  gawk -v SEPCHARS="$SEPCHARS" -v SPACE="$htrsh_symb_space" -v SPECIAL=<( echo "$htrsh_special_chars" ) \
     "$htrsh_gawk_func_word_to_chars"'
     BEGIN {
       load_special_chars( SPECIAL );
@@ -695,7 +728,7 @@ htrsh_prep_tasas () {
             printf( w==2 ? "%s" : " %s", gt[w] );
           else {
             NCHARS = word_to_chars( gt[w], chars, "char", "no" );
-            printf( w==2 ? "%s" : " {space} %s", chars[1] );
+            printf( w==2 ? "%s" : (" "SPACE" %s"), chars[1] );
             for( c=2; c<=NCHARS; c++ )
               printf( " %s", chars[c] );
           }
@@ -706,7 +739,7 @@ htrsh_prep_tasas () {
             printf( w==2 ? "%s" : " %s", $w );
           else {
             NCHARS = word_to_chars( $w, chars, "char", "no" );
-            printf( w==2 ? "%s" : " {space} %s", chars[1] );
+            printf( w==2 ? "%s" : (" "SPACE" %s"), chars[1] );
             for( c=2; c<=NCHARS; c++ )
               printf( " %s", chars[c] );
           }
@@ -1987,10 +2020,14 @@ htrsh_pageimg_extract_lines () {
 
   local BASE=$(echo "$OUTDIR/$IMBASE" | sed 's|[\[ ()]|_|g; s|]|_|g;');
   local XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_coords";
-  local IDop=( -o "$BASE." -v ../../@id -o "." -v ../@id );
+  local IDop=( -o "$BASE." );
   if [ "$SRC" = "solo-words" ]; then
     XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_words/$htrsh_xpath_coords";
-    IDop=( -o "$BASE." -v ../../../@id -o . -v ../../@id -o . -v ../@id );
+    [ "$htrsh_extended_names" = "true" ] && IDop=( -v ../../../@id -o . -v ../../@id -o . -v ../@id );
+    [ "$htrsh_extended_names" != "true" ] && IDop=( -v ../@id );
+  else
+    [ "$htrsh_extended_names" = "true" ] && IDop+=( -v ../../@id -o "." -v ../@id );
+    [ "$htrsh_extended_names" != "true" ] && IDop+=( -v ../@id );
   fi
 
   [ $(xmlstarlet sel -t -v "count($XPATH)" "$XML") = 0 ] &&
@@ -2192,7 +2229,7 @@ htrsh_feats_catregions () {(
   local IFS=$'\n';
   local id feats f;
   #for id in $( xmlstarlet sel -t -m "$htrsh_xpath_regions[$htrsh_xpath_lines/$htrsh_xpath_coords]" -v @id -n "$XML" ); do
-  for id in $( xmlstarlet sel -t -m "$htrsh_xpath_regions" -v @id -n "$XML" ); do
+  for id in $( xmlstarlet sel -t -m "$htrsh_xpath_regions[$htrsh_xpath_lines]" -v @id -n "$XML" ); do
     #feats=( $( xmlstarlet sel -t -m "//*[@id='$id']/$htrsh_xpath_lines[$htrsh_xpath_coords]" -o "$FBASE.$id." -v @id -o ".fea" -n "$XML" | sed '2,$ s|^|+\n|' ) );
     feats=( $( xmlstarlet sel -t -m "//*[@id='$id']/$htrsh_xpath_lines" -o "$FBASE.$id." -v @id -o ".fea" -n "$XML" | sed '2,$ s|^|+\n|' ) );
 
@@ -2365,7 +2402,7 @@ htrsh_feats_pca () {(
         B = B*R;
       ";
     fi
-    echo "save('-z','$OUTMAT','B','V','mu');";
+    echo "save('-hdf5','$OUTMAT','B','V','mu');";
   } | octave -q -H;
 
   RC="$?";
@@ -2486,9 +2523,10 @@ htrsh_pageimg_extract_linefeats_fast () {
   local OUTDIR=".";
   local FEATLST="/dev/null";
   local PBASE="";
-  local HEIGHT="";
+  #local HEIGHT="";
   local REPLC="yes";
-  local SRC="lines";
+  #local SRC="lines";
+  local THREADS="1";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Extracts line features from an image given its XML Page file";
@@ -2499,6 +2537,7 @@ htrsh_pageimg_extract_linefeats_fast () {
       echo " -b PBASE    Project features using given base (def.=false)";
       echo " -h HEIGHT   Normalize line height (def.=false)";
       echo " -c (yes|no) Whether to replace Coords/@points with the features contour (def.=$REPLC)";
+      echo " -T THREADS  Threads for parallel processing (def.=$THREADS)";
     } 1>&2;
     return 1;
   fi
@@ -2513,13 +2552,15 @@ htrsh_pageimg_extract_linefeats_fast () {
     elif [ "$1" = "-l" ]; then
       FEATLST="$2";
     elif [ "$1" = "-b" ]; then
-      PBASE="-b $2";
+      PBASE="$2";
     elif [ "$1" = "-c" ]; then
       REPLC="$2";
-    elif [ "$1" = "-h" ]; then
-      HEIGHT="$2";
-    elif [ "$1" = "-s" ]; then
-      SRC="$2";
+    #elif [ "$1" = "-h" ]; then
+    #  HEIGHT="$2";
+    #elif [ "$1" = "-s" ]; then
+    #  SRC="$2";
+    elif [ "$1" = "-T" ]; then
+      THREADS="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -2536,25 +2577,60 @@ htrsh_pageimg_extract_linefeats_fast () {
   local TMP="${TMPDIR:-/tmp}";
   TMP=$(mktemp -d --tmpdir="$TMP" ${FN}_XXXXX);
 
-  textLineFeats -VVV \
-    --outdir "$TMP" --format htk --xpath "$XPATH" \
-    --slope="$htrsh_feat_deslope" --slant="$htrsh_feat_deslant" \
-    --fcontour="$htrsh_feat_contour" --fpgram="$htrsh_feat_contour" --fpoints="$REPLC" \
-    --featlist --saveclean --savexml \
-    --sliding "$htrsh_dotmatrix_shift":"$htrsh_dotmatrix_win" \
-    --sampdims "$htrsh_dotmatrix_W"x"$htrsh_dotmatrix_H" \
-    "$XML" > "$TMP/feats.lst" 2> "$TMP/feats.log";
+  local enh_win=$( echo "$htrsh_imgtxtenh_opts" | sed -r 's|^.*-w ([0-9]+).*|\1|' );
+  local enh_prm=$( echo "$htrsh_imgtxtenh_opts" | sed -r 's|^.*-k ([.0-9]+).*|\1|' );
+  local featype="dotm";
+  local feaformat="htk";
+  if [ "${htrsh_feat:0:3}" = "th:" ]; then
+    featype="raw";
+    feaformat="img";
+  fi
+
+  local CFG="
+  PageXML: {
+    extended_names = $htrsh_extended_names;
+  }
+  TextFeatExtractor: {
+    type = \"$featype\";
+    format = \"$feaformat\";
+    normheight = $htrsh_feat_normheight;
+    enh_win = $enh_win;
+    enh_prm = $enh_prm;
+    padding = $htrsh_feat_padding;
+    deslope = \"$htrsh_feat_deslope\";
+    deslant = \"$htrsh_feat_deslant\";
+    slide_shift = $htrsh_dotmatrix_shift;
+    slide_span = $htrsh_dotmatrix_win;
+    sample_width = $htrsh_dotmatrix_W;
+    sample_height = $htrsh_dotmatrix_H;
+    fcontour = \"$htrsh_feat_contour\";
+    fpgram = \"$htrsh_feat_contour\";"$'\n';
+  #[ "$HEIGHT" != "" ] && CFG+="    normheight = $HEIGHT;"$'\n';
+  [ "$PBASE" != "" ] && CFG+="    projfile = \"$PBASE\";"$'\n';
+  CFG+=$'  }\n';
+
+  echo "$CFG" > "$OUTDIR/textFeats.cfg";
+
+  textFeats -V --featlist --saveclean --savexml --cfg <( echo "$CFG" ) \
+    --outdir "$TMP" -T "$THREADS" --xpath "$XPATH" --fpoints="$REPLC" \
+    "$XML" > "$TMP/feats.lst" 2> "$OUTDIR/textFeats.log";
   [ "$?" != 0 ] &&
-    echo "$FN: error: problems extracting features" 1>&2 &&
+    echo "$FN: error: problems extracting features, more info in file $OUTDIR/textFeats.log" 1>&2 &&
     return 1;
 
-  mv "$TMP"/*.fea "$TMP"/*_clean.png "$OUTDIR";
+  if [ "${htrsh_feat:0:3}" = "th:" ]; then
+    sed 's|^|'"$TMP"'/|; s|$|.png|;' "$TMP/feats.lst" >> "$TMP/imgs.lst";
+    th "$HOME/work/prog/HTR/htr-exps/code/Laia/net_output.lua" \
+      "${htrsh_feat:3}" "$TMP/imgs.lst" "$TMP" -batch_size 1 -htk #-convout
+  fi
+
+  mv "$TMP"/*.fea "$TMP"/*.png "$OUTDIR";
   mv "$TMP/$IMBASE.xml" "$XMLOUT";
-  sed 's|^|'"$OUTDIR"'/|; s|$|.fea|;' "$TMP/feats.lst" > "$FEATLST";
+  sed 's|^|'"$OUTDIR"'/|; s|$|.fea|;' "$TMP/feats.lst" >> "$FEATLST";
 
-  xmlstarlet ed --inplace -d //@slope -d //@slant "$XMLOUT";
-
-  mv "$TMP" "$OUTDIR";
+  #xmlstarlet ed --inplace -d //@slope -d //@slant "$XMLOUT";
+  #mv "$TMP" "$OUTDIR";
+  rm -r "$TMP";
 }
 
 ##
@@ -2839,7 +2915,7 @@ htrsh_gawk_func_word_to_chars='
     delete hmms;
     C = 0;
     N = split( word, txt, "" );
-    cprev = "@";
+    cprev = SPACE;
     for( n=1; n<=N; n++ ) {
       c = txt[n];
       if( c in SCHAR ) {
@@ -2874,9 +2950,9 @@ htrsh_gawk_func_word_to_chars='
       hmms[++C] = c;
     }
     if( hmmtype == "overlap" )
-      hmms[++C] = ( cprev "@" );
+      hmms[++C] = ( cprev SPACE );
     if( endspace == "yes" )
-      hmms[++C] = "@";
+      hmms[++C] = SPACE;
     return C;
   }';
 
@@ -2950,7 +3026,8 @@ htrsh_create_dict () {
   ### Create dictionary ###
   paste "$CANONIC" "$ORIGINAL" "$DIPLOMATIC" \
     | gawk -v hmmtype="$htrsh_hmm_type" -v charseq="$CHARSEQ" -v extr="$EXTR" \
-           -v endspace="$ENDSPACE" -v wspace="$WSPACE" -v SPECIAL=<( echo "$htrsh_special_chars" ) \
+           -v endspace="$ENDSPACE" -v wspace="$WSPACE" \
+           -v SPACE="$htrsh_symb_space" -v SPECIAL=<( echo "$htrsh_special_chars" ) \
         "$htrsh_gawk_func_word_to_chars"'
         BEGIN {
           load_special_chars( SPECIAL );
@@ -2966,9 +3043,9 @@ htrsh_create_dict () {
         }
         END {
           if( wspace == "yes" )
-            printf( "\"@\"\t[]\t1\t@\n" );
+            printf( "\"%s\"\t[]\t1\t%s\n", SPACE, SPACE );
           if( extr == "yes" ) {
-            printf( "\"<s>\"\t[]\t1\t@\n" );
+            printf( "\"<s>\"\t[]\t1\t%s\n", SPACE );
             printf( "\"</s>\"\t[]\n" );
           }
           for( canonic in canonic_count ) {
@@ -3259,6 +3336,7 @@ htrsh_hmm_train () {
   local OUTDIR=".";
   local CODES="0";
   local PROTO="";
+  local EDITS="";
   local DIC="";
   local EXCLREALIGN="";
   local KEEPITERS="yes";
@@ -3274,6 +3352,7 @@ htrsh_hmm_train () {
       echo " -d OUTDIR    Directory for output models and temporal files (def.=$OUTDIR)";
       echo " -c CODES     Train discrete model with given codebook size (def.=false)";
       echo " -P PROTO     Use PROTO as initialization prototype (def.=false)";
+      echo " -e EDITS     File with HHEd commands to execute to proto before training (def.=false)";
       echo " -D DICT      Realign using given dictionary, requires word MLF (def.=false)";
       echo " -E MLF       HMM-based MLF for training only features, i.e. no realigning (def.=false)";
       echo " -k (yes|no)  Whether to keep models per iteration, including initialization (def.=$KEEPITERS)";
@@ -3296,6 +3375,8 @@ htrsh_hmm_train () {
       CODES="$2";
     elif [ "$1" = "-P" ]; then
       PROTO="$2";
+    elif [ "$1" = "-e" ]; then
+      EDITS="$2";
     elif [ "$1" = "-D" ]; then
       DIC="$2";
     elif [ "$1" = "-E" ]; then
@@ -3326,6 +3407,9 @@ htrsh_hmm_train () {
   elif [ "$PROTO" != "" ] && [ ! -e "$PROTO" ]; then
     echo "$FN: error: initialization prototype not found: $PROTO" 1>&2;
     return 1;
+  elif [ "$EDITS" != "" ] && [ ! -e "$EDITS" ]; then
+    echo "$FN: error: HHEd script not found: $HHEd" 1>&2;
+    return 1;
   elif [ "$DIC" != "" ] && [ ! -e "$DIC" ]; then
     echo "$FN: error: realigning dictionary not found: $DIC" 1>&2;
     return 1;
@@ -3341,9 +3425,7 @@ htrsh_hmm_train () {
   if [ "$DIC" != "" ]; then
     local WMLF="$MLF";
     MLF="$OUTDIR/train.mlf";
-    htrsh_mlf_word_to_chars "$WMLF" "$DIC" \
-      | sed '/^"\*\/.*\.lab"$/ s|$|\n@|;' \
-      > "$MLF";
+    htrsh_mlf_word_to_chars "$WMLF" "$DIC" > "$MLF";
     [ "$?" != 0 ] &&
       echo "$FN: error: MLF does not appear to be word based according to dictionary" 1>&2 &&
       return 1;
@@ -3363,11 +3445,15 @@ htrsh_hmm_train () {
             > "$REALIGNLST";
       sed '/^#!MLF!#/d' "$EXCLREALIGN" >> "$MLF";
     fi
+
+    local HMMLST=$(awk '{for(n=4;n<=NF;n++)print $n}' "$DIC" \
+                     | LC_ALL=C.UTF-8 sort -u);
   fi
 
   ### Auxiliary variables ###
   local DIMS=$(HList -z -h $(head -n 1 "$FEATLST") | sed -n '/Num Comps:/{s|.*Num Comps: *||;s| .*||;p;}');
 
+  [ "$DIC" = "" ] &&
   local HMMLST=$(cat "$MLF" \
                    | sed '/^#!MLF!#/d; /^"\*\//d; /^\.$/d; s|^"\(.*\)"$|\1|;' \
                    | LC_ALL=C.UTF-8 sort -u);
@@ -3443,6 +3529,10 @@ htrsh_hmm_train () {
           -g "$GLOBAL" -m "$MEAN" -v "$VARIANCE" \
         | gzip \
         > "$OUTDIR/Macros_hmm.gz";
+
+      [ "$EDITS" != "" ] &&
+        HHEd $htrsh_HTK_HHEd_opts -C <( echo "$htrsh_HTK_config" ) -H "$OUTDIR/Macros_hmm.gz" \
+            -M "$OUTDIR" "$EDITS" <( echo "$HMMLST" ) 1>&2;
 
       [ "$KEEPITERS" = "yes" ] &&
         cp -p "$OUTDIR/Macros_hmm.gz" "$OUTDIR/Macros_hmm_g001_i00.gz";
@@ -3532,7 +3622,6 @@ htrsh_hmm_train () {
 
           gawk '
             { if( match($0,/^".+\/[^/]+\.rec"$/) )
-                #$0 = gensub( /^".+\/([^/]+)\.rec"$/, "\"*/\\1.lab\"\n@", 1, $0 );
                 $0 = gensub( /^".+\/([^/]+)\.rec"$/, "\"*/\\1.lab\"", 1, $0 );
               else if( NR > 1 && $0 != "." )
                 $0 = $3;
@@ -3542,8 +3631,9 @@ htrsh_hmm_train () {
             > "$MLF";
           if [ -s "$OUTDIR/failrealign.lst~$k" ]; then
             htrsh_mlf_filter "$OUTDIR/failrealign.lst~$k" "$MLF~$kk" >> "$MLF";
+            ln -fs "failrealign.lst~$k" "$OUTDIR/failrealign.lst";
           else
-            rm "$OUTDIR/failrealign.lst~$k";
+            rm -f "$OUTDIR/failrealign.lst~$k" "$OUTDIR/failrealign.lst";
           fi
           [ "$EXCLREALIGN" != "" ] &&
             sed '/^#!MLF!#/d' "$EXCLREALIGN" >> "$MLF";
@@ -3575,6 +3665,7 @@ htrsh_hmm_train () {
 ##
 ## Function that executes N parallel threads of HVite or HLRescore for a given feature list
 ##
+# @todo When not in alignment mode (i.e. no -a) enable beam search retry for -t f i l
 htrsh_hvite_parallel () {
   local FN="htrsh_hvite_parallel";
   if [ $# -lt 2 ]; then
@@ -3592,7 +3683,7 @@ htrsh_hvite_parallel () {
     "$@";
     return $?;
   fi
-  local CMD=( "$2" );
+  local CMD=( "$1" );
   shift;
 
   local TMP="${TMPDIR:-/tmp}";
@@ -3714,7 +3805,7 @@ htrsh_fix_mlf_quotes () {
 htrsh_fix_rec_mlf_quotes () { htrsh_fix_mlf_quotes "$1" -c 3; }
 
 ##
-## Function that replaces special HMM model names with corresponding characters
+## Function that replaces special character names with corresponding characters
 ##
 # @todo should modify this so that the replacement is only in TextEquiv/Unicode, not all the XML
 htrsh_fix_rec_names () {
@@ -3727,7 +3818,7 @@ htrsh_fix_rec_names () {
     return 1;
   fi
 
-  local SED_REP="s|@| |g;"$(
+  local SED_REP="s|$htrsh_symb_space| |g;"$(
     echo "$htrsh_special_chars" \
       | sed '
           s/^\([^ ]*\) \([^ ]*\)/s|\2|\1|g;/;
@@ -3785,14 +3876,14 @@ htrsh_mlf_prepalign () {
     return 1;
   fi
 
-  gawk '
+  gawk -v SPACE="$htrsh_symb_space" '
     { if( $0 != "#!MLF!#" && ! match( $0, /\.rec"$/ ) ) {
         if( $0 != "." ) {
-          printf( "%s %s @\n", $1, $1 );
+          printf( "%s %s %s\n", $1, $1, SPACE );
           PE = $2;
         }
         else
-          printf( "%s %s @\n", PE, PE );
+          printf( "%s %s %s\n", PE, PE, SPACE );
         if( match( $3, /^".*"$/ ) )
           $3 = gensub( /\\"/, "\"", "g", gensub( /^"(.+)"$/, "\\1", 1, $3 ) );
      }
@@ -3819,19 +3910,19 @@ htrsh_mlf_diplom_prepalign () {
   local DICT="$2";
 
   cat "$MLF" \
-    | awk '
-      { if( NF==1 || $3=="@" )
+    | awk -v SPACE="$htrsh_symb_space" '
+      { if( NF == 1 || $3 == SPACE )
           printf("%s\n",$0);
         else
           printf("%s ",$0);
       }' \
-    | gawk '
+    | gawk -v SPACE="$htrsh_symb_space" '
       { if( ARGIND == 1 ) {
           full = substr($2,2,length($2)-2);
           canon = match($1,/^".+"$/) ? 
             gensub( /\\"/, "\"", "g", substr($1,2,length($1)-2) ) : $1 ;
           $1 = $2 = $3 = "";
-          if( $NF == "@" )
+          if( $NF == SPACE )
             NF--;
           dipl = gensub( /^ +/, "", 1, $0 );
           #printf("full=%s canon=%s dipl=%s\n",full,canon,dipl);
@@ -3850,7 +3941,7 @@ htrsh_mlf_diplom_prepalign () {
         else {
           canon = $5;
           space = "";
-          if( $(NF-1) == "@" ) {
+          if( $(NF-1) == SPACE ) {
             space = ( $(NF-3) " " $(NF-2) " " $(NF-1) );
             NF = NF-4;
           }
@@ -3921,12 +4012,12 @@ htrsh_pagexml_insertalign_lines () {(
   ### Prepare alignment information for each line to align ###
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating Page XML with alignments ..." 1>&2;
 
-  local ids=$( sed -n '/\/'"$IMBASE"'\.[^.]\+\.[^.]\+\.rec"$/{ s|.*\.\([^.]\+\)\.rec"$|\1|; p; }' "$MLF" );
+  local ids=$( sed -n '/\/'"$IMBASE"'.*\.[^.]\+\.rec"$/{ s|.*\.\([^.]\+\)\.rec"$|\1|; p; }' "$MLF" );
 
   #local TS=$(($(date +%s%N)/1000000));
 
   local aligns=$(
-    sed -n '/\/'"$IMBASE"'\.[^.]\+\.[^.]\+\.rec"$/,/^\.$/p' "$MLF" \
+    sed -n '/\/'"$IMBASE"'.*\.[^.]\+\.rec"$/,/^\.$/p' "$MLF" \
       | awk '
           { if( FILENAME != "-" )
               ids[$0] = "";
@@ -4028,7 +4119,9 @@ htrsh_pagexml_insertalign_lines () {(
     local xmledit=( -d "//*[@id='$id']/_:Word" );
 
     if [ "$htrsh_align_contour" = "yes" ]; then
-      local LIMG="$XMLDIR/$IMBASE."$(xmlstarlet sel -t -v "//*[@id='$id']/../@id" "$XML")".${id}_clean.png";
+      local LIMG="$XMLDIR/$IMBASE.${id}_clean.png";
+      [ "$htrsh_extended_names" = "true" ] && 
+        LIMG="$XMLDIR/$IMBASE."$(xmlstarlet sel -t -v "//*[@id='$id']/../@id" "$XML")".${id}_clean.png";
       local LGEO=( $(identify -format "%w %h %X %Y %x %U" "$LIMG" | sed 's|+||g') );
     fi
     [ "$htrsh_align_isect" = "yes" ] &&
@@ -4059,7 +4152,7 @@ htrsh_pagexml_insertalign_lines () {(
     prevreg="$reg";
 
     ### Word level alignments ###
-    local W=$(echo "$align" | grep ' @$' | wc -l); W=$((W-1));
+    local W=$(echo "$align" | grep " ${htrsh_symb_space}$" | wc -l); W=$((W-1));
     local w;
     for w in $(seq 1 $W); do
       #TE=$(($(date +%s%N)/1000000)); echo "time 2: $((TE-TS)) ms" 1>&2; TS="$TE";
@@ -4075,8 +4168,8 @@ htrsh_pagexml_insertalign_lines () {(
         done
 
       local wid="${id}_w$(printf %.3d $rw)";
-      local pS=$(echo "$align" | grep -n ' @$' | sed -n "$w{s|:.*||;p;}"); pS=$((pS+1));
-      local pE=$(echo "$align" | grep -n ' @$' | sed -n "$((w+1)){s|:.*||;p;}"); pE=$((pE-1));
+      local pS=$(echo "$align" | grep -n " ${htrsh_symb_space}$" | sed -n "$w{s|:.*||;p;}"); pS=$((pS+1));
+      local pE=$(echo "$align" | grep -n " ${htrsh_symb_space}$" | sed -n "$((w+1)){s|:.*||;p;}"); pE=$((pE-1));
       local pts;
       if [ "$pS" = "$pE" ]; then
         pts=$(echo "$coords" | sed -n "${pS}p");
@@ -4101,6 +4194,7 @@ htrsh_pagexml_insertalign_lines () {(
                     -compose lighten -composite -page $size+${LGEO[2]}+${LGEO[3]} \
                     -units ${LGEO[5]} -density ${LGEO[4]} miff:- \
                   | imgccomp -V0 -NJS -A 0.1 -D $htrsh_align_dilradi -R 2,2,2,2 - 2>/dev/null );
+        [ "$cpts" = "" ] && echo "warning: failed to obtain contour for word $wid" 1>&2;
       fi
 
       local AWK_ISECT='
@@ -4133,7 +4227,7 @@ htrsh_pagexml_insertalign_lines () {(
             echo "$contour";
           } | awk -F'[ ,]' -v sz=$size "$AWK_ISECT" ) );
         cpts=$( "${polydraw[@]//_/ }" | imgccomp -V0 -JS - );
-        [ "$cpts" = "" ] && echo "failed to obtain intersection for word $wid" 1>&2;
+        [ "$cpts" = "" ] && echo "warning: failed to obtain intersection for word $wid" 1>&2;
       fi
 
       [ "$cpts" != "" ] && pts="$cpts";
@@ -4281,7 +4375,7 @@ htrsh_mlf_sort () {
 ##
 ## Function that blindly creates an alignment MLF by assuming all characters have equal width
 ##
-htrsh_mlf_align_blind () {
+ htrsh_mlf_align_blind () {
   local FN="htrsh_mlf_align_blind";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
@@ -4354,13 +4448,25 @@ htrsh_mlf_align_blind () {
       }' "$MLF" );
     echo "${FEATS[$n]} $FRAMES$CHARS";
   done \
-    | awk '
+    | awk  '
         { printf( "\"*/%s.rec\"\n", $1 );
           frames_per_char = $2 / (NF-2) ;
           pos = 0;
+          #pword = 0;
           for( n=3; n<=NF; n++ ) {
             ppos = pos;
             pos += frames_per_char ;
+            #word = n==3 && $n == "'"$htrsh_symb_space"'" ? " - '"$htrsh_symb_space"'" : "" ;
+            #if( pword ) {
+            #  word = ( " - " $n );
+            #  for( m=n+1; m<=NF; m++ ) {
+            #    if( $m == "'"$htrsh_symb_space"'" )
+            #      break;
+            #    word = ( word $m );
+            #  }
+            #}
+            #pword = $n == "'"$htrsh_symb_space"'" ? 1 : 0 ;
+            #printf( "%.0f %.0f %s%s\n", 100000*ppos, 100000*pos, $n, word );
             printf( "%.0f %.0f %s\n", 100000*ppos, 100000*pos, $n );
           }
           printf( ".\n" );
@@ -4423,8 +4529,12 @@ htrsh_pageimg_forcealign_lines () {
   ### Check feature files ###
   local pIFS="$IFS";
   local IFS=$'\n';
-  local FBASE="$FEATDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
-  local FEATLST=( $( xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines" -o "$FBASE." -v ../@id -o . -v @id -o ".fea" -n "$XML" ) );
+  #local FBASE="$FEATDIR/"$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
+  local FBASE="$FEATDIR/$IMBASE";
+  local IDop=( -o "$FBASE." );
+  [ "$htrsh_extended_names" = "true" ] && IDop+=( -v ../@id -o . -v @id );
+  [ "$htrsh_extended_names" != "true" ] && IDop+=( -v @id );
+  local FEATLST=( $( xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines" "${IDop[@]}" -o ".fea" -n "$XML" ) );
   IFS="$pIFS";
 
   ls "${FEATLST[@]}" >/dev/null;
@@ -4455,7 +4565,7 @@ htrsh_pageimg_forcealign_lines () {
   local missing=( $(
     { sed 's|.*/||; s|\.fea$||;' "$TMP/$B.lst";
       sed -n '
-        /\/'"$IMBASE"'\.[^.]\+\.[^.]\+\.rec"$/ {
+        /\/'"$IMBASE"'\..\+\.rec"$/ {
           s|.*/||; s|\.rec"$||;
           p;
         }' "$TMP/${B}_aligned.mlf";
@@ -4780,7 +4890,7 @@ htrsh_pageimg_forcealign () {
   [ "$htrsh_feat" != "dotmatrix" ] && DOPCA="no";
   if [ "$PBASE" = "" ] && [ "$DOPCA" = "yes" ]; then
     echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): computing PCA for page ...";
-    PBASE="$TMP/pcab.mat.gz";
+    PBASE="$TMP/pcab.h5";
     htrsh_feats_pca "$TMP/${B}_feats.lst" "$PBASE" -e 1:4 -r 24;
     [ "$?" != 0 ] && return 1;
   fi #| sed '/^$/d';
