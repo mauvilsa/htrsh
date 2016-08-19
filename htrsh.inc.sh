@@ -3966,13 +3966,15 @@ htrsh_pagexml_insertalign_lines () {(
   local FN="htrsh_pagexml_insertalign_lines";
   local SRC="lines";
   local MAP="";
+  local HTKALI="yes";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Inserts alignment information in an XML Page given a rec MLF";
       echo "Usage: $FN XML MLF [ Options ]";
       echo "Options:";
-      echo " -s SOURCE    Source of TextEquiv, either 'regions' or 'lines' (def.=$SRC)";
-      echo " -M MAPFILE   Diplomatic text mapping file (def.=none)";
+      echo " -s SOURCE      Source of TextEquiv, either 'regions' or 'lines' (def.=$SRC)";
+      echo " -M MAPFILE     Diplomatic text mapping file (def.=none)";
+      echo " -htk (yes|no)  MLF aligments as HTK *100k values (def.=$HTKALI)";
     } 1>&2;
     return 1;
   fi
@@ -3986,6 +3988,8 @@ htrsh_pagexml_insertalign_lines () {(
       SRC="$2";
     elif [ "$1" = "-M" ]; then
       MAP="$2";
+    elif [ "$1" = "-htk" ]; then
+      HTKALI="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -4012,28 +4016,39 @@ htrsh_pagexml_insertalign_lines () {(
   ### Prepare alignment information for each line to align ###
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating Page XML with alignments ..." 1>&2;
 
-  local ids=$( sed -n '/\/'"$IMBASE"'.*\.[^.]\+\.rec"$/{ s|.*\.\([^.]\+\)\.rec"$|\1|; p; }' "$MLF" );
+  local ids=$( sed -nr '/\/'"$IMBASE"'.*\.[^.]+\.rec"$/{ s|.*\.([^.]+)\.rec"$|\1|; p; }' "$MLF" );
+
+  [ "$ids" = "" ] &&
+    echo "$FN: error: unable to extract sample IDs from MLF, expected pattern $IMBASE.*\.([^.]+)\.rec" 1>&2 &&
+    return 1;
 
   #local TS=$(($(date +%s%N)/1000000));
 
   local aligns=$(
     sed -n '/\/'"$IMBASE"'.*\.[^.]\+\.rec"$/,/^\.$/p' "$MLF" \
-      | awk '
+      | awk -v HTKALI="$HTKALI" '
           { if( FILENAME != "-" )
               ids[$0] = "";
             else {
               if( match( $0, /\.rec"$/ ) )
                 id = gensub(/.*\.([^.]+)\.rec"$/, "\\1", 1, $0 );
               else if( $0 != "." && id in ids ) {
-                NF = 3;
-                $2 = sprintf( "%.0f", $2/100000-1 );
-                $1 = sprintf( "%.0f", $1==0 ? 0 : $1/100000-1 );
+                #NF = 3;
+                if( NF > 4 ) NF = 4;
+                if( HTKALI == "yes" ) {
+                  $2 = sprintf( "%.0f", $2/100000-1 );
+                  $1 = sprintf( "%.0f", $1==0 ? 0 : $1/100000-1 );
+                }
                 $1 = ( id " " $1 );
                 print;
               }
             }
-          }' <( echo "$ids" ) -
+          }' <( printf %s "$ids" ) -
       );
+
+  [ "$aligns" = "" ] &&
+    echo "$FN: error: unable to extract alignments from MLF" 1>&2 &&
+    return 1;
 
   local fpgram=( xmlstarlet sel -t );
   local id;
@@ -4051,7 +4066,7 @@ htrsh_pagexml_insertalign_lines () {(
                   rid[$1] = FNR;
                 else
                   printf("%s,%s\n",rid[$1],$3);
-              }' <( echo "$ids" ) - \
+              }' <( printf %s "$ids" ) - \
           | sed '$!s|$|;|' \
           | tr -d '\n'
           )" ];
@@ -4086,7 +4101,7 @@ htrsh_pagexml_insertalign_lines () {(
             $1 = rid[$1];
             print;
           }
-        }' <( echo "$ids" ) - ;
+        }' <( printf %s "$ids" ) - ;
     );
 
   #local TE=$(($(date +%s%N)/1000000)); echo "time 0: $((TE-TS)) ms" 1>&2; TS="$TE";
@@ -4152,7 +4167,8 @@ htrsh_pagexml_insertalign_lines () {(
     prevreg="$reg";
 
     ### Word level alignments ###
-    local W=$(echo "$align" | grep " ${htrsh_symb_space}$" | wc -l); W=$((W-1));
+    local W=$(echo "$align" | awk '{if($3=="'"${htrsh_symb_space}"'")n++;}END{print n;}'); W=$((W-1));
+    #local W=$(echo "$align" | grep " ${htrsh_symb_space}$" | wc -l); W=$((W-1));
     local w;
     for w in $(seq 1 $W); do
       #TE=$(($(date +%s%N)/1000000)); echo "time 2: $((TE-TS)) ms" 1>&2; TS="$TE";
@@ -4168,8 +4184,10 @@ htrsh_pagexml_insertalign_lines () {(
         done
 
       local wid="${id}_w$(printf %.3d $rw)";
-      local pS=$(echo "$align" | grep -n " ${htrsh_symb_space}$" | sed -n "$w{s|:.*||;p;}"); pS=$((pS+1));
-      local pE=$(echo "$align" | grep -n " ${htrsh_symb_space}$" | sed -n "$((w+1)){s|:.*||;p;}"); pE=$((pE-1));
+      #local pS=$(echo "$align" | grep -n " ${htrsh_symb_space}$" | sed -n "$w{s|:.*||;p;}"); pS=$((pS+1));
+      #local pE=$(echo "$align" | grep -n " ${htrsh_symb_space}$" | sed -n "$((w+1)){s|:.*||;p;}"); pE=$((pE-1));
+      local pS=$(echo "$align" | awk -v s=$w '{if($3=="'"${htrsh_symb_space}"'"){n++;if(s==n)print NR;}}'); pS=$((pS+1));
+      local pE=$(echo "$align" | awk -v s=$((w+1)) '{if($3=="'"${htrsh_symb_space}"'"){n++;if(s==n)print NR;}}'); pE=$((pE-1));
       local pts;
       if [ "$pS" = "$pE" ]; then
         pts=$(echo "$coords" | sed -n "${pS}p");
@@ -4238,7 +4256,8 @@ htrsh_pagexml_insertalign_lines () {(
       #TE=$(($(date +%s%N)/1000000)); echo "time 4: $((TE-TS)) ms" 1>&2; TS="$TE";
 
       ### Region word numbering and broken word handling ###
-      local text=$(echo "$align" | sed -n "$pS,$pE{s|.* ||;p;}" | tr -d '\n');
+      #local text=$(echo "$align" | sed -n "$pS,$pE{s|.* ||;p;}" | tr -d '\n');
+      local text=$(echo "$align" | awk "{if(NR>=$pS&&NR<=$pE)"'printf("%s",$3);}');
 
       if [ $(echo "$text" | grep -c $'\xC2\xAD$') != 0 ]; then
         [ wbreak = "yes" ] &&
@@ -4284,7 +4303,8 @@ htrsh_pagexml_insertalign_lines () {(
           xmledit+=( -s //TMPNODE -t elem -n Coords );
           xmledit+=( -i //TMPNODE/Coords -t attr -n points -v "$pts" );
           if [ "$htrsh_align_addtext" = "yes" ]; then
-            local text=$(echo "$align" | sed -n "$c{s|.* ||;p;}" | tr -d '\n');
+            #local text=$(echo "$align" | sed -n "$c{s|.* ||;p;}" | tr -d '\n');
+            local text=$(echo "$align" | awk "{if(NR==$c)"'printf("%s",$3);}');
             xmledit+=( -s //TMPNODE -t elem -n TextEquiv );
             xmledit+=( -s //TMPNODE/TextEquiv -t elem -n Unicode -v "$text" );
           fi
@@ -4297,10 +4317,13 @@ htrsh_pagexml_insertalign_lines () {(
       #TE=$(($(date +%s%N)/1000000)); echo "time 5: $((TE-TS)) ms" 1>&2; TS="$TE";
 
       if [ "$htrsh_align_addtext" = "yes" ]; then
-        local text=$(echo "$align" | sed -n "$pS,$pE{s|.* ||;p;}" | tr -d '\n');
+        #local text=$(echo "$align" | sed -n "$pS,$pE{s|.* ||;p;}" | tr -d '\n');
+        local text=$(echo "$align" | awk "{if(NR>=$pS&&NR<=$pE)"'printf("%s",$3);}');
+        local score=$(echo "$align" | awk "{if(NR>=$pS&&NR<=$pE)"'s+=$4;}END{print s;}');
         [ "$MAP" != "" ] && text="${wmap[0]}";
         xmledit+=( -s "//*[@id='$wid']" -t elem -n TextEquiv );
         xmledit+=( -s "//*[@id='$wid']/TextEquiv" -t elem -n Unicode -v "$text" );
+        xmledit+=( -i "//*[@id='$wid']" -t attr -n custom -v "score:$score;" );
         #TE=$(($(date +%s%N)/1000000)); echo "time 6: $((TE-TS)) ms" 1>&2; TS="$TE";
       fi
 
