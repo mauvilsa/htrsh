@@ -41,6 +41,8 @@ htrsh_imgtxtenh_opts="-r 0.16 -w 20 -k 0.1"; # Options for imgtxtenh tool
 htrsh_imglineclean_opts="-V0 -m 99%";        # Options for imglineclean tool
 htrsh_minres="50";                           # Minimum resolution for images
 
+htrsh_warn_imgres="no";
+
 htrsh_feat_deslope="yes"; # Whether to correct slope per line
 htrsh_feat_deslant="yes"; # Whether to correct slant of the text
 htrsh_feat_padding="1.0"; # Left and right white padding in mm for line images
@@ -60,6 +62,7 @@ htrsh_align_chars="no";             # Whether to align at a character level
 htrsh_align_dilradi="0.5";          # Dilation radius in mm for contours
 htrsh_align_contour="yes";          # Whether to compute contours from the image
 htrsh_align_isect="yes";            # Whether to intersect parallelograms with line contour
+htrsh_align_midbox="yes";           # Whether to use bounding box of parallelogram side means
 htrsh_align_prefer_baselines="yes"; # Whether to always generate contours from baselines
 htrsh_align_addtext="yes";          # Whether to add TextEquiv to word and glyph nodes
 htrsh_align_words="yes";            # Whether to align at a word level when aligning regions
@@ -90,7 +93,6 @@ htrsh_symb_space="{space}";
 
 htrsh_special_chars=$'
 <gap/> {gap}
-@ {at}
 _ {_}
 \x27 {squote}
 " {dquote}
@@ -755,7 +757,8 @@ htrsh_prep_tasas () {
 htrsh_pageimg_info () {
   local FN="htrsh_pageimg_info";
   local XML="$1";
-  local VAL=( val -e ); [ "$htrsh_valschema" = "yes" ] && VAL+=( -s "$htrsh_pagexsd" );
+  local VAL=( xmlstarlet val -q -e ); [ "$htrsh_valschema" = "yes" ] && VAL+=( -s "$htrsh_pagexsd" );
+  #local VAL=( xmllint --noout ); [ "$htrsh_valschema" = "yes" ] && VAL+=( --schema "$htrsh_pagexsd" );
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Checks and extracts basic info (XMLDIR, IMDIR, IMFILE, XMLBASE, IMBASE, IMEXT, IMSIZE, IMRES, RESSRC) from an XML Page file and respective image";
@@ -765,7 +768,7 @@ htrsh_pageimg_info () {
   elif [ ! -f "$XML" ]; then
     echo "$FN: error: page file not found: $XML" 1>&2;
     return 1;
-  elif [ $(xmlstarlet "${VAL[@]}" "$XML" | grep ' invalid$' | wc -l) != 0 ]; then
+  elif [ $("${VAL[@]}" "$XML"; echo "$?") != 0 ]; then
     echo "$FN: error: invalid page file: $XML" 1>&2;
     return 1;
   elif [ $(xmlstarlet sel -t -m '//*/@id' -v . -n "$XML" 2>/dev/null | sort | uniq -d | wc -l) != 0 ]; then
@@ -821,6 +824,7 @@ htrsh_pageimg_info () {
               }'
         );
 
+      [ "$htrsh_warn_imgres" = "yes" ] &&
       if [ "$IMRES" = "" ]; then
         echo "$FN: warning: no resolution metadata for image: $IMFILE";
       elif [ $(echo "$IMRES" | sed 's|.*x||') != $(echo "$IMRES" | sed 's|x.*||') ]; then
@@ -1084,7 +1088,7 @@ htrsh_pagexml_round () {
 }
 
 ##
-## Function that inserts XML Page nodes from an external XML Pages
+## Function that inserts XML Page nodes from an external XML Page
 ##
 htrsh_pagexml_insertfrom () {
   local FN="htrsh_pagexml_insertfrom";
@@ -1153,6 +1157,71 @@ htrsh_pagexml_insertfrom () {
 </xsl:stylesheet>';
 
   xmlstarlet tr <( echo "$XSLT" ) "$FILE_TO";
+}
+
+##
+## Function that replicates XML Page nodes
+##
+htrsh_pagexml_replicate_nodes () {
+  local FN="htrsh_pagexml_replicate_nodes";
+  if [ $# -lt 4 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Replicates XML Page nodes";
+      echo "Usage: $FN XML PATTERN NUM ID [NUM ID ...]";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local XML="$1";
+  local PATTERN="$2";
+  shift 2;
+
+  ### Create XSLT ###
+  local XSLT='<?xml version="1.0"?>
+<xsl:stylesheet
+  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  xmlns:_="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  version="1.0">
+
+  <xsl:output method="xml" indent="yes" encoding="utf-8" omit-xml-declaration="no"/>
+
+  <xsl:template match="@* | node()">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()"/>
+    </xsl:copy>
+  </xsl:template>';
+
+  local n="0";
+  local INFO=("$@");
+  while [ "$n" -lt "${#INFO[@]}" ]; do
+    local ID="${INFO[$((n+1))]}";
+    XSLT+='
+  <xsl:template match="//*[@id='"'$ID'"']">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()"/>
+    </xsl:copy>';
+    local m;
+    for m in $(seq 2 ${INFO[$n]}); do
+      local IDm=$(printf "$PATTERN" "$ID" "$m");
+      XSLT+='
+    <xsl:copy>
+      <xsl:attribute name="id">'"$IDm"'</xsl:attribute>
+      <xsl:apply-templates select="@*[local-name()!='"'id'"'] | node()"/>
+    </xsl:copy>';
+    done
+    XSLT+='
+  </xsl:template>';
+
+    n=$((n+2));
+  done
+
+  XSLT+='
+</xsl:stylesheet>';
+
+  xmlstarlet tr <( echo "$XSLT" ) "$XML";
 }
 
 ##
@@ -2512,7 +2581,7 @@ htrsh_feats_htk_to_kaldi () {
 
   sed 's|^\([^/]*\)\.fea$|\1 \1.fea|;
        s|^\(.*/\)\([^/]*\)\.fea$|\2 \1\2.fea|;' \
-    | copy-feats --htk-in scp:- ark,scp:$1.ark,$1.scp;
+    | copy-feats --print-args=false --htk-in scp:- ark,scp:$1.ark,$1.scp;
 
   return $?;
 }
@@ -3966,6 +4035,7 @@ htrsh_pagexml_insertalign_lines () {(
   local FN="htrsh_pagexml_insertalign_lines";
   local SRC="lines";
   local MAP="";
+  local LINETXT="no";
   local HTKALI="yes";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
@@ -3974,6 +4044,7 @@ htrsh_pagexml_insertalign_lines () {(
       echo "Options:";
       echo " -s SOURCE      Source of TextEquiv, either 'regions' or 'lines' (def.=$SRC)";
       echo " -M MAPFILE     Diplomatic text mapping file (def.=none)";
+      echo " -l (yes|no)    Whether to set the TextEquiv of the lines (def.=$LINETXT)";
       echo " -htk (yes|no)  MLF aligments as HTK *100k values (def.=$HTKALI)";
     } 1>&2;
     return 1;
@@ -3988,6 +4059,8 @@ htrsh_pagexml_insertalign_lines () {(
       SRC="$2";
     elif [ "$1" = "-M" ]; then
       MAP="$2";
+    elif [ "$1" = "-l" ]; then
+      LINETXT="$2";
     elif [ "$1" = "-htk" ]; then
       HTKALI="$2";
     else
@@ -4166,6 +4239,8 @@ htrsh_pagexml_insertalign_lines () {(
 
     prevreg="$reg";
 
+    local linetxt="";
+
     ### Word level alignments ###
     local W=$(echo "$align" | awk '{if($3=="'"${htrsh_symb_space}"'")n++;}END{print n;}'); W=$((W-1));
     #local W=$(echo "$align" | grep " ${htrsh_symb_space}$" | wc -l); W=$((W-1));
@@ -4248,6 +4323,18 @@ htrsh_pagexml_insertalign_lines () {(
         [ "$cpts" = "" ] && echo "warning: failed to obtain intersection for word $wid" 1>&2;
       fi
 
+      if [ "$cpts" = "" ] && [ "$htrsh_align_midbox" = "yes" ]; then
+        cpts=$( echo $pts \
+                  | awk -F'[, ]' '
+                      function ceil( v ) { return v == int(v) ? v : int(v)+1 ; }
+                      { x0 = int( 0.5*($1+$3) );
+                        x1 = ceil( 0.5*($5+$7) );
+                        y0 = int( 0.5*($4+$6) );
+                        y1 = ceil( 0.5*($2+$8) );
+                        printf("%d,%d %d,%d %d,%d %d,%d", x0,y0, x1,y0, x1,y1, x0,y1 );
+                      }' );
+      fi
+
       [ "$cpts" != "" ] && pts="$cpts";
 
       pts=$(echo "$pts" | sed '/^[^ ]*,[^ ]*$/s|\(.*\)|\1 \1|');
@@ -4323,8 +4410,9 @@ htrsh_pagexml_insertalign_lines () {(
         [ "$MAP" != "" ] && text="${wmap[0]}";
         xmledit+=( -s "//*[@id='$wid']" -t elem -n TextEquiv );
         xmledit+=( -s "//*[@id='$wid']/TextEquiv" -t elem -n Unicode -v "$text" );
-        xmledit+=( -i "//*[@id='$wid']" -t attr -n custom -v "score:$score;" );
+        xmledit+=( -i "//*[@id='$wid']/TextEquiv" -t attr -n conf -v "$score" );
         #TE=$(($(date +%s%N)/1000000)); echo "time 6: $((TE-TS)) ms" 1>&2; TS="$TE";
+        linetxt+=" $text";
       fi
 
       [ "$MAP" != "" ] &&
@@ -4335,7 +4423,16 @@ htrsh_pagexml_insertalign_lines () {(
         done
     done # for w in $(seq 1 $W); do
 
+    if [ "$htrsh_align_addtext" = "yes" ] && [ "$LINETXT" = "yes" ]; then
+      local score=$(echo "$aligns" | awk '{s+=$5;}END{print s/NR;}');
+      xmledit+=( -d "//*[@id='$id']/_:TextEquiv" );
+      xmledit+=( -s "//*[@id='$id']" -t elem -n TextEquiv );
+      xmledit+=( -s "//*[@id='$id']/TextEquiv" -t elem -n Unicode -v "${linetxt/ /}" );
+      xmledit+=( -i "//*[@id='$id']/TextEquiv" -t attr -n conf -v "$score" );
+    fi
+
     xmledit+=( -m "//*[@id='$id']/_:TextEquiv" "//*[@id='$id']" );
+    xmledit+=( -m "//*[@id='$id']/_:TextStyle" "//*[@id='$id']" );
 
     xmlstarlet ed --inplace "${xmledit[@]}" "$XML";
     [ "$?" != 0 ] &&
