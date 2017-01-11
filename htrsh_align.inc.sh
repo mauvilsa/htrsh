@@ -1,6 +1,6 @@
 
 #htrsh_align_wordsplit="no"; # Whether to split words when aligning regions
-htrsh_align_wordsplit="yes";
+#htrsh_align_wordsplit="yes";
 #htrsh_align_words="no"; # Whether to align at a word level when aligning regions
 htrsh_align_words="yes"; # currently only used in old version
 
@@ -167,7 +167,7 @@ htrsh_pageimg_forcealign_regions () {
 
     ### Ouput alignments in MLF format ###
     echo "$align" \
-      | awk -v base="$ff" -v wordsplit="$htrsh_align_wordsplit" '
+      | awk -v base="$ff" -v wordsplit="$htrsh_align_wordsplit" -v SPACE="$htrsh_symb_space" '
           { if( FILENAME != "-" ) {
               id[FNR] = $1;
               nframes[FNR] = $2;
@@ -184,9 +184,9 @@ htrsh_pageimg_forcealign_regions () {
             if( wordsplit != "yes" ) {
               for( n=2; n<=N; n++ )
                 if( ( ln[n] != ln[n-1] ) &&
-                    ! ( txt[n]=="@" || txt[n-1]=="@" ) ) {
-                  pS = n-1; while( pS > 1  && txt[pS-1] != "@" ) pS --;
-                  pF = n-1; while( pF < NR && txt[pF+1] != "@" ) pF ++;
+                    ! ( txt[n]==SPACE || txt[n-1]==SPACE ) ) {
+                  pS = n-1; while( pS > 1  && txt[pS-1] != SPACE ) pS --;
+                  pF = n-1; while( pF < NR && txt[pF+1] != SPACE ) pF ++;
                   if( n - pS >= pF - n + 1 )
                     for( m=n; m<=pF; m++ ) {
                       ln[m] = ln[n-1];
@@ -202,7 +202,7 @@ htrsh_pageimg_forcealign_regions () {
             else
               for( n=2; n<=N; n++ )
                 if( ( ln[n] != ln[n-1] ) &&
-                    ! ( txt[n]=="@" || txt[n-1]=="@" ) ) {
+                    ! ( txt[n]==SPACE || txt[n-1]==SPACE ) ) {
                   txt[n-1] = sprintf( "%s\xC2\xAD", txt[n-1] );
                   txt[n] = sprintf( "\xC2\xAD%s", txt[n] );
                 }
@@ -215,13 +215,13 @@ htrsh_pageimg_forcealign_regions () {
               e = e <= 0 ? 0 : (1+e)*100000 ;
               if( ln[n-1] != ln[n] ) {
                 if( ln[n] > 1 ) {
-                  if( txt[n-1] != "@" )
-                    printf( "%.0f %.0f @\n", pe, pe );
+                  if( txt[n-1] != SPACE )
+                    printf( "%.0f %.0f %s\n", pe, pe, SPACE );
                   printf( ".\n" );
                 }
                 printf( "\"*/%s.%s.rec\"\n", base, id[ln[n]] );
-                if( txt[n] != "@" )
-                  printf( "0 %.0f @\n", s );
+                if( txt[n] != SPACE )
+                  printf( "0 %.0f %s\n", s, SPACE );
               }
               printf( "%.0f %.0f %s\n", s, e, txt[n] );
             }

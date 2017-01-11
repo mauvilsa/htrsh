@@ -5,10 +5,10 @@
 ##
 ## @version $Revision$$Date::             $
 ## @author Mauricio Villegas <mauvilsa@upv.es>
-## @copyright Copyright(c) 2014 to the present, Mauricio Villegas (UPV)
+## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauvilsa@upv.es>
 ##
 
-[ "${BASH_SOURCE[0]}" = "$0" ] && 
+[ "${BASH_SOURCE[0]}" = "$0" ] &&
   echo "htrsh.inc.sh: error: script intended for sourcing, try: . htrsh.inc.sh" 1>&2 &&
   exit 1;
 [ "$(type -t htrsh_version)" = "function" ] &&
@@ -177,7 +177,7 @@ htrsh_check_dependencies () {
 
   if [ "$RC" = 0 ]; then
     htrsh_version;
-    run_parallel_version;
+    echo run_parallel version $(run_parallel --version);
     for cmd in imgtxtenh imglineclean imgccomp; do
       $cmd --version;
     done
@@ -560,6 +560,11 @@ htrsh_pagexml_textequiv_filter () {
   local XML="$1";
   local FILTER="$2";
 
+  type -t "$FILTER" >/dev/null;
+  [ "$?" != 0 ] &&
+    echo "$FN: error: filter not defined: $FILTER" 1>&2 &&
+    return 1;
+
   ### Check page ###
   htrsh_pageimg_info "$XML" noinfo;
   local TEXT=$( htrsh_pagexml_textequiv "$XML" -s all -f tab | sed -r 's|^[^ ]+\.([^. ]+ )|\1|' );
@@ -574,6 +579,75 @@ htrsh_pagexml_textequiv_filter () {
     updatetext+=( "$tid" "$text" );
   done
   htrsh_pagexml_set_textequiv "$XML" "${updatetext[@]}";
+}
+
+##
+## Function that transforms plain text to character sequences
+##
+htrsh_text_to_chars () {
+  local FN="htrsh_text_to_chars";
+  local FILTER="";
+  local ESPACES="yes";
+  local WORDEND="no";
+  if [ $# -lt 2 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Transforms plain text to character sequences";
+      echo "Usage: $FN TEXTFILE [ Options ]";
+      echo "Options:";
+      echo " -F FILTER    Filtering pipe command, e.g. tokenizer, transliteration, etc. (def.=none)";
+      echo " -E (yes|no)  For *-chars, whether to add spaces at start and end (def.=$ESPACES)";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local TEXT="$1"; [ "$TEXT" = "-" ] && TEXT="/dev/stdin";
+  shift;
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "-F" ]; then
+      FILTER="$2";
+    elif [ "$1" = "-E" ]; then
+      ESPACES="$2";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
+    shift 2;
+  done
+
+  ### Process text ###
+  local AWK=(
+    awk -v hmmtype="$htrsh_hmm_type"
+        -v ESPACES="$ESPACES" -v WORDEND="$WORDEND"
+        -v SPACE="$htrsh_symb_space" -v SPECIAL=<( echo "$htrsh_special_chars" )
+      "$htrsh_gawk_func_word_to_chars"'
+      BEGIN {
+        load_special_chars( SPECIAL );
+      }
+      { SEP="";
+        if( ESPACES == "yes" ) {
+          printf("%s",SPACE);
+          SEP=" ";
+        }
+        M = split( $0, words, " " );
+        for( m=1; m<=M; m++ ) {
+          N = word_to_chars( words[m], hmms, hmmtype, "no" );
+          for( n=1; n<=N; n++ ) {
+            printf( "%s%s", SEP, hmms[n] );
+            SEP=" ";
+          }
+          if( WORDEND == "yes" )
+            printf( " {wordend}" );
+          if( m < M || ESPACES == "yes" )
+            printf(" %s",SPACE);
+        }
+        printf("\n");
+      }' );
+  if [ "$FILTER" = "" ]; then
+    "${AWK[@]}" "$TEXT";
+  else
+    "$FILTER" < "$TEXT" | "${AWK[@]}";
+  fi
 }
 
 ##
@@ -757,8 +831,8 @@ htrsh_prep_tasas () {
 htrsh_pageimg_info () {
   local FN="htrsh_pageimg_info";
   local XML="$1";
-  local VAL=( xmlstarlet val -q -e ); [ "$htrsh_valschema" = "yes" ] && VAL+=( -s "$htrsh_pagexsd" );
-  #local VAL=( xmllint --noout ); [ "$htrsh_valschema" = "yes" ] && VAL+=( --schema "$htrsh_pagexsd" );
+  #local VAL=( xmlstarlet val -q -e ); [ "$htrsh_valschema" = "yes" ] && VAL+=( -s "$htrsh_pagexsd" );
+  local VAL=( xmllint --noout ); [ "$htrsh_valschema" = "yes" ] && VAL+=( --schema "$htrsh_pagexsd" );
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Checks and extracts basic info (XMLDIR, IMDIR, IMFILE, XMLBASE, IMBASE, IMEXT, IMSIZE, IMRES, RESSRC) from an XML Page file and respective image";
@@ -768,7 +842,7 @@ htrsh_pageimg_info () {
   elif [ ! -f "$XML" ]; then
     echo "$FN: error: page file not found: $XML" 1>&2;
     return 1;
-  elif [ $("${VAL[@]}" "$XML"; echo "$?") != 0 ]; then
+  elif [ $("${VAL[@]}" "$XML" 2>/dev/null; echo "$?") != 0 ]; then
     echo "$FN: error: invalid page file: $XML" 1>&2;
     return 1;
   elif [ $(xmlstarlet sel -t -m '//*/@id' -v . -n "$XML" 2>/dev/null | sort | uniq -d | wc -l) != 0 ]; then
@@ -926,6 +1000,93 @@ htrsh_pageimg_resize () {
     > "$OUTDIR/$XMLBASE.xml";
 
   return 0;
+}
+
+##
+## Function that horizontally inverts a Page XML and its image
+##
+htrsh_pageimg_flop () {
+  local FN="htrsh_pageimg_flop";
+  if [ $# != 2 ]; then
+    { echo "$FN: Error: Incorrect input arguments";
+      echo "Description: Horizontally inverts a Page XML and its image";
+      echo "Usage: $FN XML_PAGE_FILE OUTDIR";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local XML="$1";
+  local OUTDIR="$2";
+
+  ### Check XML file and image ###
+  local $htrsh_infovars;
+  htrsh_pageimg_info "$XML";
+  [ "$?" != 0 ] && return 1;
+
+  convert "$IMFILE" -flop "$OUTDIR/$IMBASE.$IMEXT";
+  htrsh_pagexml_flop < "$XML" > "$OUTDIR/$XMLBASE.xml";
+}
+
+##
+## Function that horizontally inverts a Page XML file
+##
+htrsh_pagexml_flop () {
+  local FN="htrsh_pagexml_flop";
+  if [ $# != 0 ]; then
+    { echo "$FN: Error: Incorrect input arguments";
+      echo "Description: Horizontally inverts a Page XML file";
+      echo "Usage: $FN < XML_PAGE_FILE";
+    } 1>&2;
+    return 1;
+  fi
+
+  local XSLT='<?xml version="1.0"?>
+<xsl:stylesheet
+  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:str="http://exslt.org/strings"
+  xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  xmlns:_="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  extension-element-prefixes="str"
+  version="1.0">
+
+  <xsl:output method="xml" indent="yes" encoding="utf-8" omit-xml-declaration="no"/>
+
+  <xsl:variable name="width" select="//_:Page/@imageWidth"/>
+
+  <xsl:template match="@* | node()">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()"/>
+    </xsl:copy>
+  </xsl:template>
+
+  <xsl:template match="//*[@points]">
+    <xsl:copy>
+      <xsl:for-each select="@*[local-name() = '"'points'"' or local-name() = '"'fpgram'"']">
+      <xsl:attribute name="{local-name()}">
+        <xsl:for-each select="str:tokenize(.,'"', '"')">
+          <xsl:choose>
+            <xsl:when test="position() = 1">
+              <xsl:value-of select="number($width)-number(.)"/>
+            </xsl:when>
+            <xsl:when test="position() mod 2 = 0">
+              <xsl:text>,</xsl:text><xsl:value-of select="."/>
+            </xsl:when>
+            <xsl:otherwise>
+              <xsl:text> </xsl:text><xsl:value-of select="number($width)-number(.)"/>
+            </xsl:otherwise>
+          </xsl:choose>
+        </xsl:for-each>
+      </xsl:attribute>
+      </xsl:for-each>
+      <xsl:apply-templates select="@*[local-name() != '"'points'"' and local-name() != '"'fpgram'"'] | node()" />
+    </xsl:copy>
+  </xsl:template>
+
+</xsl:stylesheet>';
+
+  xmlstarlet tr <( echo "$XSLT" );
 }
 
 ##
@@ -1205,11 +1366,20 @@ htrsh_pagexml_replicate_nodes () {
     </xsl:copy>';
     local m;
     for m in $(seq 2 ${INFO[$n]}); do
-      local IDm=$(printf "$PATTERN" "$ID" "$m");
+      #local IDm=$(printf "$PATTERN" "$ID" "$m");
+      local IDm=$(printf "$PATTERN" "$m");
       XSLT+='
     <xsl:copy>
-      <xsl:attribute name="id">'"$IDm"'</xsl:attribute>
-      <xsl:apply-templates select="@*[local-name()!='"'id'"'] | node()"/>
+      <!--<xsl:attribute name="id">'"$IDm"'</xsl:attribute>-->
+      <xsl:attribute name="id">
+        <xsl:value-of select="concat(@id,&quot;'"$IDm"'&quot;)"/>
+      </xsl:attribute>
+      <xsl:if test="@orig-id">
+        <xsl:attribute name="orig-id">
+          <xsl:value-of select="concat(@orig-id,&quot;'"$IDm"'&quot;)"/>
+        </xsl:attribute>
+      </xsl:if>
+      <xsl:apply-templates select="@*[local-name()!='"'id'"' and local-name()!='"'orig-id'"'] | node()"/>
     </xsl:copy>';
     done
     XSLT+='
@@ -1673,6 +1843,66 @@ htrsh_pagexml_fpgram2points () {
 }
 
 ##
+## Function that replaces region '0,0 0,0' coords with content bounding box or page size if empty and only one region
+##
+htrsh_pagexml_zeroreg_fix () {
+  local FN="htrsh_pagexml_zeroreg_fix";
+  local INPLACE="no";
+  if [ $# -lt 1 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Replaces region '0,0 0,0' coords with content bounding box or page size if empty and only one region";
+      echo "Usage: $FN XML";
+    } 1>&2;
+    return 1;
+  fi
+
+  local XML="$1";
+  local IDS=( $(xmlstarlet sel -t -m "//_:TextRegion[_:Coords/@points = '0,0 0,0']" -v @id -n "$XML") );
+
+  [ "${#IDS[@]}" = 0 ] &&
+    return 0;
+
+  local xmledit=( xmlstarlet ed --inplace );
+  for n in $(seq 1 ${#IDS[@]}); do
+    local ID="${IDS[$((n-1))]}";
+
+    local BBOX=$( xmlstarlet sel -t -m "//_:TextRegion[@id='$ID']//*[@points != '0,0 0,0']" -v @points -n "$XML" \
+      | awk -F'[ ,]' '
+          { if( NR == 1 ) {
+              x_min = x_max = $1;
+              y_min = y_max = $2;
+            }
+            for( n=1; n<=NF; n+=2 ) {
+              if( x_min > $n ) x_min = $n;
+              if( x_max < $n ) x_max = $n;
+              if( y_min > $(n+1) ) y_min = $(n+1);
+              if( y_max < $(n+1) ) y_max = $(n+1);
+            }
+          }
+          END {
+            if( NR > 0 )
+              print( x_min "," y_min " " x_max "," y_min " " x_max "," y_max " " x_min "," y_max );
+          }' );
+
+    if [ "$BBOX" = "" ]; then
+      if [ "$n" = 1 ]; then
+        local SIZE=( $(xmlstarlet sel -t -v //@imageWidth -o " " -v //@imageHeight "$XML") );
+        local W=$(( ${SIZE[0]} - 1 ));
+        local H=$(( ${SIZE[1]} - 1 ));
+        BBOX="0,0 $W,0 $W,$H 0,$H";
+      else
+        echo "$FN: error: unable to fix region coords: $XML" 1>&2;
+        return 1;
+      fi
+    fi
+
+    xmledit+=( -u "//_:TextRegion[@id='$ID']/_:Coords/@points" -v "$BBOX" );
+  done
+
+  "${xmledit[@]}" "$XML";
+}
+
+##
 ## Function that replaces new line characters in TextEquiv/Unicode with spaces
 ##
 htrsh_pagexml_textequiv_rm_newlines () {
@@ -1826,6 +2056,41 @@ htrsh_pagexml_sortattr () {
   xmlstarlet tr <( echo "$XSLT" );
 }
 
+##
+## Function that sets the image size attributes of the XML
+##
+htrsh_pageimg_setsize () {
+  local FN="htrsh_pageimg_setsize";
+  if [ $# != 1 ]; then
+    { echo "$FN: Error: Incorrect input arguments";
+      echo "Description: Sets the image size attributes of the XML";
+      echo "Usage: $FN XML";
+    } 1>&2;
+    return 1;
+  fi
+
+  local XML="$1";
+
+  ### Check XML file ###
+  local $htrsh_infovars;
+  htrsh_pageimg_info "$XML" noimg;
+  [ "$?" != 0 ] && return 1;
+
+  local DATE=$( date -u "+%Y-%m-%dT%H:%M:%S" );
+  local SIZE=( $(identify -format "%w %h" "$IMDIR/$IMBASE.$IMEXT") );
+  ( [ "$?" != 0 ] || [ "${#SIZE[@]}" != 2 ] ) && return 1;
+
+  local xmledit=( xmlstarlet ed --inplace );
+  xmledit+=( -d //@imageWidth -i //_:Page -t attr -n imageWidth -v "${SIZE[0]}" );
+  xmledit+=( -d //@imageHeight -i //_:Page -t attr -n imageHeight -v "${SIZE[1]}" );
+  xmledit+=( -u //_:LastChange -v "$DATE" );
+  if [ $(xmlstarlet sel -t -v 'count(//_:Created[.!=""])' "$XML") = 0 ]; then
+    DATE=$( date -u "+%Y-%m-%dT%H:%M:%S" -d "$(stat -c %y "$XML")" );
+    xmledit+=( -u //_:Created -v "$DATE" );
+  fi
+
+  "${xmledit[@]}" "$XML";
+}
 
 #--------------------------------------#
 # Feature extraction related functions #
@@ -1882,7 +2147,7 @@ htrsh_pageimg_clean () {
 
   ### Enhance image ###
   local RC="0";
-  if [ "$htrsh_clean_type" = "line" ]; then
+  if [ "$htrsh_clean_type" != "image" ]; then
     #convert "$IMFILE" -units PixelsPerCentimeter -density $(echo "$INRES" | sed 's|.* ||') "$OUTDIR/$IMBASE.png";
     #RC="$?";
     cp -p "$XML" "$IMFILE" "$OUTDIR";
@@ -2774,7 +3039,9 @@ htrsh_pageimg_extract_linefeats () {
     echo "$FN: processing line image ${ff}.png";
 
     ### Clean and trim line image ###
-    if [ "$htrsh_clean_type" = "line" ]; then
+    if [ "$htrsh_clean_type" = "none" ]; then
+      cp -p ${ff}.png ${ff}_clean.png;
+    elif [ "$htrsh_clean_type" = "line" ]; then
       imgtxtenh $htrsh_imgtxtenh_opts -a ${ff}.png miff:- \
         | imglineclean $htrsh_imglineclean_opts - ${ff}_clean.png;
     else
@@ -4033,7 +4300,7 @@ htrsh_mlf_diplom_prepalign () {
 ##
 htrsh_pagexml_insertalign_lines () {(
   local FN="htrsh_pagexml_insertalign_lines";
-  local SRC="lines";
+  #local SRC="lines";
   local MAP="";
   local LINETXT="no";
   local HTKALI="yes";
@@ -4042,7 +4309,7 @@ htrsh_pagexml_insertalign_lines () {(
       echo "Description: Inserts alignment information in an XML Page given a rec MLF";
       echo "Usage: $FN XML MLF [ Options ]";
       echo "Options:";
-      echo " -s SOURCE      Source of TextEquiv, either 'regions' or 'lines' (def.=$SRC)";
+      #echo " -s SOURCE      Source of TextEquiv, either 'regions' or 'lines' (def.=$SRC)";
       echo " -M MAPFILE     Diplomatic text mapping file (def.=none)";
       echo " -l (yes|no)    Whether to set the TextEquiv of the lines (def.=$LINETXT)";
       echo " -htk (yes|no)  MLF aligments as HTK *100k values (def.=$HTKALI)";
@@ -4055,9 +4322,10 @@ htrsh_pagexml_insertalign_lines () {(
   local MLF="$2";
   shift 2;
   while [ $# -gt 0 ]; do
-    if [ "$1" = "-s" ]; then
-      SRC="$2";
-    elif [ "$1" = "-M" ]; then
+    #if [ "$1" = "-s" ]; then
+    #  SRC="$2";
+    #elif [ "$1" = "-M" ]; then
+    if [ "$1" = "-M" ]; then
       MAP="$2";
     elif [ "$1" = "-l" ]; then
       LINETXT="$2";
@@ -4089,16 +4357,34 @@ htrsh_pagexml_insertalign_lines () {(
   ### Prepare alignment information for each line to align ###
   echo "$FN ($(date -u '+%Y-%m-%d %H:%M:%S')): generating Page XML with alignments ..." 1>&2;
 
-  local ids=$( sed -nr '/\/'"$IMBASE"'.*\.[^.]+\.rec"$/{ s|.*\.([^.]+)\.rec"$|\1|; p; }' "$MLF" );
+  local ids=$( sed -nr '/\/'"$IMBASE"'\.(.+\.)?[^.]+\.rec"$/{ s|.*\.([^.]+)\.rec"$|\1|; p; }' "$MLF" );
 
   [ "$ids" = "" ] &&
-    echo "$FN: error: unable to extract sample IDs from MLF, expected pattern $IMBASE.*\.([^.]+)\.rec" 1>&2 &&
+    echo "$FN: error: unable to extract sample IDs from MLF, expected pattern $IMBASE\.(.+\.)?[^.]+\.rec" 1>&2 &&
     return 1;
+
+  local fpgram=( xmlstarlet sel -t );
+  local id;
+  for id in $ids; do
+    #fpgram+=( -o " " -v "//*[@id='$id']/_:Coords/@fpgram" -o " ;" );
+    fpgram+=( -m "//_:TextLine[@id='$id' and _:Coords/@fpgram]" -v @id -o $'\t' -v _:Coords/@fpgram -n -b );
+  done
+  fpgram=$( "${fpgram[@]}" "$XML" );
+
+  [ "$fpgram" = "" ] &&
+    echo "$FN: error: unable to extract feature parallelograms: $XML" 1>&2 &&
+    return 1;
+
+  if [ $(echo "$ids" | wc -l) != $(echo "$fpgram" | wc -l) ]; then
+    local missing=$(( $(echo "$ids" | wc -l) - $(echo "$fpgram" | wc -l) ));
+    echo "$FN: warning: not aligning $missing lines due to missing parallelograms" 1>&2 &&
+    ids=$(echo "$fpgram" | cut -f 1);
+  fi
 
   #local TS=$(($(date +%s%N)/1000000));
 
   local aligns=$(
-    sed -n '/\/'"$IMBASE"'.*\.[^.]\+\.rec"$/,/^\.$/p' "$MLF" \
+    sed -nr '/\/'"$IMBASE"'\.(.+\.)?[^.]+\.rec"$/,/^\.$/p' "$MLF" \
       | awk -v HTKALI="$HTKALI" '
           { if( FILENAME != "-" )
               ids[$0] = "";
@@ -4123,15 +4409,9 @@ htrsh_pagexml_insertalign_lines () {(
     echo "$FN: error: unable to extract alignments from MLF" 1>&2 &&
     return 1;
 
-  local fpgram=( xmlstarlet sel -t );
-  local id;
-  for id in $ids; do
-    fpgram+=( -o " " -v "//*[@id='$id']/_:Coords/@fpgram" -o " ;" );
-  done
-
   local acoords=$(
     echo "
-      fpgram = [ "$( "${fpgram[@]}" "$XML" )" ];
+      fpgram = [ "$( echo "$fpgram" | cut -f 2 | paste -sd ';' )" ];
       aligns = [ "$(
         echo "$aligns" \
           | awk '
@@ -4406,11 +4686,12 @@ htrsh_pagexml_insertalign_lines () {(
       if [ "$htrsh_align_addtext" = "yes" ]; then
         #local text=$(echo "$align" | sed -n "$pS,$pE{s|.* ||;p;}" | tr -d '\n');
         local text=$(echo "$align" | awk "{if(NR>=$pS&&NR<=$pE)"'printf("%s",$3);}');
-        local score=$(echo "$align" | awk "{if(NR>=$pS&&NR<=$pE)"'s+=$4;}END{print s;}');
+        local score=$(echo "$align" | awk "{if(NR>=$pS&&NR<=$pE)"'{s+=$4;n++;}}END{s/=n;if(s>=0&&s<=1)print s;}');
         [ "$MAP" != "" ] && text="${wmap[0]}";
         xmledit+=( -s "//*[@id='$wid']" -t elem -n TextEquiv );
         xmledit+=( -s "//*[@id='$wid']/TextEquiv" -t elem -n Unicode -v "$text" );
-        xmledit+=( -i "//*[@id='$wid']/TextEquiv" -t attr -n conf -v "$score" );
+        [ "$score" != "" ] &&
+          xmledit+=( -i "//*[@id='$wid']/TextEquiv" -t attr -n conf -v "$score" );
         #TE=$(($(date +%s%N)/1000000)); echo "time 6: $((TE-TS)) ms" 1>&2; TS="$TE";
         linetxt+=" $text";
       fi
@@ -4424,11 +4705,12 @@ htrsh_pagexml_insertalign_lines () {(
     done # for w in $(seq 1 $W); do
 
     if [ "$htrsh_align_addtext" = "yes" ] && [ "$LINETXT" = "yes" ]; then
-      local score=$(echo "$aligns" | awk '{s+=$5;}END{print s/NR;}');
+      local score=$(echo "$align" | awk '{s+=$4;}END{s/=NR;if(s>=0&&s<=1)print s;}');
       xmledit+=( -d "//*[@id='$id']/_:TextEquiv" );
       xmledit+=( -s "//*[@id='$id']" -t elem -n TextEquiv );
       xmledit+=( -s "//*[@id='$id']/TextEquiv" -t elem -n Unicode -v "${linetxt/ /}" );
-      xmledit+=( -i "//*[@id='$id']/TextEquiv" -t attr -n conf -v "$score" );
+      [ "$score" != "" ] &&
+        xmledit+=( -i "//*[@id='$id']/TextEquiv" -t attr -n conf -v "$score" );
     fi
 
     xmledit+=( -m "//*[@id='$id']/_:TextEquiv" "//*[@id='$id']" );
