@@ -124,7 +124,7 @@ htrsh_sed_translit_vowels='
   ';
 
 htrsh_valschema="yes";
-htrsh_pagexsd="http://mvillegas.info/xsd/2013-07-15/pagecontent.xsd";
+htrsh_pagexsd="https://www.prhlt.upv.es/~mvillegas/xsd/pagecontent_prhlt.xsd";
 ( [ "$USER" = "mvillegas" ] || [ "$USER" = "mauvilsa" ] ) &&
   htrsh_pagexsd="$HOME/work/prog/mvsh/HTR/xsd/pagecontent+.xsd";
 
@@ -204,7 +204,7 @@ htrsh_pagexml_create () {
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Creates an empty Page file for a given image";
-      echo "Usage: $FN IMAGE";
+      echo "Usage: $FN IMAGE [pagereg]";
     } 1>&2;
     return 1;
   fi
@@ -230,8 +230,48 @@ htrsh_pagexml_create () {
   echo "    <LastChange>$DATE</LastChange>";
   echo "  </Metadata>";
   echo "  <Page imageFilename=\"$IMG\" imageHeight=\"${SIZE[1]}\" imageWidth=\"${SIZE[0]}\">";
+  if [ "$#" -gt 1 ] && [ "$2" = "pagereg" ]; then
+    local X=$((SIZE[0]-1));
+    local Y=$((SIZE[1]-1));
+    echo '    <TextRegion id="r1">';
+    echo "      <Coords points=\"0,0 $X,0 $X,$Y 0,$Y\"/>";
+    echo '    </TextRegion>';
+  fi
   echo "  </Page>";
   echo "</PcGts>";
+}
+
+##
+## Function that creates a region for the whole page, moves all text lines to it and removes all other regions
+##
+htrsh_pagexml_to_single_region () {
+  local FN="htrsh_pagexml_to_single_region";
+  if [ $# -lt 1 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Creates a region for the whole page, moves all text lines to it and removes all other regions";
+      echo "Usage: $FN XML [regid]";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local XML="$1";
+  local RID="r1"; [ "$#" -gt 1 ] && [ "$2" != "" ] && RID="$2";
+  local SIZE=( $( xmlstarlet sel -t -v //@imageWidth -o " " -v //@imageHeight "$XML" ) );
+  local X=$((SIZE[0]-1));
+  local Y=$((SIZE[1]-1));
+
+  local xmledit=( xmlstarlet ed );
+  xmledit+=( -m //_:TextLine //_:Page );
+  xmledit+=( -d //_:TextRegion );
+  xmledit+=( -s //_:Page -t elem -n TMPNODE );
+  xmledit+=( -i //TMPNODE -t attr -n id -v "$RID" );
+  xmledit+=( -s //TMPNODE -t elem -n Coords );
+  xmledit+=( -i //TMPNODE/Coords -t attr -n points -v "0,0 $X,0 $X,$Y 0,$Y" );
+  xmledit+=( -m //_:TextLine //TMPNODE );
+  xmledit+=( -r //TMPNODE -v TextRegion );
+
+  "${xmledit[@]}" "$XML";
 }
 
 ##
@@ -484,9 +524,9 @@ htrsh_pagexml_textequiv () {
         s|  *$||;
         s|   *| |g;
         ' \
-    | awk -v FORMAT=$FORMAT -v hmmtype="$htrsh_hmm_type" \
-          -v ESPACES="$ESPACES" -v WSPACE="$WSPACE" -v WORDEND="$WORDEND" \
-          -v SPACE="$htrsh_symb_space" -v SPECIAL=<( echo "$htrsh_special_chars" ) \
+    | gawk -v FORMAT=$FORMAT -v hmmtype="$htrsh_hmm_type" \
+           -v ESPACES="$ESPACES" -v WSPACE="$WSPACE" -v WORDEND="$WORDEND" \
+           -v SPACE="$htrsh_symb_space" -v SPECIAL=<( echo "$htrsh_special_chars" ) \
         "$htrsh_gawk_func_word_to_chars"'
         BEGIN {
           load_special_chars( SPECIAL );
@@ -617,9 +657,9 @@ htrsh_text_to_chars () {
 
   ### Process text ###
   local AWK=(
-    awk -v hmmtype="$htrsh_hmm_type"
-        -v ESPACES="$ESPACES" -v WORDEND="$WORDEND"
-        -v SPACE="$htrsh_symb_space" -v SPECIAL=<( echo "$htrsh_special_chars" )
+    gawk -v hmmtype="$htrsh_hmm_type"
+         -v ESPACES="$ESPACES" -v WORDEND="$WORDEND"
+         -v SPACE="$htrsh_symb_space" -v SPECIAL=<( echo "$htrsh_special_chars" )
       "$htrsh_gawk_func_word_to_chars"'
       BEGIN {
         load_special_chars( SPECIAL );
@@ -841,6 +881,9 @@ htrsh_pageimg_info () {
     return 1;
   elif [ ! -f "$XML" ]; then
     echo "$FN: error: page file not found: $XML" 1>&2;
+    return 1;
+  elif [ "$htrsh_valschema" = "yes" ] && [ ! -f "$htrsh_pagexsd" ]; then
+    echo "$FN: error: unable to find schema file for validation: $htrsh_pagexsd";
     return 1;
   elif [ $("${VAL[@]}" "$XML" 2>/dev/null; echo "$?") != 0 ]; then
     echo "$FN: error: invalid page file: $XML" 1>&2;
