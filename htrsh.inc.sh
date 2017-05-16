@@ -126,7 +126,7 @@ htrsh_sed_translit_vowels='
 htrsh_valschema="yes";
 htrsh_pagexsd="https://www.prhlt.upv.es/~mvillegas/xsd/pagecontent_prhlt.xsd";
 ( [ "$USER" = "mvillegas" ] || [ "$USER" = "mauvilsa" ] ) &&
-  htrsh_pagexsd="$HOME/work/prog/mvsh/HTR/xsd/pagecontent+.xsd";
+  htrsh_pagexsd="$HOME/work/prog/mvsh/HTR/xsd/pagecontent_prhlt.xsd";
 
 htrsh_realpath="readlink -f";
 [ $(realpath --help 2>&1 | grep relative | wc -l) != 0 ] &&
@@ -4820,7 +4820,7 @@ htrsh_mlf_sort () {
 ##
 ## Function that blindly creates an alignment MLF by assuming all characters have equal width
 ##
- htrsh_mlf_align_blind () {
+htrsh_mlf_align_blind () {
   local FN="htrsh_mlf_align_blind";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
