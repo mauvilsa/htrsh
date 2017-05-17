@@ -125,7 +125,7 @@ htrsh_sed_translit_vowels='
 
 htrsh_valschema="yes";
 htrsh_pagexsd="https://www.prhlt.upv.es/~mvillegas/xsd/pagecontent_prhlt.xsd";
-( [ "$USER" = "mvillegas" ] || [ "$USER" = "mauvilsa" ] ) &&
+( [ "${USER+$USER}" = "mvillegas" ] || [ "${USER+$USER}" = "mauvilsa" ] ) &&
   htrsh_pagexsd="$HOME/work/prog/mvsh/HTR/xsd/pagecontent_prhlt.xsd";
 
 htrsh_realpath="readlink -f";
@@ -223,7 +223,7 @@ htrsh_pagexml_create () {
   fi
 
   echo '<?xml version="1.0" encoding="utf-8"?>';
-  echo '<PcGts xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15 http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15/pagecontent.xsd">';
+  echo '<PcGts xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15">';
   echo "  <Metadata>";
   echo "    <Creator>htrsh_pagexml_create</Creator>";
   echo "    <Created>$DATE</Created>";
