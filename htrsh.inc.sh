@@ -4944,6 +4944,94 @@ htrsh_mlf_align_blind () {
 }
 
 ##
+## Function that blindly creates Words from TextLines by assuming all characters have equal width
+##
+htrsh_pagexml_align_blind () {
+  local FN="htrsh_pagexml_align_blind";
+  if [ $# -lt 1 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Blindly creates Words from TextLines by assuming all characters have equal width";
+      echo "Usage: $FN XML";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local XML="$1";
+  shift 1;
+
+  ### Check page ###
+  local $htrsh_infovars;
+  htrsh_pageimg_info "$XML";
+  [ "$?" != 0 ] && return 1;
+
+  local IDS=$(xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines[$htrsh_xpath_textequiv]" -v @id -n
+ "$XML");
+
+  local xmledit=( ed --inplace -d //@dummyattr );
+
+  local id n TEXT LGTH COORD;
+  for id in $IDS; do
+    TEXT=( $(xmlstarlet sel -T -B -E utf-8 -t -v "//*[@id='$id']/_:TextEquiv/_:Unicode" "$XML") );
+    LGTH=( $( echo "${TEXT[@]}" \
+      | awk '
+          { N=M=0;
+            for(n=1;n<=NF;n++)
+              N += length($n) + ( n==1 ? 0 : 1 );
+            for(n=1;n<=NF;n++) {
+              M += ( length($n) + ( (n==1||n==NF) ? 0.5 : 1 ) )/N;
+              print M;
+            }
+          }') );
+    if [ "${#TEXT[@]}" != "${#LGTH[@]}" ]; then
+      echo "error: unexpected state: @id :: $XML" 1>&2;
+      return 1;
+    fi
+    COORDS=( $(
+        { echo "${LGTH[@]}";
+          xmlstarlet sel -t -v "//*[@id='$id']/_:Coords/@points" -n "$XML";
+        } | awk -F'[, ]' '
+          { if( NR == 1 ) {
+              N = NF;
+              LGTH[1] = 0;
+              for(n=1;n<=NF;n++)
+                LGTH[n+1] = $n;
+            }
+            else {
+              Xtl=$1; Ytl=$2;
+              Xtr=$3; Ytr=$4;
+              Xbr=$5; Ybr=$6;
+              Xbl=$7; Ybl=$8;
+              dX = Xtr - Xtl;
+              dY = Ytr - Ytl;
+              for(n=1;n<=N;n++)
+                printf( "%s,%s_%s,%s_%s,%s_%s,%s\n",
+                    Xtl+LGTH[n]*dX,   Ytl+LGTH[n]*dY,
+                    Xtl+LGTH[n+1]*dX, Ytl+LGTH[n+1]*dY,
+                    Xbl+LGTH[n+1]*dX, Ybl+LGTH[n+1]*dY,
+                    Xbl+LGTH[n]*dX,   Ybl+LGTH[n]*dY );
+            }
+          }'
+      ) );
+
+    for n in $(seq 1 ${#TEXT[@]}); do
+      wid="${id}_w$n";
+      xmledit+=( -s "//*[@id='$id']" -t elem -n TMPNODE );
+      xmledit+=( -i //TMPNODE -t attr -n id -v "$wid" );
+      xmledit+=( -s //TMPNODE -t elem -n Coords );
+      xmledit+=( -i //TMPNODE/Coords -t attr -n points -v "${COORDS[$((n-1))]//_/ }" );
+      xmledit+=( -s //TMPNODE -t elem -n TextEquiv );
+      xmledit+=( -s //TMPNODE/TextEquiv -t elem -n Unicode -v "${TEXT[$((n-1))]}" );
+      xmledit+=( -r //TMPNODE -v Word );
+    done
+    xmledit+=( -m "//*[@id='$id']/_:TextEquiv" "//*[@id='$id']" );
+    xmledit+=( -m "//*[@id='$id']/_:TextStyle" "//*[@id='$id']" );
+  done
+
+  xmlstarlet "${xmledit[@]}" "$XML";
+}
+
+##
 ## Function that does a forced alignment at a line level for a given XML Page, feature list and model
 ##
 htrsh_pageimg_forcealign_lines () {
