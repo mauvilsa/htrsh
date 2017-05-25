@@ -4951,24 +4951,24 @@ htrsh_pagexml_align_blind () {
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Blindly creates Words from TextLines by assuming all characters have equal width";
-      echo "Usage: $FN XML";
+      echo "Usage: $FN XMLIN [XMLOUT]";
     } 1>&2;
     return 1;
   fi
 
   ### Parse input arguments ###
   local XML="$1";
-  shift 1;
+  local XMLOUT="-"; [ "$#" -gt 1 ] && XMLOUT="$2";
+  shift 2;
 
   ### Check page ###
   local $htrsh_infovars;
-  htrsh_pageimg_info "$XML";
+  htrsh_pageimg_info "$XML" noimg;
   [ "$?" != 0 ] && return 1;
 
-  local IDS=$(xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines[$htrsh_xpath_textequiv]" -v @id -n
- "$XML");
+  local IDS=$(xmlstarlet sel -t -m "$htrsh_xpath_regions/$htrsh_xpath_lines[$htrsh_xpath_textequiv]" -v @id -n "$XML");
 
-  local xmledit=( ed --inplace -d //@dummyattr );
+  local xmledit=( ed -d //@dummyattr );
 
   local id n TEXT LGTH COORD;
   for id in $IDS; do
@@ -5028,7 +5028,11 @@ htrsh_pagexml_align_blind () {
     xmledit+=( -m "//*[@id='$id']/_:TextStyle" "//*[@id='$id']" );
   done
 
-  xmlstarlet "${xmledit[@]}" "$XML";
+  if [ "$XMLOUT" = "-" ]; then
+    xmlstarlet "${xmledit[@]}" "$XML" | xmlstarlet fo -e utf-8 -;
+  else
+    xmlstarlet "${xmledit[@]}" "$XML" | xmlstarlet fo -e utf-8 - > "$XMLOUT";
+  fi
 }
 
 ##
