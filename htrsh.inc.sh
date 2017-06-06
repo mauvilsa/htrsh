@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2017.05.25$
+## @version $Version: 2017.06.06$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2015-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -4960,6 +4960,11 @@ htrsh_pagexml_align_blind () {
   local XML="$1";
   local XMLOUT="-"; [ "$#" -gt 1 ] && XMLOUT="$2";
   shift 2;
+
+  if [ "$XML" = "$XMLOUT" ]; then
+    echo "$FN: error: input and output files must be different" 1>&2;
+    return 1;
+  fi
 
   ### Check page ###
   local $htrsh_infovars;

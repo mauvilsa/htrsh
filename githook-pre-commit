@@ -52,6 +52,7 @@ while [ "$n" -lt "${#FILES[@]}" ]; do
       bash -n "${FILES[$n]}";
       ;;
   esac
+  [ "$?" != 0 ] && exit 1;
   n=$((n+2));
 done
 
