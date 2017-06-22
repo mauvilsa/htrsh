@@ -24,7 +24,7 @@ fi
 
 
 ### Update versions on files ###
-FILES=( $(git status --porcelain | sed 's| .* | |' | grep '^[MR]') );
+FILES=( $(git status --porcelain | sed 's| .* | |' | grep '^[MRA]' | grep -v run_parallel) );
 V=$(date -u +%Y.%m.%d);
 
 NEWVER="no";

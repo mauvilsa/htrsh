@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2017.06.06$
+## @version $Version: 2017.06.22$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2015-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -149,9 +149,9 @@ htrsh_sed_translit_vowels='
   ';
 
 htrsh_valschema="yes";
-htrsh_pagexsd="https://www.prhlt.upv.es/~mvillegas/xsd/pagecontent_prhlt.xsd";
-( [ "${USER+$USER}" = "mvillegas" ] || [ "${USER+$USER}" = "mauvilsa" ] ) &&
-  htrsh_pagexsd="$HOME/work/prog/mvsh/HTR/xsd/pagecontent_prhlt.xsd";
+htrsh_pagexsd=$(readlink -f "$(which htrsh.inc.sh)" | sed 's|/htrsh.inc.sh$|/pagecontent_prhlt.xsd|');
+[ ! -e "$htrsh_pagexsd" ] &&
+  htrsh_pagexsd="https://www.prhlt.upv.es/~mvillegas/xsd/pagecontent_prhlt.xsd";
 
 htrsh_realpath="readlink -f";
 [ $(realpath --help 2>&1 | grep relative | wc -l) != 0 ] &&
