@@ -3,9 +3,9 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2017.06.27$
+## @version $Version: 2017.12.25$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
-## @copyright Copyright(c) 2015-present, Mauricio Villegas <mauricio_ville@yahoo.com>
+## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
 ##
 
@@ -167,8 +167,8 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Version: 2017.06.27$' \
-    | sed -r 's|^\$Version: 2017.06.27$|htrsh \1|' 1>&2;
+  echo '$Version: 2017.12.25$' \
+    | sed -r 's|^\$Version: 2017.12.25$|htrsh \1|' 1>&2;
 }
 
 ##
@@ -264,6 +264,78 @@ htrsh_pagexml_create () {
   fi
   echo "  </Page>";
   echo "</PcGts>";
+}
+
+##
+## Function that creates an empty Page file for a given image
+##
+htrsh_pagexml_createmulti () {
+  local FN="htrsh_pagexml_createmulti";
+  if [ $# -lt 1 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Creates an empty Page file for a given image";
+      echo "Usage: $FN IMAGE1 [IMAGE2 ...]";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local DATE=$( date -u "+%Y-%m-%dT%H:%M:%S" );
+
+  local IMG="$1";
+  local SIZES=( $( identify -format "%wx%h\n" "$@" ) );
+
+  if [ "${#SIZES[@]}" != "$#" ]; then
+    echo "$FN: error: unable to determine size of an image" 1>&2;
+    return 1;
+  fi
+
+  echo '<?xml version="1.0" encoding="utf-8"?>';
+  echo '<PcGts xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15">';
+  echo "  <Metadata>";
+  echo "    <Creator>htrsh_pagexml_create</Creator>";
+  echo "    <Created>$DATE</Created>";
+  echo "    <LastChange>$DATE</LastChange>";
+  echo "  </Metadata>";
+  local n=0;
+  while [ $# -gt 0 ]; do
+    local SIZE=( ${SIZES[$n]/x/ } );
+    echo "  <Page imageFilename=\"$1\" imageHeight=\"${SIZE[1]}\" imageWidth=\"${SIZE[0]}\"/>";
+    n=$((n+1));
+    shift;
+  done
+  echo "</PcGts>";
+}
+
+##
+## Function that adds a region that covers the whole page area
+##
+htrsh_pagexml_addpagereg () {
+  local FN="htrsh_pagexml_addpagereg";
+  if [ $# -lt 1 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Adds a region that covers the whole page area";
+      echo "Usage: $FN XML";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local XML="$1";
+
+  local xmledit=( xmlstarlet ed );
+
+  for n in $(seq 1 $(xmlstarlet sel -t -v 'count(//_:Page)' "$1")); do
+    local X=$(($(xmlstarlet sel -t -v "(//_:Page)[$n]/@imageWidth" "$1")-1));
+    local Y=$(($(xmlstarlet sel -t -v "(//_:Page)[$n]/@imageHeight" "$1")-1));
+    xmledit+=( -s "//_:Page[$n]" -t elem -n TMPNODE );
+    xmledit+=( -i //TMPNODE -t attr -n id -v "page$n" );
+    xmledit+=( -s //TMPNODE -t elem -n Coords );
+    xmledit+=( -i //TMPNODE/Coords -t attr -n points -v "0,0 $X,0 $X,$Y 0,$Y" );
+    xmledit+=( -r //TMPNODE -v TextRegion );
+  done
+
+  "${xmledit[@]}" "$XML";
 }
 
 ##
@@ -449,6 +521,7 @@ htrsh_pagexml_textequiv () {
   local WSPACE="no";
   local WORDEND="no";
   local PRTHEAD="no";
+  local PREPRINT="";
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Prints to stdout the TextEquiv from an XML Page file";
@@ -461,6 +534,7 @@ htrsh_pagexml_textequiv () {
       echo " -W (yes|no)  For mlf-words, whether to add start space (def.=$WSPACE)";
       echo " -w (yes|no)  For mlf-chars, whether to add word end marks (def.=$WORDEND)";
       echo " -H (yes|no)  Whether to print header (def.=$PRTHEAD)";
+      echo " -p ARRAY     Pre-print xmlstarlet arguments array name (def.=$PREPRINT)";
     } 1>&2;
     return 1;
   fi
@@ -489,6 +563,11 @@ htrsh_pagexml_textequiv () {
       WORDEND="$2";
     elif [ "$1" = "-H" ]; then
       PRTHEAD="$2";
+    elif [ "$1" = "-p" ]; then
+      [ "$2" = "PREPRINT" ] &&
+        echo "$FN: error: pre print array cannot be called PREPRINT" 1>&2 &&
+        return 1;
+      PREPRINT="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -506,12 +585,16 @@ htrsh_pagexml_textequiv () {
   local XPATH;
   local IDop=( -o "$PG." );
   local PRINT=( -v . -n );
+  [ "$PREPRINT" != "" ] &&
+    eval "PRINT=( \"\${${PREPRINT}[@]}\" \"\${PRINT[@]}\" )";
   if [ "$SRC" = "regions" ]; then
     XPATH="$htrsh_xpath_regions/$htrsh_xpath_textequiv";
     IDop+=( -v ../../@id );
   elif [ "$SRC" = "words" ]; then
     XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines[$htrsh_xpath_words/$htrsh_xpath_textequiv]";
     PRINT=( -m "$htrsh_xpath_words/$htrsh_xpath_textequiv" -o " " -v . -b -n );
+    [ "$PREPRINT" != "" ] &&
+      eval "PRINT=( -m \"\$htrsh_xpath_words/\$htrsh_xpath_textequiv\" \"\${${PREPRINT}[@]}\" -v . -b -n )";
     [ "$htrsh_extended_names" = "true" ] && IDop+=( -v ../@id -o . -v @id );
     [ "$htrsh_extended_names" != "true" ] && IDop+=( -v @id );
   elif [ "$SRC" = "solo-words" ]; then
@@ -4323,7 +4406,7 @@ htrsh_mlf_diplom_prepalign () {
     | gawk -v SPACE="$htrsh_symb_space" '
       { if( ARGIND == 1 ) {
           full = substr($2,2,length($2)-2);
-          canon = match($1,/^".+"$/) ? 
+          canon = match($1,/^".+"$/) ?
             gensub( /\\"/, "\"", "g", substr($1,2,length($1)-2) ) : $1 ;
           $1 = $2 = $3 = "";
           if( $NF == SPACE )
@@ -4556,7 +4639,7 @@ htrsh_pagexml_insertalign_lines () {(
 
     if [ "$htrsh_align_contour" = "yes" ]; then
       local LIMG="$XMLDIR/$IMBASE.${id}_clean.png";
-      [ "$htrsh_extended_names" = "true" ] && 
+      [ "$htrsh_extended_names" = "true" ] &&
         LIMG="$XMLDIR/$IMBASE."$(xmlstarlet sel -t -v "//*[@id='$id']/../@id" "$XML")".${id}_clean.png";
       local LGEO=( $(identify -format "%w %h %X %Y %x %U" "$LIMG" | sed 's|+||g') );
     fi
