@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2017.12.25$
+## @version $Version: 2017.12.31$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -167,8 +167,8 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Version: 2017.12.25$' \
-    | sed -r 's|^\$Version: 2017.12.25$|htrsh \1|' 1>&2;
+  echo '$Version: 2017.12.31$' \
+    | sed -r 's|^\$Version: 2017.12.31$|htrsh \1|' 1>&2;
 }
 
 ##
@@ -737,7 +737,7 @@ htrsh_text_to_chars () {
   local FILTER="";
   local ESPACES="yes";
   local WORDEND="no";
-  if [ $# -lt 2 ]; then
+  if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Transforms plain text to character sequences";
       echo "Usage: $FN TEXTFILE [ Options ]";
@@ -764,10 +764,10 @@ htrsh_text_to_chars () {
   done
 
   ### Process text ###
-  local AWK=(
-    gawk -v hmmtype="$htrsh_hmm_type"
-         -v ESPACES="$ESPACES" -v WORDEND="$WORDEND"
-         -v SPACE="$htrsh_symb_space" -v SPECIAL=<( echo "$htrsh_special_chars" )
+  text_to_chars () {
+    gawk -v hmmtype="$htrsh_hmm_type" \
+         -v ESPACES="$ESPACES" -v WORDEND="$WORDEND" \
+         -v SPACE="$htrsh_symb_space" -v SPECIAL=<( echo "$htrsh_special_chars" ) \
       "$htrsh_gawk_func_word_to_chars"'
       BEGIN {
         load_special_chars( SPECIAL );
@@ -790,11 +790,12 @@ htrsh_text_to_chars () {
             printf(" %s",SPACE);
         }
         printf("\n");
-      }' );
+      }' "$@";
+  }
   if [ "$FILTER" = "" ]; then
-    "${AWK[@]}" "$TEXT";
+    text_to_chars "$TEXT";
   else
-    "$FILTER" < "$TEXT" | "${AWK[@]}";
+    "$FILTER" < "$TEXT" | text_to_chars;
   fi
 }
 
