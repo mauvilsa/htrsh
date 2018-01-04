@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2017.12.31$
+## @version $Version: 2018.01.04$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -167,8 +167,8 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Version: 2017.12.31$' \
-    | sed -r 's|^\$Version: 2017.12.31$|htrsh \1|' 1>&2;
+  echo '$Version: 2018.01.04$' \
+    | sed -r 's|^\$Version: 2018.01.04$|htrsh \1|' 1>&2;
 }
 
 ##
@@ -891,6 +891,7 @@ htrsh_prep_tasas () {
   local FN="htrsh_prep_tasas";
   local FORMAT="mlf";
   local SEPCHARS="no";
+  local TOKENIZER="";
   if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Transforms a ground truth and a recognition file to the format used by tasas";
@@ -898,6 +899,7 @@ htrsh_prep_tasas () {
       echo "Options:";
       echo " -f FORMAT    Input format, either 'mlf' or 'tab' (def.=$FORMAT)";
       echo " -c (yes|no)  Whether to separate characters for CER computation (def.=$SEPCHARS)";
+      echo " -t TOKENIZER A pipe command to tokenize (def.=$TOKENIZER)";
     } 1>&2;
     return 1;
   fi
@@ -911,6 +913,8 @@ htrsh_prep_tasas () {
       FORMAT="$2";
     elif [ "$1" = "-c" ]; then
       SEPCHARS="$2";
+    elif [ "$1" = "-t" ]; then
+      TOKENIZER="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -930,6 +934,16 @@ htrsh_prep_tasas () {
     FORMAT="htrsh_mlf_to_tab";
   else
     FORMAT="cat";
+  fi
+
+  if [ "$TOKENIZER" = "" ]; then
+    format_data () { $FORMAT "$1"; }
+  else
+    format_data () {
+      paste -d " " \
+        <( $FORMAT "$1" | sed 's| .*||' ) \
+        <( $FORMAT "$1" | sed 's|^[^ ]* ||' | $TOKENIZER );
+    }
   fi
 
   ### Create tasas file ###
@@ -971,7 +985,7 @@ htrsh_prep_tasas () {
         }
         printf("\n");
       }
-    }' <( $FORMAT "$GT" ) <( $FORMAT "$REC" );
+    }' <( format_data "$GT" ) <( format_data "$REC" );
 }
 
 ##
