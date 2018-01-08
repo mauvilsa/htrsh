@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2018.01.04$
+## @version $Version: 2018.01.08$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -167,8 +167,8 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Version: 2018.01.04$' \
-    | sed -r 's|^\$Version: 2018.01.04$|htrsh \1|' 1>&2;
+  echo '$Version: 2018.01.08$' \
+    | sed -r 's|^\$Version: 2018.01.08$|htrsh \1|' 1>&2;
 }
 
 ##
@@ -734,7 +734,8 @@ htrsh_pagexml_textequiv_filter () {
 ##
 htrsh_text_to_chars () {
   local FN="htrsh_text_to_chars";
-  local FILTER="";
+  local FORMAT="txt";
+  local FILTER="cat";
   local ESPACES="yes";
   local WORDEND="no";
   if [ $# -lt 1 ]; then
@@ -742,6 +743,7 @@ htrsh_text_to_chars () {
       echo "Description: Transforms plain text to character sequences";
       echo "Usage: $FN TEXTFILE [ Options ]";
       echo "Options:";
+      echo " -f FORMAT    Input format among 'txt' and 'tab' (def.=$FORMAT)";
       echo " -F FILTER    Filtering pipe command, e.g. tokenizer, transliteration, etc. (def.=none)";
       echo " -E (yes|no)  For *-chars, whether to add spaces at start and end (def.=$ESPACES)";
     } 1>&2;
@@ -752,7 +754,9 @@ htrsh_text_to_chars () {
   local TEXT="$1"; [ "$TEXT" = "-" ] && TEXT="/dev/stdin";
   shift;
   while [ $# -gt 0 ]; do
-    if [ "$1" = "-F" ]; then
+    if [ "$1" = "-f" ]; then
+      FORMAT="$2";
+    elif [ "$1" = "-F" ]; then
       FILTER="$2";
     elif [ "$1" = "-E" ]; then
       ESPACES="$2";
@@ -792,8 +796,13 @@ htrsh_text_to_chars () {
         printf("\n");
       }' "$@";
   }
-  if [ "$FILTER" = "" ]; then
-    text_to_chars "$TEXT";
+  if [ "$FORMAT" = "tab" ]; then
+    local TMP_TEXT=$(mktemp).txt;
+    cat "$TEXT" > "$TMP_TEXT";
+    paste -d " " \
+      <( awk '{print $1}' "$TMP_TEXT" ) \
+      <( sed 's|^[^ ]* ||' "$TMP_TEXT" | "$FILTER" | text_to_chars )
+    rm "$TMP_TEXT";
   else
     "$FILTER" < "$TEXT" | text_to_chars;
   fi
