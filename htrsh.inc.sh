@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2018.01.08$
+## @version $Version: 2018.02.22$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -149,7 +149,7 @@ htrsh_sed_translit_vowels='
   ';
 
 htrsh_valschema="yes";
-htrsh_pagexsd=$(readlink -f "$(which htrsh.inc.sh)" | sed 's|/htrsh.inc.sh$|/pagecontent_prhlt.xsd|');
+htrsh_pagexsd=$(readlink -f "$(which htrsh.inc.sh)" | sed 's|/htrsh.inc.sh$|/pagecontent_searchink.xsd|');
 [ ! -e "$htrsh_pagexsd" ] &&
   htrsh_pagexsd="https://www.prhlt.upv.es/~mvillegas/xsd/pagecontent_prhlt.xsd";
 
@@ -167,8 +167,8 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Version: 2018.01.08$' \
-    | sed -r 's|^\$Version: 2018.01.08$|htrsh \1|' 1>&2;
+  echo '$Version: 2018.02.22$' \
+    | sed -r 's|^\$Version: 2018.02.22$|htrsh \1|' 1>&2;
 }
 
 ##
