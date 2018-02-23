@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2018.02.22$
+## @version $Version: 2018.02.23$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -167,8 +167,8 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Version: 2018.02.22$' \
-    | sed -r 's|^\$Version: 2018.02.22$|htrsh \1|' 1>&2;
+  echo '$Version: 2018.02.23$' \
+    | sed -r 's|^\$Version: 2018.02.23$|htrsh \1|' 1>&2;
 }
 
 ##
@@ -579,11 +579,11 @@ htrsh_pagexml_textequiv () {
   htrsh_pageimg_info "$XML" noinfo;
   [ "$?" != 0 ] && return 1;
 
-  local PG=$(xmlstarlet sel -t -v //@imageFilename "$XML" \
-               | sed 's|.*/||; s|\.[^.]*$||; s|[\[ ()]|_|g; s|]|_|g;');
-
+  local xmledit=( $(xmlstarlet sel -t -v //@imageFilename -n "$XML" \
+                      | sed 's|.*/||; s|\.[^.]*$||; s|[\[ ()]|_|g; s|]|_|g;' \
+                      | awk '{printf(" -u (//@imageFilename)[%d] -v %s",NR,$0);}' ) );
   local XPATH;
-  local IDop=( -o "$PG." );
+  local IDop=( -v ancestor::_:Page/@imageFilename -o . );
   local PRINT=( -v . -n );
   [ "$PREPRINT" != "" ] &&
     eval "PRINT=( \"\${${PREPRINT}[@]}\" \"\${PRINT[@]}\" )";
@@ -621,7 +621,8 @@ htrsh_pagexml_textequiv () {
     echo '#!MLF!#';
 
   paste \
-      <( xmlstarlet sel -t -m "$XPATH" "${IDop[@]}" -n "$XML" ) \
+      <( xmlstarlet ed "${xmledit[@]}" "$XML" \
+           | xmlstarlet sel -t -m "$XPATH" "${IDop[@]}" -n - ) \
       <( cat "$XML" \
            | tr '\t\n' '  ' \
            | xmlstarlet sel -T -B -E utf-8 -t -m "$XPATH" "${PRINT[@]}" \
