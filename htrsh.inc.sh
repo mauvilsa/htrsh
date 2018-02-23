@@ -168,7 +168,7 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 ##
 htrsh_version () {
   echo '$Version: 2018.02.23$' \
-    | sed -r 's|^\$Version: 2018.02.23$|htrsh \1|' 1>&2;
+    | sed -r 's|^\$Version[:] ([^$]+)\$|htrsh \1|' 1>&2;
 }
 
 ##
@@ -273,7 +273,7 @@ htrsh_pagexml_createmulti () {
   local FN="htrsh_pagexml_createmulti";
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
-      echo "Description: Creates an empty Page file for a given image";
+      echo "Description: Creates an empty Page XML file for given images";
       echo "Usage: $FN IMAGE1 [IMAGE2 ...]";
     } 1>&2;
     return 1;
