@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2018.02.23$
+## @version $Version: 2018.02.26$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -167,7 +167,7 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Version: 2018.02.23$' \
+  echo '$Version: 2018.02.26$' \
     | sed -r 's|^\$Version[:] ([^$]+)\$|htrsh \1|' 1>&2;
 }
 
@@ -372,20 +372,74 @@ htrsh_pagexml_to_single_region () {
 }
 
 ##
-## Function that sets TextEquiv/Unicode in a Page XML
+## Function that applies a sed script on TextEquiv/Unicode nodes in a Page XML
 ##
-# @todo Also allow to stdout?
-htrsh_pagexml_set_textequiv () {
-  local FN="htrsh_pagexml_set_textequiv";
-  if [ $# -lt 3 ]; then
+htrsh_pagexml_sed_textequiv () {
+  local FN="htrsh_pagexml_sed_textequiv";
+  local XPATH="//*[$htrsh_xpath_textequiv]";
+  local SEDOP="-r";
+  if [ $# -lt 2 ]; then
     { echo "$FN: Error: Not enough input arguments";
-      echo "Description: Sets TextEquiv/Unicode in an XML Page";
-      echo "Usage: $FN XML ID TEXT [ ID2 TEXT2 ... ]";
+      echo "Description: Applies a sed script on TextEquiv/Unicode nodes in a Page XML";
+      echo "Usage: $FN XML SCRIPT [ Options ]";
+      echo "Options:";
+      echo " -x XPATH    Selector of elements for processing (def.=$XPATH)";
+      echo " -o SEDOPS   Options for sed (def.=$SEDOP)";
     } 1>&2;
     return 1;
   fi
 
   ### Parse input arguments ###
+  local XML="$1";
+  local SED="$2";
+  shift 2;
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "-x" ]; then
+      XPATH="$2";
+    elif [ "$1" = "-o" ]; then
+      SEDOP="$2";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
+    shift 2;
+  done
+
+  ### Apply sed script to selection of TextEquivs ###
+  local updatetext=();
+  for tid in $( xmlstarlet sel -t -m "$XPATH" -o " " -v @id "$XML" ); do
+    local text1=$( xmlstarlet sel -T -B -E utf-8 -t -v "//*[@id='$tid']/_:TextEquiv/_:Unicode" "$XML" );
+    local text2=$( printf "%s" "$text1" | sed $SEDOP "$SED" );
+    [ "$text2" != "" ] && [ "$text2" != "$text1" ] &&
+      updatetext+=( "$tid" "$text2" );
+  done
+  if [ "${#updatetext[@]}" -gt 0 ]; then
+    htrsh_pagexml_set_textequiv "$XML" "${updatetext[@]}";
+  else
+    cat "$XML";
+  fi
+}
+
+
+##
+## Function that sets TextEquiv/Unicode in a Page XML
+##
+htrsh_pagexml_set_textequiv () {
+  local FN="htrsh_pagexml_set_textequiv";
+  local INPLACE="";
+  if [ $# -lt 3 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Sets TextEquiv/Unicode in an XML Page";
+      echo "Usage: $FN [--inplace] XML ID TEXT [ ID2 TEXT2 ... ]";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  if [ "$1" = "--inplace" ]; then
+    INPLACE="$1";
+    shift;
+  fi
   local XML="$1";
   shift;
 
@@ -396,7 +450,7 @@ htrsh_pagexml_set_textequiv () {
 
   local ids=();
   local idmatch=( xmlstarlet sel -t );
-  local xmledit=( xmlstarlet ed --inplace );
+  local xmledit=( xmlstarlet ed $INPLACE );
 
   while [ $# -gt 0 ]; do
     local text=$( echo "$2" | sed 's|&|\&amp;|g; s|<|\&lt;|g; s|>|\&gt;|g;' );
@@ -455,7 +509,7 @@ htrsh_pagexml_textequiv_lines2region () {
     local text=$( echo "$TEXT" | sed -n "/^$regid /{ s|^[^ ]* ||; p; }" | "$FILTER" );
     updatetext+=( "$regid" "$text" );
   done
-  htrsh_pagexml_set_textequiv "$XML" "${updatetext[@]}";
+  htrsh_pagexml_set_textequiv --inplace "$XML" "${updatetext[@]}";
 }
 
 ##
@@ -480,7 +534,7 @@ htrsh_pagexml_textequiv_words2line () {
     local text=$( echo "$TEXT" | sed -n "/^$lineid /{ s|^[^ ]* ||; p; }" );
     updatetext+=( "$lineid" "$text" );
   done
-  htrsh_pagexml_set_textequiv "$XML" "${updatetext[@]}";
+  htrsh_pagexml_set_textequiv --inplace "$XML" "${updatetext[@]}";
 }
 
 ##
@@ -727,7 +781,7 @@ htrsh_pagexml_textequiv_filter () {
     text=$( echo "$text" | sed 's|^[^ ]* ||' | "$FILTER" );
     updatetext+=( "$tid" "$text" );
   done
-  htrsh_pagexml_set_textequiv "$XML" "${updatetext[@]}";
+  htrsh_pagexml_set_textequiv --inplace "$XML" "${updatetext[@]}";
 }
 
 ##
