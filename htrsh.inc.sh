@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2018.02.26$
+## @version $Version: 2018.03.06$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -167,7 +167,7 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Version: 2018.02.26$' \
+  echo '$Version: 2018.03.06$' \
     | sed -r 's|^\$Version[:] ([^$]+)\$|htrsh \1|' 1>&2;
 }
 
@@ -1331,10 +1331,10 @@ htrsh_pagexml_resize () {
       echo "Usage: $FN ( {newWidth}x{newHeight} | {scaleFact}% ) < XML_PAGE_FILE";
     } 1>&2;
     return 1;
-  elif [ $(echo "$1" | grep -P '^[0-9]+x[0-9]+$' | wc -l) = 1 ]; then
+  elif [ $(echo "$1" | grep '^[0-9][0-9]*x[0-9][0-9]*$' | wc -l) = 1 ]; then
     newWidth=$(echo "$1" | sed 's|x.*||');
     newHeight=$(echo "$1" | sed 's|.*x||');
-  elif [ $(echo "$1" | grep -P '^[0-9.]+%$' | wc -l) = 1 ]; then
+  elif [ $(echo "$1" | grep '^[0-9.][0-9.]%$' | wc -l) = 1 ]; then
     scaleFact=$(echo "$1" | sed 's|%$||');
   fi
 
@@ -1905,13 +1905,13 @@ htrsh_pagexml_sort_regions () {
 }
 
 ##
-## Function that relabels ids of TextRegions and TextLines in an XML Page file
+## Function that relabels ids of TextRegions, TextLines and Words in an XML Page file
 ##
 htrsh_pagexml_relabel () {
   local FN="htrsh_pagexml_relabel";
   if [ $# != 0 ]; then
     { echo "$FN: error: function does not expect arguments";
-      echo "Description: Relabels ids of TextRegions and TextLines in an XML Page file";
+      echo "Description: Relabels ids of TextRegions, TextLines and Words in an XML Page file";
       echo "Usage: $FN < XMLIN";
     } 1>&2;
     return 1;
@@ -2006,6 +2006,52 @@ htrsh_pagexml_relabel () {
   xmlstarlet tr <( echo "$XSLT1" ) \
     | xmlstarlet tr <( echo "$XSLT2" ) \
     | xmlstarlet tr <( echo "$XSLT3" );
+}
+
+##
+## Function that relabels IDs of TextLines in an XML Page file
+##
+htrsh_pagexml_relabel_textlines () {
+  local FN="htrsh_pagexml_relabel";
+  if [ $# != 0 ]; then
+    { echo "$FN: error: function does not expect arguments";
+      echo "Description: Relabels IDs of TextLines in an XML Page file";
+      echo "Usage: $FN < XMLIN";
+    } 1>&2;
+    return 1;
+  fi
+
+  local XSLT='<?xml version="1.0"?>
+<xsl:stylesheet
+  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  xmlns:_="http://schema.primaresearch.org/PAGE/gts/pagecontent/2013-07-15"
+  version="1.0">
+
+  <xsl:output method="xml" indent="yes" encoding="utf-8" omit-xml-declaration="no"/>
+
+  <xsl:template match="@* | node()">
+    <xsl:copy>
+      <xsl:apply-templates select="@* | node()"/>
+    </xsl:copy>
+  </xsl:template>
+
+  <xsl:template match="//_:TextRegion/_:TextLine">
+    <xsl:variable name="pid" select="../@id"/>
+    <xsl:copy>
+      <xsl:attribute name="id">
+        <xsl:value-of select="concat(../@id,&quot;_l&quot;)"/>
+        <!--<xsl:number count="//_:TextRegion/_:TextLine" format="01"/>-->
+        <xsl:number count="//_:TextRegion/_:TextLine"/>
+      </xsl:attribute>
+      <xsl:apply-templates select="@*[local-name() != '"'id'"'] | node()" />
+    </xsl:copy>
+  </xsl:template>
+
+</xsl:stylesheet>';
+
+  xmlstarlet tr <( echo "$XSLT" );
 }
 
 ##
