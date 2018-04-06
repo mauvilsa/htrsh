@@ -528,7 +528,7 @@ htrsh_pagexml_textequiv_words2line () {
   fi
 
   local XML="$1";
-  local TEXT=$( htrsh_pagexml_textequiv "$XML" -s words -f tab \
+  local TEXT=$( htrsh_pagexml_textequiv "$XML" -s line-words -f tab \
     | sed 's|^[^ ]*\.\([^. ]*\) |\1 |' );
 
   local updatetext=();
@@ -646,7 +646,7 @@ htrsh_pagexml_textequiv () {
   if [ "$SRC" = "regions" ]; then
     XPATH="$htrsh_xpath_regions/$htrsh_xpath_textequiv";
     IDop+=( -v ../../@id );
-  elif [ "$SRC" = "words" ]; then
+  elif [ "$SRC" = "line-words" ]; then
     XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines[$htrsh_xpath_words/$htrsh_xpath_textequiv]";
     PRINT=( -m "$htrsh_xpath_words/$htrsh_xpath_textequiv" -o " " -v . -b -n );
     [ "$PREPRINT" != "" ] &&
@@ -661,6 +661,11 @@ htrsh_pagexml_textequiv () {
     XPATH="$htrsh_xpath_regions/$htrsh_xpath_lines/$htrsh_xpath_textequiv";
     [ "$htrsh_extended_names" = "true" ] && IDop+=( -v ../../../@id -o . -v ../../@id );
     [ "$htrsh_extended_names" != "true" ] && IDop+=( -v ../../@id );
+  elif [ "$SRC" = "region-lines" ]; then
+    XPATH="$htrsh_xpath_regions[$htrsh_xpath_lines/$htrsh_xpath_textequiv]";
+    PRINT=( -m "$htrsh_xpath_lines/$htrsh_xpath_textequiv" -o " " -v . -b -n );
+    [ "$htrsh_extended_names" = "true" ] && IDop+=( -v ../@id -o . -v @id );
+    [ "$htrsh_extended_names" != "true" ] && IDop+=( -v @id );
   elif [ "$SRC" = "all" ]; then
     XPATH="//$htrsh_xpath_textequiv";
     IDop+=( -v ../../@id );
