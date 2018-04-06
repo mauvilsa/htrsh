@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2018.03.06$
+## @version $Version: 2018.04.06$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -115,6 +115,8 @@ ENDWORD        = "</s>"
 ';
 
 htrsh_symb_space="{space}";
+htrsh_symb_eps="{eps}";
+htrsh_symb_blank="{blank}";
 
 htrsh_special_chars=$'
 <gap/> {gap}
@@ -167,7 +169,7 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Version: 2018.03.06$' \
+  echo '$Version: 2018.04.06$' \
     | sed -r 's|^\$Version[:] ([^$]+)\$|htrsh \1|' 1>&2;
 }
 
@@ -861,6 +863,56 @@ htrsh_text_to_chars () {
   else
     "$FILTER" < "$TEXT" | text_to_chars;
   fi
+}
+
+##
+## Function that generates a kaldi table of symbols for some given text
+##
+htrsh_text_get_symbol_tab () {
+  local FN="htrsh_text_get_symbol_tab";
+  local COUNT_FILE="cat";
+  if [ $# -lt 1 ]; then
+    { echo "$FN: Error: Not enough input arguments";
+      echo "Description: Generates a kaldi table of symbols for some given text";
+      echo "Usage: $FN TRANSCIPT_TAB [ Options ]";
+      echo "Options:";
+      echo " -c COUNT_FILE   Save counts of symbols to given file (def.=false)";
+    } 1>&2;
+    return 1;
+  fi
+
+  ### Parse input arguments ###
+  local TEXT="$1"; [ "$TEXT" = "-" ] && TEXT="/dev/stdin";
+  shift;
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "-c" ]; then
+      COUNT_FILE="$2";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
+    shift 2;
+  done
+
+  [ "$COUNT_FILE" != "cat" ] && COUNT_FILE=( tee "COUNT_FILE" );
+
+  awk '
+      { char[$1]++; }
+      END {
+        for(c in char)
+          printf("%d %s\n",char[c],c);
+      }' "$TEXT" \
+    | sort -k 1rn,1 \
+    | "${COUNT_FILE[@]}" \
+    | awk -v EPS="$htrsh_symb_eps" -v BLANK="$htrsh_symb_blank" -v N=1 '
+        BEGIN {
+          printf("%s 0\n",EPS);
+          printf("%s 1\n",BLANK);
+        }
+        { if( !($NF in char) )
+            printf("%s %d\n",$NF,++N);
+          char[$NF]="";
+        }';
 }
 
 ##
@@ -3430,13 +3482,23 @@ htrsh_pageimg_extract_linefeats () {
     #xmledit+=( -i "//*[@id='$id']/_:Coords" -t attr -n slope -v "$slope" );
     #[ "$htrsh_feat_deslant" = "yes" ] &&
     #xmledit+=( -i "//*[@id='$id']/_:Coords" -t attr -n slant -v "$slant" );
-    xmledit+=( -i "//*[@id='$id']/_:Coords" -t attr -n fpgram -v "$fpgram" );
+    #xmledit+=( -i "//*[@id='$id']/_:Coords" -t attr -n fpgram -v "$fpgram" );
+    xmledit+=( -d "//*[@id='$id']/_:Property[@key='fpgram']" );
+    xmledit+=( -s "//*[@id='$id']" -t elem -n TMPNODE );
+    xmledit+=( -i //TMPNODE -t attr -n key -v fgram );
+    xmledit+=( -i //TMPNODE -t attr -n value -v "$fgram" );
+    xmledit+=( -r //TMPNODE -v Property );
 
     ### Compute detailed contours if requested ###
     if [ "$htrsh_feat_contour" = "yes" ]; then
       local pts=$(imgccomp -V1 -NJS -A 0.5 -D $htrsh_feat_dilradi -R 5,2,2,2 ${ff}_clean.png);
       [ "$pts" = "" ] && pts="$fpgram";
-      xmledit+=( -i "//*[@id='$id']/_:Coords" -t attr -n fcontour -v "$pts" );
+      #xmledit+=( -i "//*[@id='$id']/_:Coords" -t attr -n fcontour -v "$pts" );
+      xmledit+=( -d "//*[@id='$id']/_:Property[@key='fcontour']" );
+      xmledit+=( -s "//*[@id='$id']" -t elem -n TMPNODE );
+      xmledit+=( -i //TMPNODE -t attr -n key -v fcontour );
+      xmledit+=( -i //TMPNODE -t attr -n value -v "$pts" );
+      xmledit+=( -r //TMPNODE -v Property );
     fi 2>&1;
 
     local FEATOP="";
@@ -3487,9 +3549,12 @@ htrsh_pageimg_extract_linefeats () {
   if [ "$htrsh_feat_contour" = "yes" ] && [ "$REPLC" = "yes" ]; then
     xmledit=( ed --inplace );
     local id;
-    for id in $(xmlstarlet sel -t -m '//*/_:Coords[@fcontour]' -v ../@id -n "$XMLOUT"); do
-      xmledit+=( -d "//*[@id='${id}']/_:Coords/@points" );
-      xmledit+=( -r "//*[@id='${id}']/_:Coords/@fcontour" -v points );
+    #for id in $(xmlstarlet sel -t -m '//*/_:Coords[@fcontour]' -v ../@id -n "$XMLOUT"); do
+    for id in $(xmlstarlet sel -t -m '//*/_:Property[@key="fcontour"]' -v ../@id -n "$XMLOUT"); do
+      xmledit+=( -d "//*[@id='${id}']/_:Coords/@points" "//*[@id='${id}']/_:Coords/@value" );
+      #xmledit+=( -r "//*[@id='${id}']/_:Coords/@fcontour" -v points );
+      xmledit+=( -m "//*[@id='${id}']/_:Property[@key='fcontour']/@value" "//*[@id='${id}']/_:Coords" );
+      xmledit+=( -r "//*[@id='${id}']/_:Coords/@value" "//*[@id='${id}']/_:Coords/@points" );
     done
     xmlstarlet "${xmledit[@]}" "$XMLOUT";
   fi
@@ -4643,7 +4708,8 @@ htrsh_pagexml_insertalign_lines () {(
   local id;
   for id in $ids; do
     #fpgram+=( -o " " -v "//*[@id='$id']/_:Coords/@fpgram" -o " ;" );
-    fpgram+=( -m "//_:TextLine[@id='$id' and _:Coords/@fpgram]" -v @id -o $'\t' -v _:Coords/@fpgram -n -b );
+    #fpgram+=( -m "//_:TextLine[@id='$id' and _:Coords/@fpgram]" -v @id -o $'\t' -v _:Coords/@fpgram -n -b );
+    fpgram+=( -m "//_:TextLine[@id='$id' and _:Property[@key='fpgram']" -v @id -o $'\t' -v "_:Property[@key='fpgram']/@value" -n -b );
   done
   fpgram=$( "${fpgram[@]}" "$XML" );
 
@@ -5774,7 +5840,8 @@ htrsh_pageimg_forcealign () {
 
   local I=$(xmlstarlet sel -t -v //@imageFilename "$XML");
   local xmledit=( -u //@imageFilename -v "$I" );
-  [ "$KEEPAUX" != "yes" ] && xmledit+=( -d //@fpgram -d //@fcontour );
+  #[ "$KEEPAUX" != "yes" ] && xmledit+=( -d //@fpgram -d //@fcontour );
+  [ "$KEEPAUX" != "yes" ] && xmledit+=( -d "//_:Property[@key='fpgram']" -d "//_:Property[@key='fcontour']" );
 
   xmlstarlet ed "${xmledit[@]}" "$XMLOUT" \
     | htrsh_pagexml_round \
