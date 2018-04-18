@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2018.04.06$
+## @version $Version: 2018.04.18$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -169,7 +169,7 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Version: 2018.04.06$' \
+  echo '$Version: 2018.04.18$' \
     | sed -r 's|^\$Version[:] ([^$]+)\$|htrsh \1|' 1>&2;
 }
 
@@ -899,10 +899,10 @@ htrsh_text_get_symbol_tab () {
     shift 2;
   done
 
-  [ "$COUNT_FILE" != "cat" ] && COUNT_FILE=( tee "COUNT_FILE" );
+  [ "$COUNT_FILE" != "cat" ] && COUNT_FILE=( tee "$COUNT_FILE" );
 
   awk '
-      { char[$1]++; }
+      { for(n=1;n<=NF;n++) char[$n]++; }
       END {
         for(c in char)
           printf("%d %s\n",char[c],c);
@@ -3636,6 +3636,34 @@ htrsh_gawk_func_word_to_chars='
     if( endspace == "yes" )
       hmms[++C] = SPACE;
     return C;
+  }';
+
+##
+## GAWK functions to convert chars to words
+##
+htrsh_gawk_func_chars_to_word='
+  function load_special_chars( SPECIAL,   n,c,line,sline ) {
+    delete SCHAR;
+    SCHAR[SPACE] = " ";
+    while( ( getline line<SPECIAL ) > 0 )
+      if( line != "" ) {
+        n = split(line,sline);
+        SCHAR[ n == 1 ? sline[1] : sline[2] ] = sline[1];
+      }
+    close( SPECIAL );
+  }
+
+  function chars_to_word( text ) {
+    N = split(text,stext);
+    txt = "";
+    for( n=1; n<=N; n++ ) {
+      s = stext[n];
+      if( s in SCHAR )
+        txt = (txt SCHAR[s]);
+      else
+        txt = (txt s);
+    }
+    return txt;
   }';
 
 ##
