@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2018.04.18$
+## @version $Version: 2018.04.19$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -169,7 +169,7 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Version: 2018.04.18$' \
+  echo '$Version: 2018.04.19$' \
     | sed -r 's|^\$Version[:] ([^$]+)\$|htrsh \1|' 1>&2;
 }
 
@@ -675,8 +675,8 @@ htrsh_pagexml_textequiv () {
   fi
 
   [ $(xmlstarlet sel -t -v "count($XPATH)" "$XML") = 0 ] &&
-    echo "$FN: error: zero matches for xpath $XPATH on file: $XML" 1>&2 &&
-    return 1;
+    echo "$FN: warning: zero matches for xpath $XPATH on file: $XML" 1>&2 &&
+    return 0;
 
   [ "$PRTHEAD" = "yes" ] && [ "${FORMAT:0:3}" = "mlf" ] &&
     echo '#!MLF!#';
@@ -876,11 +876,13 @@ htrsh_text_to_chars () {
 htrsh_text_get_symbol_tab () {
   local FN="htrsh_text_get_symbol_tab";
   local COUNT_FILE="cat";
+  local FORMAT="text";
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Generates a kaldi table of symbols for some given text";
       echo "Usage: $FN TRANSCIPT_TAB [ Options ]";
       echo "Options:";
+      echo " -f FORMAT       Input format tab or text (def.=$FORMAT)";
       echo " -c COUNT_FILE   Save counts of symbols to given file (def.=false)";
     } 1>&2;
     return 1;
@@ -892,6 +894,8 @@ htrsh_text_get_symbol_tab () {
   while [ $# -gt 0 ]; do
     if [ "$1" = "-c" ]; then
       COUNT_FILE="$2";
+    elif [ "$1" = "-f" ]; then
+      FORMAT="$2";
     else
       echo "$FN: error: unexpected input argument: $1" 1>&2;
       return 1;
@@ -901,8 +905,10 @@ htrsh_text_get_symbol_tab () {
 
   [ "$COUNT_FILE" != "cat" ] && COUNT_FILE=( tee "$COUNT_FILE" );
 
-  awk '
-      { for(n=1;n<=NF;n++) char[$n]++; }
+  local n0="1"; [ "$FORMAT" = "tab" ] && n0="2";
+
+  awk -v n0=$n0 '
+      { for(n=n0;n<=NF;n++) char[$n]++; }
       END {
         for(c in char)
           printf("%d %s\n",char[c],c);
