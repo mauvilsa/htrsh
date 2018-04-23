@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2018.04.19$
+## @version $Version: 2018.04.23$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -169,7 +169,7 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Version: 2018.04.19$' \
+  echo '$Version: 2018.04.23$' \
     | sed -r 's|^\$Version[:] ([^$]+)\$|htrsh \1|' 1>&2;
 }
 
@@ -429,19 +429,28 @@ htrsh_pagexml_sed_textequiv () {
 htrsh_pagexml_set_textequiv () {
   local FN="htrsh_pagexml_set_textequiv";
   local INPLACE="";
+  local CONF="no";
   if [ $# -lt 3 ]; then
     { echo "$FN: Error: Not enough input arguments";
       echo "Description: Sets TextEquiv/Unicode in an XML Page";
-      echo "Usage: $FN [--inplace] XML ID TEXT [ ID2 TEXT2 ... ]";
+      echo "Usage: $FN [--inplace --conf] XML ID TEXT [CONF] [ ID2 TEXT2 [CONF2] ... ]";
     } 1>&2;
     return 1;
   fi
 
   ### Parse input arguments ###
-  if [ "$1" = "--inplace" ]; then
-    INPLACE="$1";
+  while [ "${1:0:2}" = "--" ]; do
+    if [ "$1" = "--inplace" ]; then
+      INPLACE="$1";
+    elif [ "$1" = "--conf" ]; then
+      CONF="yes";
+    else
+      echo "$FN: error: unexpected input argument: $1" 1>&2;
+      return 1;
+    fi
     shift;
-  fi
+  done
+
   local XML="$1";
   shift;
 
@@ -461,6 +470,10 @@ htrsh_pagexml_set_textequiv () {
     xmledit+=( -d "//*[@id='$1']/_:TextEquiv" );
     xmledit+=( -s "//*[@id='$1']" -t elem -n TMPNODE );
     xmledit+=( -s //TMPNODE -t elem -n Unicode -v "$text" );
+    if [ "$CONF" = "yes" ]; then
+      xmledit+=( -i //TMPNODE -t attr -n conf -v "$3" );
+      shift;
+    fi
     xmledit+=( -r //TMPNODE -v TextEquiv );
     shift 2;
   done
@@ -924,6 +937,36 @@ htrsh_text_get_symbol_tab () {
             printf("%s %d\n",$NF,++N);
           char[$NF]="";
         }';
+}
+
+##
+## Function that concatenates symbols from consecutive samples having the same ID
+##
+htrsh_tab_concat () {
+  local FN="htrsh_tab_concat";
+  if [ $# -gt 0 ]; then
+    { echo "$FN: Error: Incorrect number of input arguments";
+      echo "Description: Concatenates symbols from consecutive samples having the same ID";
+      echo "Usage: $FN < TAB";
+    } 1>&2;
+    return 1;
+  fi
+
+  gawk '
+    { if ( $1 != PREV && VAL != "" ) {
+        print(PREV" "VAL);
+        VAL = "";
+      }
+      SAMP = $1;
+      $1 = "";
+      VAL = SAMP != PREV ? $0 : (VAL" "$0);
+      PREV = SAMP;
+    }
+    END {
+      if ( VAL != "" )
+        print(PREV" "VAL);
+    }' \
+    | sed 's|   *| |g';
 }
 
 ##
