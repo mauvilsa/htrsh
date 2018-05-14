@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2018.04.23$
+## @version $Version: 2018.05.14$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -169,7 +169,7 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Version: 2018.04.23$' \
+  echo '$Version: 2018.05.14$' \
     | sed -r 's|^\$Version[:] ([^$]+)\$|htrsh \1|' 1>&2;
 }
 
@@ -516,8 +516,8 @@ htrsh_pagexml_textequiv_lines2region () {
     shift 2;
   done
 
-  local TEXT=$( htrsh_pagexml_textequiv "$XML" -s lines -f tab \
-    | sed -r 's|^[^ ]+*\.([^. ]+)\.[^. ]+ |\1 |' );
+  local TEXT=$( htrsh_pagexml_textequiv "$XML" -s region-lines -f tab \
+    | sed -r 's|^[^ ]+*\.([^. ]+) |\1 |' );
 
   local updatetext=();
   for regid in $( echo "$TEXT" | sed 's| .*||' | sort -u ); do
@@ -876,7 +876,7 @@ htrsh_text_to_chars () {
     cat "$TEXT" > "$TMP_TEXT";
     paste -d " " \
       <( awk '{print $1}' "$TMP_TEXT" ) \
-      <( sed 's|^[^ ]* ||' "$TMP_TEXT" | "$FILTER" | text_to_chars )
+      <( sed 's|^[^ ]* *||' "$TMP_TEXT" | "$FILTER" | text_to_chars )
     rm "$TMP_TEXT";
   else
     "$FILTER" < "$TEXT" | text_to_chars;
