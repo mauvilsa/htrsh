@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2018.05.14$
+## @version $Version: 2018.06.05$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -169,7 +169,7 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Version: 2018.05.14$' \
+  echo '$Version: 2018.06.05$' \
     | sed -r 's|^\$Version[:] ([^$]+)\$|htrsh \1|' 1>&2;
 }
 
@@ -586,6 +586,7 @@ htrsh_pagexml_textequiv () {
   local SRC="lines";
   local FORMAT="raw";
   local FILTER="cat";
+  local BASEXPATH="";
   local ESPACES="yes";
   local WSPACE="no";
   local WORDEND="no";
@@ -599,6 +600,7 @@ htrsh_pagexml_textequiv () {
       echo " -s SOURCE    Source of TextEquiv, either 'regions', 'lines' or 'words' (def.=$SRC)";
       echo " -f FORMAT    Output format among 'raw', 'mlf-chars', 'mlf-words', 'tab' and 'tab-chars' (def.=$FORMAT)";
       echo " -F FILTER    Filtering pipe command, e.g. tokenizer, transliteration, etc. (def.=none)";
+      echo " -B XBASE     xpath to get the sample base name (def.=use the image basename)";
       echo " -E (yes|no)  For *-chars, whether to add spaces at start and end (def.=$ESPACES)";
       echo " -W (yes|no)  For mlf-words, whether to add start space (def.=$WSPACE)";
       echo " -w (yes|no)  For mlf-chars, whether to add word end marks (def.=$WORDEND)";
@@ -624,6 +626,8 @@ htrsh_pagexml_textequiv () {
       fi
     elif [ "$1" = "-F" ] || [ "$1" = "-D" ]; then
       FILTER="$2";
+    elif [ "$1" = "-B" ]; then
+      BASEXPATH="$2";
     elif [ "$1" = "-E" ]; then
       ESPACES="$2";
     elif [ "$1" = "-W" ]; then
@@ -648,11 +652,20 @@ htrsh_pagexml_textequiv () {
   htrsh_pageimg_info "$XML" noinfo;
   [ "$?" != 0 ] && return 1;
 
-  local xmledit=( $(xmlstarlet sel -t -v //@imageFilename -n "$XML" \
-                      | sed 's|.*/||; s|\.[^.]*$||; s|[\[ ()]|_|g; s|]|_|g;' \
-                      | awk '{printf(" -u (//@imageFilename)[%d] -v %s",NR,$0);}' ) );
+  local idxmledit;
+  local IDop;
+  if [ "$BASEXPATH" != "" ]; then
+    idxmledit=( cat "$XML" );
+    IDop=( -v "$BASEXPATH" -o . );
+  else
+    idxmledit=( xmlstarlet ed 
+                $(xmlstarlet sel -t -v //@imageFilename -n "$XML" \
+                    | sed 's|.*/||; s|\.[^.]*$||; s|[\[ ()]|_|g; s|]|_|g;' \
+                    | awk '{printf(" -u (//@imageFilename)[%d] -v %s",NR,$0);}' )
+                "$XML" );
+    IDop=( -v ancestor::_:Page/@imageFilename -o . );
+  fi
   local XPATH;
-  local IDop=( -v ancestor::_:Page/@imageFilename -o . );
   local PRINT=( -v . -n );
   [ "$PREPRINT" != "" ] &&
     eval "PRINT=( \"\${${PREPRINT}[@]}\" \"\${PRINT[@]}\" )";
@@ -695,7 +708,7 @@ htrsh_pagexml_textequiv () {
     echo '#!MLF!#';
 
   paste \
-      <( xmlstarlet ed "${xmledit[@]}" "$XML" \
+      <( "${idxmledit[@]}" \
            | xmlstarlet sel -t -m "$XPATH" "${IDop[@]}" -n - ) \
       <( cat "$XML" \
            | tr '\t\n' '  ' \
