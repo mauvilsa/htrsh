@@ -46,7 +46,7 @@ n=1;
 while [ "$n" -lt "${#FILES[@]}" ]; do
   case "${FILES[$n]}" in
     *.sh )
-      check_change_after_staged "${FILES[$n]}" "${FILES[$((n+1))]}";
+      check_change_after_staged "${FILES[$n]}" "${FILES[$((n-1))]}";
       update_file_version "${FILES[$n]}";
       echo "${0##*/}: bash -n ${FILES[$n]}" 1>&2;
       bash -n "${FILES[$n]}";
