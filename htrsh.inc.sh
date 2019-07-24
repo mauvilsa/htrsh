@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2018.06.05$
+## @version $Version: 2019.07.24$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -40,10 +40,14 @@
   echo "htrsh.inc.sh: warning: library already loaded, to reload first use htrsh_unload" 1>&2 &&
   return 1;
 
-[ "$(which run_parallel.inc.sh)" = "" ] &&
-  echo "htrsh.inc.sh: error: required run_parallel.inc.sh not found in path" 1>&2 &&
-  return 1;
-. run_parallel.inc.sh;
+run_parallel_path="${BASH_SOURCE%/*}/run_parallel.inc.sh";
+if [ ! -e "$run_parallel_path" ]; then
+  [ "$(which run_parallel.inc.sh)" = "" ] &&
+    echo "htrsh.inc.sh: error: required run_parallel.inc.sh not found in same directory as htrsh.inc.sh or in path" 1>&2 &&
+    return 1;
+  run_parallel_path=$(which run_parallel.inc.sh);
+fi
+. "$run_parallel_path";
 
 #-----------------------#
 # Default configuration #
@@ -169,7 +173,7 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Version: 2018.06.05$' \
+  echo '$Version: 2019.07.24$' \
     | sed -r 's|^\$Version[:] ([^$]+)\$|htrsh \1|' 1>&2;
 }
 
