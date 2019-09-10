@@ -123,7 +123,12 @@ htrsh_symb_eps="{eps}";
 htrsh_symb_blank="{blank}";
 
 htrsh_special_chars=$'
-<gap/> {gap}
+<unk/>
+<del>
+</del>
+<checked/>
+<empty/>
+<gap/>
 _ {_}
 \x27 {squote}
 " {dquote}
