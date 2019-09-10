@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2019.07.24$
+## @version $Version: 2019.09.10$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -178,7 +178,7 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Version: 2019.07.24$' \
+  echo '$Version: 2019.09.10$' \
     | sed -r 's|^\$Version[:] ([^$]+)\$|htrsh \1|' 1>&2;
 }
 
@@ -1462,8 +1462,10 @@ htrsh_pagexml_resize () {
   elif [ $(echo "$1" | grep '^[0-9][0-9]*x[0-9][0-9]*$' | wc -l) = 1 ]; then
     newWidth=$(echo "$1" | sed 's|x.*||');
     newHeight=$(echo "$1" | sed 's|.*x||');
-  elif [ $(echo "$1" | grep '^[0-9.][0-9.]%$' | wc -l) = 1 ]; then
+  elif [ $(echo "$1" | grep '^[0-9.][0-9.]*%$' | wc -l) = 1 ]; then
     scaleFact=$(echo "$1" | sed 's|%$||');
+  else
+    echo "$FN: Error: Incorrect input arguments" 1>&2;
   fi
 
   local XSLT='<?xml version="1.0"?>
