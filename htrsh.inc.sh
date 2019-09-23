@@ -1210,7 +1210,7 @@ htrsh_pageimg_info () {
 
   if [ $# -eq 1 ] || [ "$2" != "noinfo" ]; then
     XMLDIR=$($htrsh_realpath $(dirname "$XML"));
-    IMFILE="$XMLDIR/"$(xmlstarlet sel -t -v //@imageFilename "$XML");
+    IMFILE="$XMLDIR/"$(xmlstarlet sel -t -v "(//@imageFilename)[1]" "$XML");
 
     IMDIR=$($htrsh_realpath $(dirname "$IMFILE"));
     XMLBASE=$(echo "$XML" | sed 's|.*/||; s|\.[xX][mM][lL]$||;');
@@ -1218,7 +1218,7 @@ htrsh_pageimg_info () {
     IMEXT=$(echo "$IMFILE" | sed 's|.*\.||');
 
     if [ $# -eq 1 ] || [ "$2" != "noimg" ]; then
-      local XMLSIZE=$(xmlstarlet sel -t -v //@imageWidth -o x -v //@imageHeight "$XML");
+      local XMLSIZE=$(xmlstarlet sel -t -v "(//@imageWidth)[1]" -o x -v "(//@imageHeight)[1]" "$XML");
       IMSIZE=$(identify -format %wx%h "$IMFILE" 2>/dev/null);
 
       [ ! -f "$IMFILE" ] &&
