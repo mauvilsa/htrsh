@@ -168,7 +168,7 @@ htrsh_realpath="readlink -f";
 [ $(realpath --help 2>&1 | grep relative | wc -l) != 0 ] &&
   htrsh_realpath="realpath --relative-to=.";
 
-htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC";
+htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC NUMPAGES";
 
 #---------------------------#
 # Generic library functions #
@@ -1190,7 +1190,7 @@ htrsh_pageimg_info () {
   local VAL=( xmllint --noout ); [ "$htrsh_valschema" = "yes" ] && VAL+=( --schema "$htrsh_pagexsd" );
   if [ $# -lt 1 ]; then
     { echo "$FN: Error: Not enough input arguments";
-      echo "Description: Checks and extracts basic info (XMLDIR, IMDIR, IMFILE, XMLBASE, IMBASE, IMEXT, IMSIZE, IMRES, RESSRC) from an XML Page file and respective image";
+      echo "Description: Checks and extracts basic info (XMLDIR, IMDIR, IMFILE, XMLBASE, IMBASE, IMEXT, IMSIZE, IMRES, RESSRC, NUMPAGES) from an XML Page file and respective image";
       echo "Usage: $FN XMLFILE";
     } 1>&2;
     return 1;
@@ -1210,60 +1210,74 @@ htrsh_pageimg_info () {
 
   if [ $# -eq 1 ] || [ "$2" != "noinfo" ]; then
     XMLDIR=$($htrsh_realpath $(dirname "$XML"));
-    IMFILE="$XMLDIR/"$(xmlstarlet sel -t -v "(//@imageFilename)[1]" "$XML");
-
-    IMDIR=$($htrsh_realpath $(dirname "$IMFILE"));
     XMLBASE=$(echo "$XML" | sed 's|.*/||; s|\.[xX][mM][lL]$||;');
-    IMBASE=$(echo "$IMFILE" | sed 's|.*/||; s|\.[^.]*$||;');
-    IMEXT=$(echo "$IMFILE" | sed 's|.*\.||');
+    NUMPAGES=$(xmlstarlet sel -t -v 'count(//_:Page)' "$XML");
+
+    declare -ga IMFILE; IMFILE=();
+    declare -ga IMDIR;  IMDIR=();
+    declare -ga IMBASE; IMBASE=();
+    declare -ga IMEXT;  IMEXT=();
+    local pagenum pagenum1;
+    for pagenum in $(seq 0 $((NUMPAGES-1))); do
+      IMFILE[$pagenum]="$XMLDIR/"$(xmlstarlet sel -t -v "(//@imageFilename)[$((pagenum+1))]" "$XML");
+      IMDIR[$pagenum]=$($htrsh_realpath $(dirname "${IMFILE[$pagenum]}"));
+      IMBASE[$pagenum]=$(echo "${IMFILE[$pagenum]}" | sed 's|.*/||; s|\.[^.]*$||;');
+      IMEXT[$pagenum]=$(echo "${IMFILE[$pagenum]}" | sed 's|.*\.||');
+    done
 
     if [ $# -eq 1 ] || [ "$2" != "noimg" ]; then
-      local XMLSIZE=$(xmlstarlet sel -t -v "(//@imageWidth)[1]" -o x -v "(//@imageHeight)[1]" "$XML");
-      IMSIZE=$(identify -format %wx%h "$IMFILE" 2>/dev/null);
+      declare -ga IMSIZE; IMSIZE=();
+      declare -ga IMRES;  IMRES=();
+      declare -ga RESSRC; RESSRC=();
+      for pagenum in $(seq 0 $((NUMPAGES-1))); do
+        pagenum1=$((pagenum+1));
+        local XMLSIZE=$(xmlstarlet sel -t -v "(//@imageWidth)[$pagenum1]" -o x -v "(//@imageHeight)[$pagenum1]" "$XML");
+        IMSIZE[$pagenum]=$(identify -format %wx%h "${IMFILE[$pagenum]}" 2>/dev/null);
 
-      [ ! -f "$IMFILE" ] &&
-        echo "$FN: error: image file not found: $IMFILE" 1>&2 &&
-        return 1;
-      [ "$IMSIZE" != "$XMLSIZE" ] &&
-        echo "$FN: warning: image size discrepancy: image=$IMSIZE page=$XMLSIZE" 1>&2;
+        [ ! -f "${IMFILE[$pagenum]}" ] &&
+          echo "$FN: error: image file not found: ${IMFILE[$pagenum]}" 1>&2 &&
+          return 1;
+        [ "${IMSIZE[$pagenum]}" != "$XMLSIZE" ] &&
+          echo "$FN: warning: image size discrepancy: image=${IMSIZE[$pagenum]} page=$XMLSIZE" 1>&2;
 
-      RESSRC="xml";
-      IMRES=$(xmlstarlet sel -t -v //_:Page/@custom "$XML" 2>/dev/null \
-                | awk -F'[{}:; ]+' '
-                    { for( n=1; n<=NF; n++ )
-                        if( $n == "image-resolution" ) {
-                          n++;
-                          if( match($n,"dpcm") )
-                            printf("%g",$n);
-                          else if( match($n,"dpi") )
-                            printf("%g",$n/2.54);
-                        }
-                    }');
+        RESSRC[$pagenum]="xml";
+        IMRES[$pagenum]=$(xmlstarlet sel -t -v "(//_:Page)[$pagenum1]/@custom" "$XML" 2>/dev/null \
+                            | awk -F'[{}:; ]+' '
+                                { for( n=1; n<=NF; n++ )
+                                    if( $n == "image-resolution" ) {
+                                      n++;
+                                      if( match($n,"dpcm") )
+                                        printf("%g",$n);
+                                      else if( match($n,"dpi") )
+                                        printf("%g",$n/2.54);
+                                    }
+                                }');
 
-      [ "$IMRES" = "" ] &&
-      RESSRC="img" &&
-      IMRES=$(
-        identify -format "%x %y %U" "$IMFILE" \
-          | awk '
-              { if( NF > 3 ) {
-                  $2 = $3;
-                  $3 = $4;
-                }
-                if( $3 == "PixelsPerCentimeter" )
-                  printf("%sx%s",$1,$2);
-                else if( $3 == "PixelsPerInch" )
-                  printf("%gx%g",$1/2.54,$2/2.54);
-              }'
-        );
+        [ "${IMRES[$pagenum]}" = "" ] &&
+        RESSRC[$pagenum]="img" &&
+        IMRES[$pagenum]=$(
+          identify -format "%x %y %U" "${IMFILE[$pagenum]}" \
+            | awk '
+                { if( NF > 3 ) {
+                    $2 = $3;
+                    $3 = $4;
+                  }
+                  if( $3 == "PixelsPerCentimeter" )
+                    printf("%sx%s",$1,$2);
+                  else if( $3 == "PixelsPerInch" )
+                    printf("%gx%g",$1/2.54,$2/2.54);
+                }'
+          );
 
-      [ "$htrsh_warn_imgres" = "yes" ] &&
-      if [ "$IMRES" = "" ]; then
-        echo "$FN: warning: no resolution metadata for image: $IMFILE";
-      elif [ $(echo "$IMRES" | sed 's|.*x||') != $(echo "$IMRES" | sed 's|x.*||') ]; then
-        echo "$FN: warning: image resolution different for vertical and horizontal: $IMFILE";
-      fi 1>&2
+        [ "$htrsh_warn_imgres" = "yes" ] &&
+        if [ "${IMRES[$pagenum]}" = "" ]; then
+          echo "$FN: warning: no resolution metadata for image: ${IMFILE[$pagenum]}";
+        elif [ $(echo "${IMRES[$pagenum]}" | sed 's|.*x||') != $(echo "${IMRES[$pagenum]}" | sed 's|x.*||') ]; then
+          echo "$FN: warning: image resolution different for vertical and horizontal: ${IMFILE[$pagenum]}";
+        fi 1>&2
 
-      IMRES=$(echo "$IMRES" | sed 's|x.*||');
+        IMRES[$pagenum]=$(echo "${IMRES[$pagenum]}" | sed 's|x.*||');
+      done
     fi
   fi
 
