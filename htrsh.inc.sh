@@ -3,7 +3,7 @@
 ##
 ## Collection of shell functions for Handwritten Text Recognition.
 ##
-## @version $Version: 2019.09.10$
+## @version $Version: 2019.10.23$
 ## @author Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @copyright Copyright(c) 2014-present, Mauricio Villegas <mauricio_ville@yahoo.com>
 ## @license MIT License
@@ -178,7 +178,7 @@ htrsh_infovars="XMLDIR IMDIR IMFILE XMLBASE IMBASE IMEXT IMSIZE IMRES RESSRC NUM
 ## Function that prints the version of the library
 ##
 htrsh_version () {
-  echo '$Version: 2019.09.10$' \
+  echo '$Version: 2019.10.23$' \
     | sed -r 's|^\$Version[:] ([^$]+)\$|htrsh \1|' 1>&2;
 }
 
@@ -1238,7 +1238,8 @@ htrsh_pageimg_info () {
           echo "$FN: error: image file not found: ${IMFILE[$pagenum]}" 1>&2 &&
           return 1;
         [ "${IMSIZE[$pagenum]}" != "$XMLSIZE" ] &&
-          echo "$FN: warning: image size discrepancy: image=${IMSIZE[$pagenum]} page=$XMLSIZE" 1>&2;
+          echo "$FN: error: image size discrepancy: image=${IMSIZE[$pagenum]} page=$XMLSIZE" 1>&2 &&
+          return 1;
 
         RESSRC[$pagenum]="xml";
         IMRES[$pagenum]=$(xmlstarlet sel -t -v "(//_:Page)[$pagenum1]/@custom" "$XML" 2>/dev/null \
