@@ -710,8 +710,9 @@ htrsh_pagexml_textequiv () {
   fi
 
   [ $(xmlstarlet sel -t -v "count($XPATH)" "$XML") = 0 ] &&
-    echo "$FN: warning: zero matches for xpath $XPATH on file: $XML" 1>&2 &&
     return 0;
+    #echo "$FN: warning: zero matches for xpath $XPATH on file: $XML" 1>&2 &&
+    #return 0;
 
   [ "$PRTHEAD" = "yes" ] && [ "${FORMAT:0:3}" = "mlf" ] &&
     echo '#!MLF!#';
